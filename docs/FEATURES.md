@@ -9,7 +9,7 @@ This document is the **source of truth** for what Shield Optimizer does. It exis
 
 > **Source-of-truth precedence:** if the script and this doc disagree, the script wins for v1 behavior; the doc wins for v2 specification. Resolve drift by updating whichever side is wrong.
 
-Catalog reflects v1 at commit `df70dd5` (post-v0.75.0). Function references point at `Shield-Optimizer.ps1` line numbers from that revision.
+Catalog tracks v1's current `main`. Function and line references point at `Shield-Optimizer.ps1` at HEAD — re-verify them when touching this doc to catch drift.
 
 ---
 
@@ -132,7 +132,7 @@ Functions exit on first uncaught error (`-Stop`) and strict mode rejects uniniti
 | **Purpose** | Convert `adb devices` raw output into a structured list with friendly display names |
 | **v1 source** | `Get-Devices` (1012) |
 | **Behavior** | Runs `adb devices`, parses each line for serial+status, classifies connection type (`Network` if `IP:port`, else `USB`). For each connected (`status=device`) entry, batches a single ADB call to read: `settings get global device_name; getprop ro.product.brand; getprop ro.product.model; getprop ro.product.device; getprop ro.product.manufacturer`. Then classifies device type and maps codenames to friendly names. |
-| **Returned shape** | `@{ Serial; Name; Model; Type; Status; ConnectionType }` per device |
+| **Returned shape** | `PSCustomObject { ID; Serial; Name; Model; Type; Status; ConnectionType }` per device. `ID` is the 1-based menu position used by the keyboard-shortcut layer. |
 | **Shield codename → friendly model** | `mdarcy` → "Shield TV Pro (2019)", `sif` → "Shield TV (2019 Tube)", `darcy` → "Shield TV (2017)", `foster` → "Shield TV (2015)", default → "Shield TV (\<model code\>)" |
 | **Note** | Device-type detection logic here (manufacturer/brand/device-based) differs slightly from the standalone `Get-DeviceType` (brand/model/device-based). v2 should consolidate into one canonical detection. See §13.1. |
 | **USB support status** | Detected and tagged `[USB]`, but Shield TV does **not** support USB debugging (host ports only). Marked **experimental** in README. Useful for phones/tablets used during development. |
@@ -239,8 +239,8 @@ Inner menu shown for a connected device. Shortcuts in parens.
 |---|---|
 | **Purpose** | Single-shot snapshot of device vitals + bloat status |
 | **v1 source** | `Run-Report` (2066) |
-| **Behavior** | Batches multiple `dumpsys` calls into one shell invocation, parses sections delimited by `::SECTION::` markers, displays System Info, Vitals, Settings, Display (mode/refresh/HDR/audio), Top Memory Users, Bloat Check table |
-| **ADB call (batched)** | Single `adb shell` with: `dumpsys thermalservice | head -50; dumpsys meminfo; df -h /data; getprop ro.board.platform; getprop ro.build.version.release; settings get global window_animation_scale; pm list packages -e` |
+| **Behavior** | Batches multiple `dumpsys` calls into one shell invocation, parses sections delimited by per-section sentinels (`::THERMAL::`, `::MEMINFO::`, `::STORAGE::`, `::PROPS::`, `::SETTINGS::`, `::PACKAGES::`), displays System Info, Vitals, Settings, Display (mode/refresh/HDR/audio), Top Memory Users, Bloat Check table |
+| **ADB call (batched)** | One `adb shell` invocation joining: `echo '::THERMAL::'; dumpsys thermalservice 2>/dev/null \| head -50; echo '::MEMINFO::'; dumpsys meminfo 2>/dev/null; echo '::STORAGE::'; df -h /data 2>/dev/null; echo '::PROPS::'; getprop ro.board.platform; getprop ro.build.version.release; echo '::SETTINGS::'; settings get global window_animation_scale; echo '::PACKAGES::'; pm list packages -e 2>/dev/null` |
 | **Display query (separate)** | `dumpsys display` (resolution / refresh from supportedModes table matched to active modeId; HDR from `HdrCapabilities mSupportedHdrTypes`), `dumpsys audio` (current output device) — see §5.3 |
 | **Vitals shown** | Temperature (parsed from thermal zones), RAM (free/used/total/swap from meminfo), Storage (from df) |
 | **Vital color coding** | `Get-VitalColor` thresholds — temp: <50/<70/<85/else; RAM: <60/<75/<85/else %; storage: similar; per-app memory: <50/<100/<200/else MB |
@@ -295,9 +295,10 @@ Safe HOME-handler fallbacks (never disabled): `com.android.tv.settings`, `com.an
 
 | | |
 |---|---|
-| **Purpose** | Install, select, and activate a custom launcher; disable stock launchers safely |
+| **Purpose** | Install, select, and activate a custom launcher; re-enable / disable stock launcher safely |
 | **v1 source** | `Setup-Launcher` (2875) |
-| **Behavior** | (1) Detect current launcher via `cmd package resolve-activity`. (2) List preset launchers + Custom + Back. (3) For chosen launcher: if not installed and not custom, offer Play Store install. (4) If already active, just offer to clean up other HOME handlers. (5) Else prompt to disable other launchers (calls `Disable-AllStockLaunchers`). (6) Call `Set-DefaultLauncher` and report success/failure with captured ADB error. (7) Run `Test-ChannelDependencies` to warn if `com.android.providers.tv` is disabled (Watch Next plumbing). |
+| **Menu options** | (a) Each preset launcher from `$Script:Launchers` (Projectivy, FLauncher, ATV, Wolf, AT4K, Dispatch), tagged `[INSTALLED]` / `[MISSING]`. (b) **Stock Launcher** — labeled with the detected stock package name and a status tag (`[ACTIVE]` / `[DISABLED]` / `[NOT FOUND]`). Re-enables and re-activates the stock launcher when picked. (c) **Custom...** — type any package id, validated against package-name regex, must be installed. (d) **Back**. |
+| **Behavior** | (1) Run `Test-ChannelDependencies` against the just-fetched disabled-package list — covers every exit path. (2) Detect current launcher via `cmd package resolve-activity`. (3) Identify which stock launcher is on this device (from `$Script:StockLaunchers`) and whether it's currently disabled. (4) Show the menu (above). (5) For a preset / custom: if not installed, offer Play Store install. If already active, just offer to clean up other HOME handlers. Else prompt to disable other launchers (calls `Disable-AllStockLaunchers`), call `Set-DefaultLauncher`, report success/failure with captured ADB error. (6) For Stock Launcher: re-enable if disabled and set as default. |
 | **ADB calls** | See `Set-DefaultLauncher` strategy in §6.3 |
 
 ### 6.3 Set default launcher (multi-strategy)
@@ -345,7 +346,7 @@ Safe HOME-handler fallbacks (never disabled): `com.android.tv.settings`, `com.an
 |---|---|
 | **Purpose** | Toggle individual display/input settings outside the Optimize flow |
 | **v1 source** | `Set-DisplayInputTuning` (3519), `Set-BoolSetting` (3615) |
-| **Settings exposed** | HDMI-CEC master / auto-wake-TV / auto-off-TV / audio routing (global namespace); `match_content_frame_rate` (secure, values 0/1/2 = Never/Seamless/Always); `long_press_timeout` (secure, ms, presets 300/400/500) |
+| **Settings exposed** | HDMI-CEC master / auto-wake-TV / auto-off-TV / audio routing (global namespace); `match_content_frame_rate` (secure, values 0/1/2 = Never/Seamless only/Always); `long_press_timeout` (secure, ms, presets 300/400/500) |
 | **ADB calls (read)** | `settings get global <key>` / `settings get secure <key>` |
 | **ADB calls (write)** | `settings put <ns> <key> <value>` / `settings delete <ns> <key>` for reset-to-default |
 | **UX** | Sub-menu shows current values for all six settings; user picks one to change; per-setting prompts give ON/OFF/Reset/Cancel (for bools) or value list (for enums) |
@@ -491,7 +492,7 @@ The two paths can disagree on edge cases. v2 should pick the union of inputs (ma
 |---|---|
 | **Purpose** | Light and dark color schemes, auto-detected from system or forced via `-LightMode` / `-DarkMode` |
 | **v1 source** | `Initialize-Colors` (58), `Test-SystemLightMode` (37) |
-| **Auto-detect** | macOS: `defaults read -g AppleInterfaceStyle`; Windows: registry `AppsUseLightTheme`; Linux: `gsettings color-scheme` |
+| **Auto-detect** | macOS: `osascript` running `tell application "System Events" to tell appearance preferences to get dark mode` (chosen over `defaults read -g AppleInterfaceStyle` because the defaults entry can be stale). Windows: registry `HKCU:\…\Themes\Personalize\AppsUseLightTheme`. Linux: no detection — falls through to dark default (a v2 improvement opportunity: `gsettings get org.gnome.desktop.interface color-scheme` or `gtk-theme`). |
 | **Color slots** | Header / SubHeader / Success / Warning / Error / Info / Selected / Unselected / Bracket highlight / Separator / Label / Value / TextDim / Disabled / Shortcut (15 named colors per theme) |
 
 ### 14.2 Read-Menu
@@ -608,9 +609,10 @@ The script supports multiple connected devices simultaneously. The main menu (§
 
 | | |
 |---|---|
-| **Purpose** | Translate Android's terse install/uninstall failure codes into user-readable hints |
+| **Purpose** | Translate Android's terse uninstall failure patterns into user-readable hints, surfaced after a `pm uninstall` returns non-success |
 | **v1 source** | `Get-UninstallErrorReason` (662) |
-| **Recognized errors** | `INSTALL_FAILED_INSUFFICIENT_STORAGE`, `INSTALL_FAILED_VERSION_DOWNGRADE`, `INSTALL_FAILED_OLDER_SDK`, `INSTALL_FAILED_ALREADY_EXISTS`, `DELETE_FAILED_DEVICE_POLICY_MANAGER`, `DELETE_FAILED_USER_RESTRICTED`, and others — each mapped to a one-line explanation |
+| **Recognized patterns** | `Broken pipe` → "Protected system app - cannot be removed"; `not installed for` → "App not installed for this user"; `DELETE_FAILED_INTERNAL_ERROR` → "Internal error - app may be in use". Anything else → "Unknown error". |
+| **Note for v2** | Install-side failures (`INSTALL_FAILED_INSUFFICIENT_STORAGE`, `INSTALL_FAILED_VERSION_DOWNGRADE`, etc.) are handled **inline in `Install-ApkFile`** (~lines 1364-1372), not in this helper. v2 should consolidate both decoders into one place. |
 
 ### 16.7 Utility helpers
 
@@ -624,8 +626,8 @@ The script supports multiple connected devices simultaneously. The main menu (§
 | `Get-ParsedRamInfo` (594) | Extracts free/used/total/swap MB from `dumpsys meminfo` summary block |
 | `Get-VitalColor` (625) | Maps a vital metric (Temperature / RAM / Storage / AppMemory) + value to a console color name based on threshold tiers |
 | `Get-VitalAnsiColor` (640) | Same as above but returns an ANSI color code for cursor-positioned UIs |
-| `Open-PlayStore` (1310) | See §16.5 |
-| `Get-UninstallErrorReason` (662) | See §16.6 |
+| `Open-PlayStore` (1310) | Opens Play Store deep-link via `am start … market://details?id=<pkg>`; see §16.5 |
+| `Get-UninstallErrorReason` (662) | Decodes uninstall failure patterns; see §16.6 |
 
 ### 16.8 Code conventions used in v1 (not requirements for v2)
 
