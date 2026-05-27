@@ -5,10 +5,60 @@
 //! `pm uninstall --user 0` (semi-reversible via `cmd package install-existing`
 //! or Play Store).
 
+use std::collections::{HashMap, HashSet};
+
 use serde::Serialize;
 use tauri::State;
 
+use crate::adb::{parse_disabled_packages_output, parse_installed_packages_output};
+
 use super::AppState;
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageState {
+    Enabled,
+    Disabled,
+    Missing,
+}
+
+/// `package_states` — query the device for the current state of each package
+/// in `packages`. Two shell calls in parallel (`pm list packages` and
+/// `pm list packages -d`), then categorize.
+#[tauri::command]
+pub async fn package_states(
+    state: State<'_, AppState>,
+    serial: String,
+    packages: Vec<String>,
+) -> Result<HashMap<String, PackageState>, String> {
+    let adb = state.adb_snapshot().await;
+    let (installed_res, disabled_res) = tokio::join!(
+        adb.shell(&serial, "pm list packages"),
+        adb.shell(&serial, "pm list packages -d"),
+    );
+    let installed = installed_res.map_err(|e| format!("pm list packages: {e}"))?;
+    let disabled = disabled_res.map_err(|e| format!("pm list packages -d: {e}"))?;
+
+    let installed_set: HashSet<String> = parse_installed_packages_output(&installed.stdout)
+        .into_iter()
+        .collect();
+    let disabled_set: HashSet<String> = parse_disabled_packages_output(&disabled.stdout)
+        .into_iter()
+        .collect();
+
+    let mut out = HashMap::with_capacity(packages.len());
+    for pkg in packages {
+        let s = if disabled_set.contains(&pkg) {
+            PackageState::Disabled
+        } else if installed_set.contains(&pkg) {
+            PackageState::Enabled
+        } else {
+            PackageState::Missing
+        };
+        out.insert(pkg, s);
+    }
+    Ok(out)
+}
 
 #[derive(Serialize)]
 pub struct ActionResult {

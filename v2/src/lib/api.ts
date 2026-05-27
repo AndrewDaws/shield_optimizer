@@ -67,6 +67,11 @@ export const api = {
     invoke<ActionResult>("reinstall_existing", { serial, package: pkg }),
   openPlayStore: (serial: string, pkg: string) =>
     invoke<ActionResult>("open_play_store", { serial, package: pkg }),
+  packageStates: (serial: string, packages: string[]) =>
+    invoke<Record<string, "enabled" | "disabled" | "missing">>(
+      "package_states",
+      { serial, packages },
+    ),
 
   installApk: (serial: string, apkPath: string, reinstall = true) =>
     invoke<InstallApkResult>("install_apk", { serial, apkPath, reinstall }),

@@ -195,19 +195,17 @@
     }
   }
 
-  /// Build a package → state map by checking the launcher status helper —
-  /// reusing list_launchers/list_devices logic would be heavier; instead we
-  /// piggy-back on a launcher-style "is this package installed and enabled"
-  /// check via a dedicated minimal call.
+  // Real state per package — one batched backend call (pm list packages +
+  // pm list packages -d in parallel) so we can show Enabled/Disabled/Missing.
   async function fetchAppStates(packages: string[]): Promise<Record<string, "enabled" | "disabled" | "missing">> {
-    // Lightweight approach: have the backend tell us via listLaunchers-style
-    // status — but it's launcher-specific. We can derive the same info from
-    // the snapshot apply preview, but that requires a snapshot file.
-    // Simplest path: ship without per-row state for the first cut; rely on
-    // the action result to refresh after a click. UI shows "—" otherwise.
-    const out: Record<string, "enabled" | "disabled" | "missing"> = {};
-    for (const p of packages) out[p] = "enabled"; // optimistic default
-    return out;
+    if (packages.length === 0) return {};
+    try {
+      return await api.packageStates(serial, packages);
+    } catch {
+      const out: Record<string, "enabled" | "disabled" | "missing"> = {};
+      for (const p of packages) out[p] = "enabled";
+      return out;
+    }
   }
 
   async function disableApp(pkg: string) {
@@ -268,6 +266,38 @@
     } finally {
       appActionBusy = null;
     }
+  }
+
+  type Recommendation =
+    | { kind: "done"; label: string }
+    | { kind: "act"; label: string; action: "disable" | "uninstall" }
+    | { kind: "restore"; label: string }
+    | { kind: "keep" };
+
+  /// What v1's Optimize wizard would suggest for this row, given its current
+  /// on-device state. `done` = already where the recommendation wants it.
+  /// `act` = a recommended write action that's clickable. `restore` = the app
+  /// is gone and v1 would have brought it back. `keep` = no recommendation.
+  function recommendation(a: AppEntry, state: "enabled" | "disabled" | "missing"): Recommendation {
+    if (state === "missing") {
+      if (a.default_restore) return { kind: "restore", label: "Reinstall" };
+      // Uninstalled and Optimize would also uninstall it — already there.
+      if (a.default_optimize && a.method === "uninstall") return { kind: "done", label: "Already uninstalled" };
+      return { kind: "keep" };
+    }
+    if (!a.default_optimize) return { kind: "keep" };
+    if (a.method === "disable") {
+      return state === "disabled"
+        ? { kind: "done", label: "Already disabled" }
+        : { kind: "act", label: "Disable", action: "disable" };
+    }
+    // method === "uninstall"
+    return { kind: "act", label: "Uninstall", action: "uninstall" };
+  }
+
+  function applyRecommendation(pkg: string, action: "disable" | "uninstall") {
+    if (action === "disable") return disableApp(pkg);
+    return uninstallApp(pkg);
   }
 
   async function openInPlayStore(pkg: string) {
@@ -822,10 +852,10 @@
         <div class="muted">Loading…</div>
       {:else}
         <p class="muted small legend">
-          <span class="tag installed">RECOMMENDED</span>
-          — these are the apps v1's Optimize wizard would have pre-selected for
-          you. Method <code>DISABLE</code> is fully reversible; <code>UNINSTALL</code>
-          is reversible via the Play Store or system reinstall.
+          <strong>State</strong> is what the device reports right now.
+          <strong>Recommended</strong> is what v1's Optimize wizard would pick for you —
+          click to apply, or leave it. Use the <strong>Links</strong> column to jump
+          straight to the Play Store for anything you want to (re)install.
         </p>
         {#if appActionMessage}
           <p class="muted small mono action-message">{appActionMessage}</p>
@@ -834,83 +864,81 @@
           <thead>
             <tr>
               <th>App</th>
-              <th>Method</th>
+              <th>State</th>
               <th>Risk</th>
-              <th>Actions</th>
+              <th>Recommended</th>
+              <th>Links</th>
             </tr>
           </thead>
           <tbody>
             {#each apps as a}
               {@const state = appStates[a.package] ?? "enabled"}
+              {@const rec = recommendation(a, state)}
               <tr>
                 <td>
-                  <div class="app-name">
-                    {a.name}
-                    {#if a.default_optimize}
-                      <span class="tag installed" title="Will be pre-selected in the Optimize wizard when that ships">RECOMMENDED</span>
-                    {/if}
-                  </div>
+                  <div class="app-name">{a.name}</div>
                   <div class="muted small mono">{a.package}</div>
                   <div class="muted small">{a.optimize_description}</div>
                 </td>
-                <td class="mono">{a.method.toUpperCase()}</td>
+                <td>
+                  <span class={`state-badge state-${state}`}>
+                    {state === "enabled" ? "Enabled" : state === "disabled" ? "Disabled" : "Missing"}
+                  </span>
+                </td>
                 <td class={`risk risk-${a.risk}`}>{a.risk.toUpperCase()}</td>
                 <td class="row-actions">
-                  {#if state === "missing"}
+                  {#if rec.kind === "act"}
                     <button
-                      class="small-action"
+                      class="small-action recommended"
+                      class:danger={rec.action === "uninstall"}
+                      onclick={() => applyRecommendation(a.package, rec.action)}
+                      disabled={appActionBusy === a.package}
+                      title="Recommended by the Optimize defaults — {a.method === 'disable' ? 'pm disable-user --user 0' : 'pm uninstall --user 0'} {a.package}"
+                    >
+                      {appActionBusy === a.package ? "…" : rec.label}
+                    </button>
+                  {:else if rec.kind === "restore"}
+                    <button
+                      class="small-action recommended"
                       onclick={() => reinstallApp(a.package)}
                       disabled={appActionBusy === a.package}
-                      title="cmd package install-existing — restores system apps"
+                      title="cmd package install-existing — works for system apps still on /system"
                     >
-                      {appActionBusy === a.package ? "…" : "Reinstall (system)"}
+                      {appActionBusy === a.package ? "…" : rec.label}
                     </button>
+                  {:else if rec.kind === "done"}
+                    <span class="muted small">✓ {rec.label}</span>
+                  {:else}
+                    <span class="muted small">Keep</span>
+                  {/if}
+
+                  {#if state === "enabled" && rec.kind !== "act"}
+                    <button
+                      class="small-action subtle"
+                      onclick={() => disableApp(a.package)}
+                      disabled={appActionBusy === a.package}
+                      title="pm disable-user --user 0"
+                    >Disable</button>
+                  {/if}
+                  {#if state === "disabled"}
+                    <button
+                      class="small-action subtle"
+                      onclick={() => enableApp(a.package)}
+                      disabled={appActionBusy === a.package}
+                      title="pm enable"
+                    >Enable</button>
+                  {/if}
+                </td>
+                <td class="row-actions">
+                  {#if a.default_restore || state === "missing"}
                     <button
                       class="small-action"
                       onclick={() => openInPlayStore(a.package)}
                       disabled={appActionBusy === a.package}
-                      title="am start market://details?id=…"
+                      title="am start market://details?id={a.package}"
                     >
-                      {appActionBusy === a.package ? "…" : "Open Play Store"}
+                      Play Store
                     </button>
-                  {:else if state === "disabled"}
-                    <button
-                      class="small-action"
-                      onclick={() => enableApp(a.package)}
-                      disabled={appActionBusy === a.package}
-                      title="pm enable"
-                    >
-                      {appActionBusy === a.package ? "…" : "Enable"}
-                    </button>
-                  {:else}
-                    <button
-                      class="small-action"
-                      onclick={() => disableApp(a.package)}
-                      disabled={appActionBusy === a.package}
-                      title="pm disable-user --user 0"
-                    >
-                      {appActionBusy === a.package ? "…" : "Disable"}
-                    </button>
-                    {#if a.method === "uninstall"}
-                      <button
-                        class="small-action danger"
-                        onclick={() => uninstallApp(a.package)}
-                        disabled={appActionBusy === a.package}
-                        title="pm uninstall --user 0"
-                      >
-                        Uninstall
-                      </button>
-                    {/if}
-                    {#if a.default_restore}
-                      <button
-                        class="small-action"
-                        onclick={() => openInPlayStore(a.package)}
-                        disabled={appActionBusy === a.package}
-                        title="Open this app's Play Store page on the device — handy if it was previously uninstalled."
-                      >
-                        Play Store
-                      </button>
-                    {/if}
                   {/if}
                 </td>
               </tr>
@@ -1410,6 +1438,53 @@
     background: #5d1b1b;
     color: #fff;
     border-color: #f85149;
+  }
+  .small-action.recommended {
+    background: #1f6feb;
+    color: #fff;
+    border-color: #58a6ff;
+    font-weight: 500;
+  }
+  .small-action.recommended:hover:not(:disabled) {
+    background: #388bfd;
+  }
+  .small-action.recommended.danger {
+    background: #5d1b1b;
+    border-color: #f85149;
+    color: #fff;
+  }
+  .small-action.recommended.danger:hover:not(:disabled) {
+    background: #8b3030;
+  }
+  .small-action.subtle {
+    background: transparent;
+    border-color: #30363d;
+    color: #7d8590;
+  }
+  .small-action.subtle:hover:not(:disabled) {
+    background: #21262d;
+    color: #c9d1d9;
+  }
+  .state-badge {
+    display: inline-block;
+    font-size: 0.74rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 4px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-family: ui-monospace, monospace;
+  }
+  .state-badge.state-enabled {
+    background: #1b3d2c;
+    color: #3fb950;
+  }
+  .state-badge.state-disabled {
+    background: #5d3b1b;
+    color: #d29922;
+  }
+  .state-badge.state-missing {
+    background: #3d3d3d;
+    color: #aaa;
   }
   .action-message {
     margin-top: 0.4rem;
