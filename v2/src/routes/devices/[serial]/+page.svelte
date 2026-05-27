@@ -12,12 +12,18 @@
     AppEntry,
     SnapshotFile,
     SnapshotApplyPlan,
+    ApplyResult,
+    RecoveryResult,
+    RebootMode,
+    TweaksState,
+    SettingNamespace,
+    DisplayScalePreset,
   } from "$lib/types";
   import { deviceTypeLabel } from "$lib/types";
 
   let serial = $derived(decodeURIComponent($page.params.serial ?? ""));
 
-  type Tab = "overview" | "health" | "launcher" | "apps" | "snapshot" | "sideload";
+  type Tab = "overview" | "health" | "launcher" | "apps" | "tweaks" | "snapshot" | "sideload";
   let activeTab = $state<Tab>("overview");
 
   let device = $state<Device | null>(null);
@@ -59,6 +65,30 @@
   let sideloadBusy = $state(false);
   let sideloadResult = $state<string>("");
   let sideloadHint = $state<string | null>(null);
+
+  // Header actions: reboot menu visibility, disconnect/reboot status, recovery.
+  let rebootMenuOpen = $state(false);
+  let rebootBusy = $state(false);
+  let headerActionMsg = $state<string>("");
+  let disconnectBusy = $state(false);
+
+  let recoveryBusy = $state(false);
+  let recoveryResult = $state<RecoveryResult | null>(null);
+  let recoveryErr = $state<string | null>(null);
+
+  // Apply snapshot (confirm step after preview).
+  let applyBusy = $state(false);
+  let applyResult = $state<ApplyResult | null>(null);
+  let applyErr = $state<string | null>(null);
+
+  // Tweaks tab.
+  let tweaks = $state<TweaksState | null>(null);
+  let tweaksLoading = $state(false);
+  let tweaksErr = $state<string | null>(null);
+  let tweaksActionBusy = $state<string | null>(null);
+  let tweaksActionMessage = $state<string>("");
+  let displayScaleBusy = $state<DisplayScalePreset | null>(null);
+  let displayScaleMessage = $state<string>("");
 
   async function loadDevice() {
     deviceErr = null;
@@ -223,6 +253,38 @@
     }
   }
 
+  // Best-effort system-app re-install via `cmd package install-existing` —
+  // works only for apps still present on /system. For third-party uninstalls
+  // we route through the Play Store instead.
+  async function reinstallApp(pkg: string) {
+    appActionBusy = pkg;
+    appActionMessage = "";
+    try {
+      const r = await api.reinstallExisting(serial, pkg);
+      appActionMessage = `${pkg}: ${r.message.trim()}`;
+      if (r.ok) appStates[pkg] = "enabled";
+    } catch (e) {
+      appActionMessage = `${pkg}: ${e}`;
+    } finally {
+      appActionBusy = null;
+    }
+  }
+
+  async function openInPlayStore(pkg: string) {
+    appActionBusy = pkg;
+    appActionMessage = "";
+    try {
+      const r = await api.openPlayStore(serial, pkg);
+      appActionMessage = r.ok
+        ? `Opened Play Store on device for ${pkg} — confirm install on the TV.`
+        : `${pkg}: ${r.message.trim()}`;
+    } catch (e) {
+      appActionMessage = `${pkg}: ${e}`;
+    } finally {
+      appActionBusy = null;
+    }
+  }
+
   async function setDefaultLauncher(pkg: string) {
     launcherActionBusy = pkg;
     launcherActionMessage = "";
@@ -293,6 +355,9 @@
     previewErr = null;
     preview = null;
     previewPath = path;
+    // Clear any previous apply result when switching snapshots.
+    applyResult = null;
+    applyErr = null;
     try {
       preview = await api.previewApply(serial, path);
     } catch (e) {
@@ -302,12 +367,154 @@
     }
   }
 
+  async function applySnapshot() {
+    if (!previewPath || !preview) return;
+    const total =
+      preview.packages_to_disable.length +
+      Object.keys(preview.settings_to_write).length +
+      (preview.launcher_to_set ? 1 : 0);
+    if (!confirm(`Apply this snapshot? ${total} change(s) will be made to the device. Disabled packages can be re-enabled later via Recovery.`)) return;
+    applyBusy = true;
+    applyErr = null;
+    applyResult = null;
+    try {
+      applyResult = await api.applySnapshot(serial, previewPath);
+    } catch (e) {
+      applyErr = String(e);
+    } finally {
+      applyBusy = false;
+    }
+  }
+
+  async function runRecovery() {
+    if (!confirm("Re-enable every disabled package on this device? This is the panic button — use it if something went wrong.")) return;
+    recoveryBusy = true;
+    recoveryResult = null;
+    recoveryErr = null;
+    try {
+      recoveryResult = await api.panicRecovery(serial);
+    } catch (e) {
+      recoveryErr = String(e);
+    } finally {
+      recoveryBusy = false;
+    }
+  }
+
+  async function rebootDevice(mode: RebootMode) {
+    const label = mode === "normal" ? "" : ` into ${mode}`;
+    if (!confirm(`Reboot the device${label}? You will lose ADB connection briefly.`)) return;
+    rebootMenuOpen = false;
+    rebootBusy = true;
+    headerActionMsg = "";
+    try {
+      const r = await api.rebootDevice(serial, mode);
+      headerActionMsg = r.message;
+    } catch (e) {
+      headerActionMsg = String(e);
+    } finally {
+      rebootBusy = false;
+    }
+  }
+
+  async function disconnectAndLeave() {
+    if (device?.connection === "usb") {
+      if (!confirm("This is a USB device — disconnect will only forget it from the ADB server until you replug. Continue?")) return;
+    }
+    disconnectBusy = true;
+    headerActionMsg = "";
+    try {
+      const r = await api.disconnectDevice(serial);
+      if (r.ok) {
+        goto("/");
+      } else {
+        headerActionMsg = `Disconnect failed: ${r.message}`;
+      }
+    } catch (e) {
+      headerActionMsg = String(e);
+    } finally {
+      disconnectBusy = false;
+    }
+  }
+
+  async function loadTweaks() {
+    tweaksLoading = true;
+    tweaksErr = null;
+    try {
+      tweaks = await api.getTweaks(serial);
+    } catch (e) {
+      tweaksErr = String(e);
+    } finally {
+      tweaksLoading = false;
+    }
+  }
+
+  // Write a setting, then refresh the on-screen state for that key by
+  // re-pulling all tweaks. Cheap (one batched shell call).
+  async function writeTweak(
+    namespace: SettingNamespace,
+    key: string,
+    value: string,
+    busyId: string,
+  ) {
+    tweaksActionBusy = busyId;
+    tweaksActionMessage = "";
+    try {
+      const r = await api.writeSetting(serial, namespace, key, value);
+      tweaksActionMessage = `${key} → ${value || "(default)"}: ${r.message.trim()}`;
+      await loadTweaks();
+    } catch (e) {
+      tweaksActionMessage = `${key}: ${e}`;
+    } finally {
+      tweaksActionBusy = null;
+    }
+  }
+
+  // Animation triple is one logical control — write all three keys in one go.
+  async function setAnimationScale(scale: string) {
+    tweaksActionBusy = "animations";
+    tweaksActionMessage = "";
+    try {
+      const keys = ["window_animation_scale", "transition_animation_scale", "animator_duration_scale"];
+      const results = await Promise.all(
+        keys.map((k) => api.writeSetting(serial, "global", k, scale)),
+      );
+      const failed = results.filter((r) => !r.ok);
+      tweaksActionMessage =
+        failed.length === 0
+          ? `Animations → ${scale || "default"}`
+          : `Animations partially failed (${failed.length}/3): ${failed.map((r) => r.message).join("; ")}`;
+      await loadTweaks();
+    } catch (e) {
+      tweaksActionMessage = `Animations: ${e}`;
+    } finally {
+      tweaksActionBusy = null;
+    }
+  }
+
+  async function applyDisplayScaling(preset: DisplayScalePreset) {
+    const label = preset === "uhd_4k" ? "4K (3840x2160, density 540)"
+      : preset === "fhd_1080p" ? "1080p (1920x1080, density 320)"
+      : "device defaults";
+    if (!confirm(`Apply display scaling: ${label}? The screen will reflow.`)) return;
+    displayScaleBusy = preset;
+    displayScaleMessage = "";
+    try {
+      const r = await api.setDisplayScaling(serial, preset);
+      displayScaleMessage = r.message.trim() || (r.ok ? "ok" : "no output");
+    } catch (e) {
+      displayScaleMessage = String(e);
+    } finally {
+      displayScaleBusy = null;
+    }
+  }
+
   // Lazy-load each tab the first time it's opened. Sideload doesn't need
   // any prefetch — the file picker fires on user action.
   $effect(() => {
     if (activeTab === "health" && report === null && !reportLoading && !reportErr) loadHealth();
     if (activeTab === "launcher" && launchers.length === 0 && !launcherLoading && !launcherErr) loadLauncher();
     if (activeTab === "apps" && apps.length === 0 && !appsLoading && !appsErr) loadApps();
+    if (activeTab === "tweaks" && tweaks === null && !tweaksLoading && !tweaksErr) loadTweaks();
     if (activeTab === "snapshot" && snapshots.length === 0) loadSnapshots();
   });
 
@@ -324,15 +531,44 @@
   <div class="muted">Loading device…</div>
 {:else}
   <header class="device-header">
-    <h1>{device.name}</h1>
-    <div class="device-meta">
-      <span>{deviceTypeLabel(device.device_type)}</span>
-      {#if device.model}<span>· {device.model}</span>{/if}
-      <span class="serial">· {device.serial}</span>
-      {#if device.properties?.android_release}
-        <span>· Android {device.properties.android_release}</span>
-      {/if}
+    <div class="device-title-row">
+      <div>
+        <h1>{device.name}</h1>
+        <div class="device-meta">
+          <span>{deviceTypeLabel(device.device_type)}</span>
+          {#if device.model}<span>· {device.model}</span>{/if}
+          <span class="serial">· {device.serial}</span>
+          {#if device.properties?.android_release}
+            <span>· Android {device.properties.android_release}</span>
+          {/if}
+        </div>
+      </div>
+      <div class="device-header-actions">
+        <div class="reboot-wrap">
+          <button
+            onclick={() => (rebootMenuOpen = !rebootMenuOpen)}
+            disabled={rebootBusy}
+            aria-haspopup="menu"
+            aria-expanded={rebootMenuOpen}
+          >
+            {rebootBusy ? "Rebooting…" : "Reboot ▾"}
+          </button>
+          {#if rebootMenuOpen}
+            <div class="reboot-menu" role="menu">
+              <button role="menuitem" onclick={() => rebootDevice("normal")}>Normal</button>
+              <button role="menuitem" onclick={() => rebootDevice("recovery")}>Recovery</button>
+              <button role="menuitem" onclick={() => rebootDevice("bootloader")}>Bootloader</button>
+            </div>
+          {/if}
+        </div>
+        <button onclick={disconnectAndLeave} disabled={disconnectBusy}>
+          {disconnectBusy ? "Disconnecting…" : "Disconnect"}
+        </button>
+      </div>
     </div>
+    {#if headerActionMsg}
+      <p class="muted small mono action-message">{headerActionMsg}</p>
+    {/if}
   </header>
 
   <div class="tabs" role="tablist" aria-label="Device sections">
@@ -341,6 +577,7 @@
       { id: "health", label: "Health" },
       { id: "launcher", label: "Launcher" },
       { id: "apps", label: "App List" },
+      { id: "tweaks", label: "Tweaks" },
       { id: "sideload", label: "Install APK" },
       { id: "snapshot", label: "Snapshot" },
     ] as t (t.id)}
@@ -373,6 +610,40 @@
           <dt>Board platform</dt><dd>{device.properties.board_platform}</dd>
         </dl>
       {/if}
+
+      <div class="recovery-section">
+        <h3>Emergency Recovery</h3>
+        <p class="muted small">
+          If something broke after disabling a package, re-enable everything that's
+          currently disabled in one shot. Equivalent to v1's <code>Run-PanicRecovery</code>.
+        </p>
+        <button
+          class="danger-button"
+          onclick={runRecovery}
+          disabled={recoveryBusy}
+          title="pm enable every package currently in `pm list packages -d`"
+        >
+          {recoveryBusy ? "Restoring…" : "Re-enable all disabled packages"}
+        </button>
+        {#if recoveryErr}
+          <div class="error">{recoveryErr}</div>
+        {/if}
+        {#if recoveryResult}
+          <div class="recovery-result">
+            <p><strong>{recoveryResult.message}</strong></p>
+            {#if recoveryResult.failed.length > 0}
+              <details>
+                <summary>{recoveryResult.failed.length} package(s) failed</summary>
+                <ul class="mono small">
+                  {#each recoveryResult.failed as f}
+                    <li>{f.package}: {f.error}</li>
+                  {/each}
+                </ul>
+              </details>
+            {/if}
+          </div>
+        {/if}
+      </div>
     </div>
   {:else if activeTab === "health"}
     <div class="card" role="tabpanel" tabindex={0} id="tabpanel-health" aria-labelledby="tab-health">
@@ -550,6 +821,12 @@
       {:else if appsLoading && apps.length === 0}
         <div class="muted">Loading…</div>
       {:else}
+        <p class="muted small legend">
+          <span class="tag installed">RECOMMENDED</span>
+          — these are the apps v1's Optimize wizard would have pre-selected for
+          you. Method <code>DISABLE</code> is fully reversible; <code>UNINSTALL</code>
+          is reversible via the Play Store or system reinstall.
+        </p>
         {#if appActionMessage}
           <p class="muted small mono action-message">{appActionMessage}</p>
         {/if}
@@ -579,7 +856,24 @@
                 <td class="mono">{a.method.toUpperCase()}</td>
                 <td class={`risk risk-${a.risk}`}>{a.risk.toUpperCase()}</td>
                 <td class="row-actions">
-                  {#if state === "disabled"}
+                  {#if state === "missing"}
+                    <button
+                      class="small-action"
+                      onclick={() => reinstallApp(a.package)}
+                      disabled={appActionBusy === a.package}
+                      title="cmd package install-existing — restores system apps"
+                    >
+                      {appActionBusy === a.package ? "…" : "Reinstall (system)"}
+                    </button>
+                    <button
+                      class="small-action"
+                      onclick={() => openInPlayStore(a.package)}
+                      disabled={appActionBusy === a.package}
+                      title="am start market://details?id=…"
+                    >
+                      {appActionBusy === a.package ? "…" : "Open Play Store"}
+                    </button>
+                  {:else if state === "disabled"}
                     <button
                       class="small-action"
                       onclick={() => enableApp(a.package)}
@@ -607,12 +901,200 @@
                         Uninstall
                       </button>
                     {/if}
+                    {#if a.default_restore}
+                      <button
+                        class="small-action"
+                        onclick={() => openInPlayStore(a.package)}
+                        disabled={appActionBusy === a.package}
+                        title="Open this app's Play Store page on the device — handy if it was previously uninstalled."
+                      >
+                        Play Store
+                      </button>
+                    {/if}
                   {/if}
                 </td>
               </tr>
             {/each}
           </tbody>
         </table>
+      {/if}
+    </div>
+  {:else if activeTab === "tweaks"}
+    <div class="card" role="tabpanel" tabindex={0} id="tabpanel-tweaks" aria-labelledby="tab-tweaks">
+      <div class="card-header">
+        <h2>System Tweaks</h2>
+        <button onclick={loadTweaks} disabled={tweaksLoading}>
+          {tweaksLoading ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+      <p class="muted small">
+        Flip the same settings v1's Display/Input Tuning menu wrote. Each click runs
+        <code>settings put</code>. Empty value resets to device default.
+      </p>
+      {#if tweaksErr}
+        <div class="error">{tweaksErr}</div>
+      {:else if !tweaks}
+        <div class="muted">{tweaksLoading ? "Querying…" : "—"}</div>
+      {:else}
+        {#if tweaksActionMessage}
+          <p class="muted small mono action-message">{tweaksActionMessage}</p>
+        {/if}
+
+        <h3>HDMI-CEC</h3>
+        <p class="muted small">
+          Master switch plus three sub-toggles. Disabling the master typically also
+          turns off the sub-controls.
+        </p>
+        <div class="tweak-grid">
+          {#each [
+            { key: "hdmi_control_enabled", label: "Master (control on/off)", value: tweaks.hdmi_control_enabled },
+            { key: "hdmi_control_auto_wakeup_enabled", label: "Auto wake on TV power", value: tweaks.hdmi_control_auto_wakeup_enabled },
+            { key: "hdmi_control_auto_device_off_enabled", label: "Auto sleep when TV off", value: tweaks.hdmi_control_auto_device_off_enabled },
+            { key: "hdmi_system_audio_control_enabled", label: "System audio control", value: tweaks.hdmi_system_audio_control_enabled },
+          ] as row (row.key)}
+            <div class="tweak-row">
+              <div>
+                <div>{row.label}</div>
+                <div class="muted small mono">global.{row.key} = {row.value ?? "(unset)"}</div>
+              </div>
+              <div class="row-actions">
+                <button
+                  class="small-action"
+                  class:active={row.value === "1"}
+                  disabled={tweaksActionBusy === row.key}
+                  onclick={() => writeTweak("global", row.key, "1", row.key)}
+                >On</button>
+                <button
+                  class="small-action"
+                  class:active={row.value === "0"}
+                  disabled={tweaksActionBusy === row.key}
+                  onclick={() => writeTweak("global", row.key, "0", row.key)}
+                >Off</button>
+                <button
+                  class="small-action"
+                  disabled={tweaksActionBusy === row.key}
+                  onclick={() => writeTweak("global", row.key, "", row.key)}
+                >Reset</button>
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <h3>Match Content Frame Rate</h3>
+        <p class="muted small">
+          Lets apps switch refresh rate to match video content (24/25/30/60 Hz). Seamless
+          only avoids visible black flashes during the switch.
+        </p>
+        <div class="tweak-row">
+          <div>
+            <div class="muted small mono">secure.match_content_frame_rate = {tweaks.match_content_frame_rate ?? "(unset)"}</div>
+          </div>
+          <div class="row-actions">
+            {#each [
+              { v: "0", label: "Never" },
+              { v: "1", label: "Seamless only" },
+              { v: "2", label: "Always" },
+            ] as opt (opt.v)}
+              <button
+                class="small-action"
+                class:active={tweaks.match_content_frame_rate === opt.v}
+                disabled={tweaksActionBusy === "match_content_frame_rate"}
+                onclick={() => writeTweak("secure", "match_content_frame_rate", opt.v, "match_content_frame_rate")}
+              >{opt.label}</button>
+            {/each}
+            <button
+              class="small-action"
+              disabled={tweaksActionBusy === "match_content_frame_rate"}
+              onclick={() => writeTweak("secure", "match_content_frame_rate", "", "match_content_frame_rate")}
+            >Reset</button>
+          </div>
+        </div>
+
+        <h3>Long Press Timeout</h3>
+        <p class="muted small">
+          How long the remote OK button has to be held to register a long-press. Default
+          is 400ms; 300ms feels snappier.
+        </p>
+        <div class="tweak-row">
+          <div>
+            <div class="muted small mono">secure.long_press_timeout = {tweaks.long_press_timeout ?? "(unset)"}</div>
+          </div>
+          <div class="row-actions">
+            {#each ["300", "400", "500"] as v (v)}
+              <button
+                class="small-action"
+                class:active={tweaks.long_press_timeout === v}
+                disabled={tweaksActionBusy === "long_press_timeout"}
+                onclick={() => writeTweak("secure", "long_press_timeout", v, "long_press_timeout")}
+              >{v} ms</button>
+            {/each}
+            <button
+              class="small-action"
+              disabled={tweaksActionBusy === "long_press_timeout"}
+              onclick={() => writeTweak("secure", "long_press_timeout", "", "long_press_timeout")}
+            >Reset</button>
+          </div>
+        </div>
+
+        <h3>UI Animations</h3>
+        <p class="muted small">
+          Sets all three animation scales (window / transition / animator) at once.
+          0.5× is a noticeable speedup; 0× disables them entirely.
+        </p>
+        <div class="tweak-row">
+          <div>
+            <div class="muted small mono">
+              window = {tweaks.window_animation_scale ?? "(unset)"} /
+              transition = {tweaks.transition_animation_scale ?? "(unset)"} /
+              animator = {tweaks.animator_duration_scale ?? "(unset)"}
+            </div>
+          </div>
+          <div class="row-actions">
+            {#each [
+              { v: "0", label: "Off" },
+              { v: "0.5", label: "Fast (0.5×)" },
+              { v: "1", label: "Default (1×)" },
+            ] as opt (opt.v)}
+              <button
+                class="small-action"
+                class:active={tweaks.window_animation_scale === opt.v && tweaks.transition_animation_scale === opt.v && tweaks.animator_duration_scale === opt.v}
+                disabled={tweaksActionBusy === "animations"}
+                onclick={() => setAnimationScale(opt.v)}
+              >{opt.label}</button>
+            {/each}
+            <button
+              class="small-action"
+              disabled={tweaksActionBusy === "animations"}
+              onclick={() => setAnimationScale("")}
+            >Reset</button>
+          </div>
+        </div>
+
+        <h3>Display Scaling</h3>
+        <p class="muted small">
+          Forces a specific resolution + density via <code>wm size</code> + <code>wm density</code>.
+          Mostly for Shield TV — useful for testing 1080p mode on a 4K device.
+        </p>
+        <div class="row-actions">
+          <button
+            class="small-action"
+            disabled={displayScaleBusy !== null}
+            onclick={() => applyDisplayScaling("uhd_4k")}
+          >{displayScaleBusy === "uhd_4k" ? "Applying…" : "Shield 4K"}</button>
+          <button
+            class="small-action"
+            disabled={displayScaleBusy !== null}
+            onclick={() => applyDisplayScaling("fhd_1080p")}
+          >{displayScaleBusy === "fhd_1080p" ? "Applying…" : "Shield 1080p"}</button>
+          <button
+            class="small-action"
+            disabled={displayScaleBusy !== null}
+            onclick={() => applyDisplayScaling("reset")}
+          >{displayScaleBusy === "reset" ? "Resetting…" : "Reset"}</button>
+        </div>
+        {#if displayScaleMessage}
+          <p class="muted small mono action-message">{displayScaleMessage}</p>
+        {/if}
       {/if}
     </div>
   {:else if activeTab === "sideload"}
@@ -667,22 +1149,50 @@
         <div class="error">{previewErr}</div>
       {:else if preview && previewPath}
         <div class="preview-box">
-          <div class="warning preview-disclaimer">
-            <strong>Preview only.</strong> Execution of the plan is not yet wired in this
-            build. The counts below show what <em>would</em> change — nothing has been
-            applied to your device.
-          </div>
           <h3>Plan preview</h3>
           {#if preview.cross_device_warning}
             <div class="warning">{preview.cross_device_warning}</div>
           {/if}
           <ul>
-            <li><strong>{preview.packages_to_disable.length}</strong> packages would be disabled</li>
+            <li><strong>{preview.packages_to_disable.length}</strong> packages will be disabled</li>
             <li><strong>{preview.packages_already_disabled.length}</strong> already disabled (no-op)</li>
             <li><strong>{preview.packages_not_installed.length}</strong> not present on device</li>
             <li>Launcher: <code>{preview.launcher_to_set ?? "(unchanged)"}</code></li>
-            <li><strong>{Object.keys(preview.settings_to_write).length}</strong> settings would be written</li>
+            <li><strong>{Object.keys(preview.settings_to_write).length}</strong> settings will be written</li>
           </ul>
+          <div class="apply-row">
+            <button
+              class="primary"
+              onclick={applySnapshot}
+              disabled={applyBusy || applyResult !== null}
+            >
+              {applyBusy ? "Applying…" : applyResult ? "Applied" : "Apply this snapshot"}
+            </button>
+            <span class="muted small">
+              Disable is reversible via Emergency Recovery on the Overview tab.
+            </span>
+          </div>
+          {#if applyErr}
+            <div class="error">{applyErr}</div>
+          {/if}
+          {#if applyResult}
+            <div class="apply-result">
+              <p><strong>{applyResult.summary}</strong></p>
+              <ul>
+                <li><strong>{applyResult.packages_disabled.length}</strong> packages disabled</li>
+                {#if applyResult.packages_failed.length > 0}
+                  <li class="warn-text"><strong>{applyResult.packages_failed.length}</strong> failed: {applyResult.packages_failed.join(", ")}</li>
+                {/if}
+                {#if applyResult.launcher_message}
+                  <li>Launcher: {applyResult.launcher_message}</li>
+                {/if}
+                <li><strong>{applyResult.settings_written.length}</strong> settings written</li>
+                {#if applyResult.settings_failed.length > 0}
+                  <li class="warn-text">Settings failed: {applyResult.settings_failed.join("; ")}</li>
+                {/if}
+              </ul>
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
@@ -908,6 +1418,120 @@
     border: 1px solid #30363d;
     border-radius: 4px;
     word-break: break-word;
+  }
+  .device-title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+  .device-header-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+  }
+  .reboot-wrap {
+    position: relative;
+  }
+  .reboot-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 0.3rem;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 0.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 9rem;
+    z-index: 5;
+  }
+  .reboot-menu button {
+    text-align: left;
+    background: transparent;
+    border: none;
+  }
+  .reboot-menu button:hover {
+    background: #21262d;
+  }
+  .recovery-section {
+    margin-top: 1.5rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid #30363d;
+  }
+  .danger-button {
+    background: #5d1b1b;
+    border-color: #8b3030;
+    color: #fff;
+    margin-top: 0.6rem;
+  }
+  .danger-button:hover:not(:disabled) {
+    background: #8b3030;
+  }
+  .recovery-result {
+    margin-top: 0.8rem;
+    padding: 0.6rem 0.8rem;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+  }
+  .recovery-result ul {
+    margin: 0.4rem 0 0;
+    padding-left: 1.2rem;
+  }
+  .tweak-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin: 0.4rem 0 0.8rem;
+  }
+  .tweak-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #21262d;
+  }
+  .small-action.active {
+    background: #1f6feb;
+    color: #fff;
+    border-color: #58a6ff;
+  }
+  .apply-row {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin: 0.8rem 0 0.4rem;
+    flex-wrap: wrap;
+  }
+  .apply-result {
+    margin-top: 0.6rem;
+    padding: 0.6rem 0.8rem;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+  }
+  .apply-result ul {
+    margin: 0.3rem 0 0;
+    padding-left: 1.2rem;
+  }
+  .warn-text {
+    color: #d29922;
+  }
+  .legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0 0 0.8rem;
+    padding: 0.5rem 0.8rem;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    line-height: 1.4;
   }
   .install-output {
     background: #0d1117;

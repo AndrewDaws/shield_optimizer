@@ -151,6 +151,60 @@ export interface SnapshotApplyPlan {
   cross_device_warning: string | null;
 }
 
+export interface ApplyResult {
+  packages_disabled: string[];
+  packages_failed: string[];
+  launcher_set: boolean;
+  launcher_message: string | null;
+  settings_written: string[];
+  settings_failed: string[];
+  summary: string;
+}
+
+export interface RecoveryFailure {
+  package: string;
+  error: string;
+}
+
+export interface RecoveryResult {
+  restored: string[];
+  failed: RecoveryFailure[];
+  message: string;
+}
+
+export type RebootMode = "normal" | "recovery" | "bootloader";
+
+export interface RebootResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface TweaksState {
+  hdmi_control_enabled: string | null;
+  hdmi_control_auto_wakeup_enabled: string | null;
+  hdmi_control_auto_device_off_enabled: string | null;
+  hdmi_system_audio_control_enabled: string | null;
+  match_content_frame_rate: string | null;
+  long_press_timeout: string | null;
+  window_animation_scale: string | null;
+  transition_animation_scale: string | null;
+  animator_duration_scale: string | null;
+}
+
+export type SettingNamespace = "global" | "secure" | "system";
+
+export interface WriteResult {
+  ok: boolean;
+  message: string;
+}
+
+export type DisplayScalePreset = "uhd_4k" | "fhd_1080p" | "reset";
+
+export interface DisplayScaleResult {
+  ok: boolean;
+  message: string;
+}
+
 export function deviceTypeLabel(t: DeviceType): string {
   switch (t) {
     case "shield":

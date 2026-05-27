@@ -76,6 +76,7 @@ pub fn run() {
             apps::enable_package,
             apps::uninstall_package,
             apps::reinstall_existing,
+            apps::open_play_store,
             sideload::install_apk,
             snapshot::list_snapshots,
             snapshot::save_snapshot,

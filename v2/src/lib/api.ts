@@ -6,18 +6,27 @@ import type {
   ActionResult,
   AdbStatus,
   AppEntry,
+  ApplyResult,
   ConnectResult,
   CurrentLauncher,
   Device,
   DeviceType,
+  DisplayScalePreset,
+  DisplayScaleResult,
   HealthReport,
   InstallApkResult,
   InstallResult,
   LauncherStatus,
+  RebootMode,
+  RebootResult,
+  RecoveryResult,
   ScanResult,
   SetLauncherResult,
+  SettingNamespace,
   SnapshotApplyPlan,
   SnapshotFile,
+  TweaksState,
+  WriteResult,
 } from "./types";
 
 export const api = {
@@ -56,6 +65,8 @@ export const api = {
     invoke<ActionResult>("uninstall_package", { serial, package: pkg }),
   reinstallExisting: (serial: string, pkg: string) =>
     invoke<ActionResult>("reinstall_existing", { serial, package: pkg }),
+  openPlayStore: (serial: string, pkg: string) =>
+    invoke<ActionResult>("open_play_store", { serial, package: pkg }),
 
   installApk: (serial: string, apkPath: string, reinstall = true) =>
     invoke<InstallApkResult>("install_apk", { serial, apkPath, reinstall }),
@@ -65,4 +76,21 @@ export const api = {
     invoke<SnapshotFile>("save_snapshot", { serial, deviceName }),
   previewApply: (serial: string, snapshotPath: string) =>
     invoke<SnapshotApplyPlan>("preview_apply", { serial, snapshotPath }),
+  applySnapshot: (serial: string, snapshotPath: string) =>
+    invoke<ApplyResult>("apply_snapshot", { serial, snapshotPath }),
+
+  panicRecovery: (serial: string) =>
+    invoke<RecoveryResult>("panic_recovery", { serial }),
+  rebootDevice: (serial: string, mode: RebootMode) =>
+    invoke<RebootResult>("reboot_device", { serial, mode }),
+
+  getTweaks: (serial: string) => invoke<TweaksState>("get_tweaks", { serial }),
+  writeSetting: (
+    serial: string,
+    namespace: SettingNamespace,
+    key: string,
+    value: string,
+  ) => invoke<WriteResult>("write_setting", { serial, namespace, key, value }),
+  setDisplayScaling: (serial: string, preset: DisplayScalePreset) =>
+    invoke<DisplayScaleResult>("set_display_scaling", { serial, preset }),
 };

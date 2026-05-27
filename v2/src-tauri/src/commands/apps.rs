@@ -71,6 +71,37 @@ pub async fn reinstall_existing(
     .await
 }
 
+/// `open_play_store` — launch the Play Store detail page for `package` on the
+/// device. Use when an app was fully uninstalled and isn't available via
+/// `install-existing` (third-party apps, or system apps wiped from /data).
+///
+/// Reject package strings containing shell metacharacters since the value is
+/// interpolated into a URL passed to `am start`. Real package names are
+/// `[a-zA-Z0-9_.]` only, so this is more than permissive enough.
+#[tauri::command]
+pub async fn open_play_store(
+    state: State<'_, AppState>,
+    serial: String,
+    package: String,
+) -> Result<ActionResult, String> {
+    if package.is_empty()
+        || package
+            .chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '.' || c == '_'))
+    {
+        return Ok(ActionResult {
+            ok: false,
+            message: format!("invalid package name: {package}"),
+        });
+    }
+    run(
+        &state,
+        &serial,
+        &format!("am start -a android.intent.action.VIEW -d market://details?id={package}"),
+    )
+    .await
+}
+
 async fn run(state: &AppState, serial: &str, cmd: &str) -> Result<ActionResult, String> {
     let adb = state.adb_snapshot().await;
     let out = adb
