@@ -19,17 +19,14 @@ pub async fn list_launchers(
     state: State<'_, AppState>,
     serial: String,
 ) -> Result<Vec<LauncherStatus>, String> {
-    // Pull installed + disabled package lists in two ADB calls.
-    let installed = state
-        .adb
-        .shell(&serial, "pm list packages")
-        .await
-        .map_err(|e| format!("pm list packages: {e}"))?;
-    let disabled = state
-        .adb
-        .shell(&serial, "pm list packages -d")
-        .await
-        .map_err(|e| format!("pm list packages -d: {e}"))?;
+    // Pull installed + disabled package lists concurrently.
+    let adb = state.adb_snapshot().await;
+    let (installed_res, disabled_res) = tokio::join!(
+        adb.shell(&serial, "pm list packages"),
+        adb.shell(&serial, "pm list packages -d"),
+    );
+    let installed = installed_res.map_err(|e| format!("pm list packages: {e}"))?;
+    let disabled = disabled_res.map_err(|e| format!("pm list packages -d: {e}"))?;
 
     let installed_pkgs = crate::adb::parse_installed_packages_output(&installed.stdout);
     let disabled_pkgs = crate::adb::parse_disabled_packages_output(&disabled.stdout);
@@ -60,8 +57,8 @@ pub async fn current_launcher(
     state: State<'_, AppState>,
     serial: String,
 ) -> Result<CurrentLauncher, String> {
-    let out = state
-        .adb
+    let adb = state.adb_snapshot().await;
+    let out = adb
         .shell(
             &serial,
             "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME",
@@ -90,8 +87,8 @@ pub async fn channel_provider_disabled(
     state: State<'_, AppState>,
     serial: String,
 ) -> Result<bool, String> {
-    let out = state
-        .adb
+    let adb = state.adb_snapshot().await;
+    let out = adb
         .shell(&serial, "pm list packages -d com.android.providers.tv")
         .await
         .map_err(|e| format!("pm list packages -d: {e}"))?;

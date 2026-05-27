@@ -29,13 +29,15 @@ pub async fn health_report(
     state: State<'_, AppState>,
     serial: String,
 ) -> Result<HealthReport, String> {
-    let display_fut = state.adb.shell(&serial, "dumpsys display");
-    let mem_fut = state.adb.shell(&serial, "dumpsys meminfo");
-
-    let display_out = display_fut
-        .await
-        .map_err(|e| format!("dumpsys display: {e}"))?;
-    let mem_out = mem_fut.await.map_err(|e| format!("dumpsys meminfo: {e}"))?;
+    // Snapshot the driver once and run both queries concurrently — they're
+    // independent of each other.
+    let adb = state.adb_snapshot().await;
+    let (display_res, mem_res) = tokio::join!(
+        adb.shell(&serial, "dumpsys display"),
+        adb.shell(&serial, "dumpsys meminfo"),
+    );
+    let display_out = display_res.map_err(|e| format!("dumpsys display: {e}"))?;
+    let mem_out = mem_res.map_err(|e| format!("dumpsys meminfo: {e}"))?;
 
     let display = parse_display_mode(&display_out.stdout);
     let mem_map = parse_total_pss_by_process(&mem_out.stdout);

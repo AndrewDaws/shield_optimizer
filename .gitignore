@@ -1,9 +1,9 @@
 # APK files (user-provided for sideloading)
 *.apk
 
-# ADB binaries (all platforms)
-adb
-adb.exe
+# ADB binaries (all platforms) — anchored to the repo root so v2/src-tauri/src/adb/ source isn't swept up
+/adb
+/adb.exe
 AdbWinApi.dll
 AdbWinUsbApi.dll
 adb_temp.zip

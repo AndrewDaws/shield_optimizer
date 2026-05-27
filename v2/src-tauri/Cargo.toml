@@ -45,5 +45,13 @@ dirs = "5"
 # Async traits — for the AdbDriver abstraction
 async-trait = "0.1"
 
+# HTTPS download of Google's platform-tools (rustls = no OpenSSL native dep)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3"
+
+# ZIP extraction for platform-tools-latest-<os>.zip
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [dev-dependencies]
 pretty_assertions = "1"
+tempfile = "3"

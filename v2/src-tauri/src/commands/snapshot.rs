@@ -71,17 +71,17 @@ pub async fn save_snapshot(
     serial: String,
     device_name: String,
 ) -> Result<SnapshotFile, String> {
+    let adb = state.adb_snapshot().await;
+
     // Pull all the inputs the engine needs.
-    let disabled_out = state
-        .adb
+    let disabled_out = adb
         .shell(&serial, "pm list packages -d")
         .await
         .map_err(|e| format!("pm list packages -d: {e}"))?;
     let disabled_packages = parse_disabled_packages_output(&disabled_out.stdout);
 
     // Current launcher.
-    let launcher_out = state
-        .adb
+    let launcher_out = adb
         .shell(
             &serial,
             "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME",
@@ -100,7 +100,7 @@ pub async fn save_snapshot(
     let mut settings = std::collections::BTreeMap::new();
     for (ns, key) in tracked_setting_keys() {
         let cmd = format!("settings get {ns} {key}");
-        if let Ok(out) = state.adb.shell(&serial, &cmd).await {
+        if let Ok(out) = adb.shell(&serial, &cmd).await {
             let v = out.stdout.trim();
             if !v.is_empty() && v != "null" {
                 settings.insert(format!("{ns}.{key}"), v.to_string());
@@ -117,8 +117,7 @@ pub async fn save_snapshot(
         };
 
     // Android version.
-    let ver_out = state
-        .adb
+    let ver_out = adb
         .shell(&serial, "getprop ro.build.version.release")
         .await
         .map_err(|e| format!("getprop: {e}"))?;
@@ -187,16 +186,13 @@ pub async fn preview_apply(
         .map_err(|e| format!("read snapshot: {e}"))?;
     let snap = Snapshot::from_json(&contents).map_err(|e| format!("parse snapshot: {e}"))?;
 
-    let installed = state
-        .adb
-        .shell(&serial, "pm list packages")
-        .await
-        .map_err(|e| format!("pm list packages: {e}"))?;
-    let disabled = state
-        .adb
-        .shell(&serial, "pm list packages -d")
-        .await
-        .map_err(|e| format!("pm list packages -d: {e}"))?;
+    let adb = state.adb_snapshot().await;
+    let (installed_res, disabled_res) = tokio::join!(
+        adb.shell(&serial, "pm list packages"),
+        adb.shell(&serial, "pm list packages -d"),
+    );
+    let installed = installed_res.map_err(|e| format!("pm list packages: {e}"))?;
+    let disabled = disabled_res.map_err(|e| format!("pm list packages -d: {e}"))?;
 
     let installed_pkgs = parse_installed_packages_output(&installed.stdout);
     let disabled_pkgs = parse_disabled_packages_output(&disabled.stdout);

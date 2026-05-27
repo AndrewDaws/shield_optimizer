@@ -87,6 +87,18 @@ export interface SnapshotFile {
   disabled_count: number;
 }
 
+export interface AdbStatus {
+  available: boolean;
+  path: string | null;
+  last_probe: string | null;
+}
+
+export interface InstallResult {
+  ok: boolean;
+  path: string | null;
+  message: string;
+}
+
 export interface SnapshotApplyPlan {
   packages_to_disable: string[];
   packages_already_disabled: string[];

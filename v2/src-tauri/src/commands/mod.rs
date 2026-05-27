@@ -5,6 +5,7 @@
 
 pub mod devices;
 pub mod health;
+pub mod install;
 pub mod launcher;
 pub mod loader;
 pub mod snapshot;

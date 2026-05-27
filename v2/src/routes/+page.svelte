@@ -13,15 +13,44 @@
   let connectBusy = $state(false);
   let connectMessage = $state("");
 
+  // Treated as the structured signal "no adb anywhere on disk". Triggers the
+  // install-platform-tools button rather than a generic error pane.
+  let adbMissing = $state(false);
+  let installBusy = $state(false);
+  let installMessage = $state("");
+
+  function looksLikeAdbMissing(err: string): boolean {
+    return err.includes("could not locate an adb binary");
+  }
+
   async function refresh() {
     loading = true;
     error = null;
     try {
       devices = await api.listDevices();
+      adbMissing = false;
     } catch (e) {
-      error = String(e);
+      const msg = String(e);
+      adbMissing = looksLikeAdbMissing(msg);
+      error = adbMissing ? null : msg;
     } finally {
       loading = false;
+    }
+  }
+
+  async function downloadAdb() {
+    installBusy = true;
+    installMessage = "Downloading platform-tools from Google… (~12 MB)";
+    try {
+      const r = await api.installAdb();
+      installMessage = r.message;
+      if (r.ok) {
+        await refresh();
+      }
+    } catch (e) {
+      installMessage = String(e);
+    } finally {
+      installBusy = false;
     }
   }
 
@@ -71,7 +100,25 @@
   {/if}
 </section>
 
-{#if error}
+{#if adbMissing}
+  <div class="install-pane">
+    <h2>ADB not found on this system</h2>
+    <p>
+      Shield Optimizer needs Android's <code>adb</code> binary to talk to your TV.
+      We can download Google's official platform-tools and install them locally —
+      no system-wide changes, just a self-contained copy under your app-data folder.
+    </p>
+    <p class="muted small">
+      Already have <code>adb</code> installed? Set <code>SHIELD_OPTIMIZER_ADB</code> to its full path and relaunch.
+    </p>
+    <button class="primary" onclick={downloadAdb} disabled={installBusy}>
+      {installBusy ? "Installing…" : "Download platform-tools"}
+    </button>
+    {#if installMessage}
+      <p class="install-message muted small">{installMessage}</p>
+    {/if}
+  </div>
+{:else if error}
   <div class="error">Failed to list devices: {error}</div>
 {:else if loading && devices.length === 0}
   <div class="muted">Looking for devices…</div>
@@ -223,6 +270,28 @@
     margin: 0 0 0.6rem;
     font-size: 1.1rem;
     color: #c9d1d9;
+  }
+  .install-pane {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 1.5rem;
+  }
+  .install-pane h2 {
+    margin: 0 0 0.6rem;
+    font-size: 1.1rem;
+  }
+  .install-pane p {
+    margin: 0.4rem 0;
+    font-size: 0.92rem;
+    line-height: 1.4;
+  }
+  .install-message {
+    margin-top: 0.8rem;
+    font-family: ui-monospace, monospace;
+  }
+  .small {
+    font-size: 0.82rem;
   }
   .error {
     background: #5d1b1b;

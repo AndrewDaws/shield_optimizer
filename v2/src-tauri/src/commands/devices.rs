@@ -22,7 +22,7 @@ pub async fn list_devices(state: State<'_, AppState>) -> Result<Vec<Device>, Str
 /// Reusable implementation — callable from inside other commands without
 /// the `State<'_, T>` lifetime constraint getting in the way.
 pub async fn list_devices_impl(state: &AppState) -> Result<Vec<Device>, String> {
-    let adb = state.adb.clone();
+    let adb = state.adb_snapshot().await;
     let raw = adb
         .raw(&["devices"])
         .await
@@ -111,8 +111,8 @@ pub async fn connect_device(
     } else {
         format!("{address}:5555")
     };
-    let out = state
-        .adb
+    let adb = state.adb_snapshot().await;
+    let out = adb
         .raw(&["connect", &target])
         .await
         .map_err(|e| format!("adb connect: {e}"))?;
@@ -132,8 +132,8 @@ pub async fn disconnect_device(
     state: State<'_, AppState>,
     serial: String,
 ) -> Result<ConnectResult, String> {
-    let out = state
-        .adb
+    let adb = state.adb_snapshot().await;
+    let out = adb
         .raw(&["disconnect", &serial])
         .await
         .map_err(|e| format!("adb disconnect: {e}"))?;

@@ -1,0 +1,278 @@
+//! Parsers for ADB output. These are pure functions (no I/O); the driver
+//! fetches strings and the parsers turn them into typed values.
+//!
+//! Tests pin behavior against fixtures captured from real Shield devices
+//! (see `tests/fixtures/`).
+
+use std::collections::HashMap;
+
+use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+
+use crate::engine::types::{ConnectionType, DeviceStatus};
+
+/// A row from `adb devices`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceListEntry {
+    pub serial: String,
+    pub status: DeviceStatus,
+    pub connection: ConnectionType,
+}
+
+/// Parse `adb devices` output into a structured list.
+///
+/// Sample input (tab-separated columns in real output):
+/// ```text
+/// List of devices attached
+/// 192.168.42.71:5555    device
+/// 192.168.42.143:5555   unauthorized
+/// emulator-5554         device
+/// ```
+pub fn parse_device_list(adb_devices_output: &str) -> Vec<DeviceListEntry> {
+    static IP_PORT: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+\.\d+\.\d+\.\d+:\d+$").unwrap());
+
+    let mut entries = Vec::new();
+    for line in adb_devices_output.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("List of devices") {
+            continue;
+        }
+        // Each line: <serial>\t<status>
+        let mut parts = line.split_whitespace();
+        let Some(serial) = parts.next() else { continue };
+        let Some(status_str) = parts.next() else {
+            continue;
+        };
+        let Some(status) = DeviceStatus::from_adb_str(status_str) else {
+            continue;
+        };
+        let connection = if IP_PORT.is_match(serial) {
+            ConnectionType::Network
+        } else {
+            ConnectionType::Usb
+        };
+        entries.push(DeviceListEntry {
+            serial: serial.to_string(),
+            status,
+            connection,
+        });
+    }
+    entries
+}
+
+/// Parse the `package:<name>` lines that `pm list packages [-d|-e|-u]` emits.
+pub fn parse_installed_packages_output(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| line.strip_prefix("package:"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Same shape but kept as a distinct name for call-site clarity.
+pub fn parse_disabled_packages_output(output: &str) -> Vec<String> {
+    parse_installed_packages_output(output)
+}
+
+/// Parse the `Total PSS by process:` section of `dumpsys meminfo` into a
+/// package → MB map. Sums multiple processes that share a base package.
+///
+/// Per v1's Get-AppMemoryMap learnings: per-process query (`dumpsys meminfo <pkg>`)
+/// is unreliable across Android versions; the system-wide section is robust.
+pub fn parse_dumpsys_meminfo(meminfo: &str) -> HashMap<String, f64> {
+    static ROW: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^\s*([\d,]+)K:\s+([a-zA-Z0-9_.]+)").unwrap());
+
+    let mut totals_kb: HashMap<String, u64> = HashMap::new();
+    let mut in_section = false;
+    for line in meminfo.lines() {
+        if line.contains("Total PSS by process:") {
+            in_section = true;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if line.trim().is_empty() {
+            // Empty line ends the section.
+            break;
+        }
+        if let Some(caps) = ROW.captures(line) {
+            let kb: u64 = caps[1].replace(',', "").parse().unwrap_or(0);
+            let pkg = caps[2].to_string();
+            *totals_kb.entry(pkg).or_insert(0) += kb;
+        }
+    }
+    totals_kb
+        .into_iter()
+        .map(|(pkg, kb)| (pkg, (kb as f64 / 1024.0 * 10.0).round() / 10.0))
+        .collect()
+}
+
+/// Stable alias for callers that want to be explicit about what they're getting.
+pub fn parse_total_pss_by_process(meminfo: &str) -> HashMap<String, f64> {
+    parse_dumpsys_meminfo(meminfo)
+}
+
+/// Current display mode parsed from `dumpsys display`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DisplayMode {
+    pub resolution: Option<String>,
+    pub refresh_hz: Option<f64>,
+    /// Decoded HDR types from `mSupportedHdrTypes=[…]`. Empty = SDR only.
+    pub hdr_types: Vec<String>,
+}
+
+/// Parse `dumpsys display` for the active display's resolution + refresh rate +
+/// HDR capabilities. The active mode id is in DisplayDeviceInfo; supportedModes
+/// maps id → {width, height, fps}.
+pub fn parse_display_mode(dumpsys_display: &str) -> DisplayMode {
+    static MODE_ID: Lazy<Regex> = Lazy::new(|| Regex::new(r"modeId\s+(\d+)").unwrap());
+    static MODE_ENTRY: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"id=(\d+),\s*width=(\d+),\s*height=(\d+),\s*fps=([\d.]+)").unwrap()
+    });
+    static HDR_TYPES: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"mSupportedHdrTypes=\[([\d,\s]*)\]").unwrap());
+
+    let active_id = MODE_ID
+        .captures(dumpsys_display)
+        .and_then(|c| c.get(1))
+        .and_then(|m| m.as_str().parse::<u32>().ok());
+
+    let mut resolution = None;
+    let mut refresh_hz = None;
+    if let Some(id) = active_id {
+        for caps in MODE_ENTRY.captures_iter(dumpsys_display) {
+            let mode_id: u32 = caps[1].parse().unwrap_or(0);
+            if mode_id == id {
+                let w: u32 = caps[2].parse().unwrap_or(0);
+                let h: u32 = caps[3].parse().unwrap_or(0);
+                let fps: f64 = caps[4].parse().unwrap_or(0.0);
+                resolution = Some(format!("{w}x{h}"));
+                refresh_hz = Some((fps * 100.0).round() / 100.0);
+                break;
+            }
+        }
+    }
+
+    let mut hdr_types: Vec<String> = Vec::new();
+    if let Some(caps) = HDR_TYPES.captures(dumpsys_display) {
+        let raw = caps[1].trim();
+        if !raw.is_empty() {
+            for tok in raw.split(',') {
+                let t = tok.trim();
+                let name = match t {
+                    "1" => Some("Dolby Vision"),
+                    "2" => Some("HDR10"),
+                    "3" => Some("HLG"),
+                    "4" => Some("HDR10+"),
+                    _ => None,
+                };
+                if let Some(n) = name {
+                    hdr_types.push(n.to_string());
+                }
+            }
+        }
+    }
+
+    DisplayMode {
+        resolution,
+        refresh_hz,
+        hdr_types,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parses_device_list_with_mixed_states() {
+        let input = "List of devices attached\n\
+            192.168.42.71:5555\tdevice\n\
+            192.168.42.143:5555\tunauthorized\n\
+            emulator-5554\tdevice\n\
+            offline-host\toffline\n";
+        let entries = parse_device_list(input);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].serial, "192.168.42.71:5555");
+        assert_eq!(entries[0].status, DeviceStatus::Device);
+        assert_eq!(entries[0].connection, ConnectionType::Network);
+        assert_eq!(entries[1].status, DeviceStatus::Unauthorized);
+        assert_eq!(entries[2].connection, ConnectionType::Usb);
+        assert_eq!(entries[3].status, DeviceStatus::Offline);
+    }
+
+    #[test]
+    fn ignores_header_and_blank_lines() {
+        let input = "List of devices attached\n\n\n";
+        assert!(parse_device_list(input).is_empty());
+    }
+
+    #[test]
+    fn parses_pm_list_packages_output() {
+        let input = "package:com.foo\npackage:com.bar\npackage:com.baz\n";
+        let pkgs = parse_installed_packages_output(input);
+        assert_eq!(pkgs, vec!["com.foo", "com.bar", "com.baz"]);
+    }
+
+    #[test]
+    fn pm_list_packages_skips_garbage_lines() {
+        let input = "package:com.foo\nnot-a-package\npackage:com.bar\n";
+        let pkgs = parse_installed_packages_output(input);
+        assert_eq!(pkgs, vec!["com.foo", "com.bar"]);
+    }
+
+    #[test]
+    fn parses_total_pss_section_and_sums_per_package() {
+        // Realistic-ish meminfo with multiple processes for one package.
+        let input = "Total RAM: 3GB\n\n\
+            Total PSS by process:\n\
+              845,500K: com.plexapp.android (pid 1234)\n\
+              193,300K: com.spauldhaliwal.dispatch:worker (pid 2345)\n\
+              116,800K: com.spauldhaliwal.dispatch (pid 3456)\n\
+              121,800K: com.Funimation.FunimationNow.androidtv (pid 4567)\n\n\
+            Some other section we don't care about\n";
+        let map = parse_dumpsys_meminfo(input);
+        // Plex: single process
+        assert!((map["com.plexapp.android"] - 825.7).abs() < 0.2);
+        // Dispatch: sum of worker + main (193,300 + 116,800 = 310,100 K = ~302.8 MB)
+        assert!((map["com.spauldhaliwal.dispatch"] - 302.8).abs() < 0.2);
+        assert!(map.contains_key("com.Funimation.FunimationNow.androidtv"));
+    }
+
+    #[test]
+    fn meminfo_returns_empty_when_section_missing() {
+        assert!(parse_dumpsys_meminfo("nothing useful here").is_empty());
+    }
+
+    #[test]
+    fn parses_display_mode_shield_4k60_hdr10() {
+        // Distilled from a real Shield Android 11 dumpsys display.
+        let input = r#"
+DisplayDeviceInfo{"Built-in Screen": uniqueId="local:0", 3840 x 2160, modeId 20, defaultModeId 20, supportedModes [{id=1, width=3840, height=2160, fps=29.97003}, {id=20, width=3840, height=2160, fps=59.94006}], HdrCapabilities HdrCapabilities{mSupportedHdrTypes=[2], mMaxLuminance=500.0}, ...}
+"#;
+        let mode = parse_display_mode(input);
+        assert_eq!(mode.resolution.as_deref(), Some("3840x2160"));
+        assert_eq!(mode.refresh_hz, Some(59.94));
+        assert_eq!(mode.hdr_types, vec!["HDR10"]);
+    }
+
+    #[test]
+    fn parses_multiple_hdr_types() {
+        let input = "modeId 1, supportedModes [{id=1, width=3840, height=2160, fps=60.0}], HdrCapabilities mSupportedHdrTypes=[1, 2, 4]";
+        let mode = parse_display_mode(input);
+        assert_eq!(mode.hdr_types, vec!["Dolby Vision", "HDR10", "HDR10+"]);
+    }
+
+    #[test]
+    fn display_mode_sdr_only_when_hdr_list_empty() {
+        let input = "modeId 1, supportedModes [{id=1, width=1920, height=1080, fps=60.0}], HdrCapabilities mSupportedHdrTypes=[]";
+        let mode = parse_display_mode(input);
+        assert_eq!(mode.resolution.as_deref(), Some("1920x1080"));
+        assert!(mode.hdr_types.is_empty());
+    }
+}

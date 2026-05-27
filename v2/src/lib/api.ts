@@ -3,18 +3,23 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AdbStatus,
   AppEntry,
   ConnectResult,
   CurrentLauncher,
   Device,
   DeviceType,
   HealthReport,
+  InstallResult,
   LauncherStatus,
   SnapshotApplyPlan,
   SnapshotFile,
 } from "./types";
 
 export const api = {
+  adbStatus: () => invoke<AdbStatus>("adb_status"),
+  installAdb: () => invoke<InstallResult>("install_adb"),
+
   listDevices: () => invoke<Device[]>("list_devices"),
   deviceProfile: (serial: string) =>
     invoke<Device>("device_profile", { serial }),
