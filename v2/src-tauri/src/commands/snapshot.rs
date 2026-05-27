@@ -232,3 +232,146 @@ pub async fn preview_apply(
     );
     Ok(plan)
 }
+
+#[derive(Serialize)]
+pub struct ApplyResult {
+    pub packages_disabled: Vec<String>,
+    pub packages_failed: Vec<String>,
+    pub launcher_set: bool,
+    pub launcher_message: Option<String>,
+    pub settings_written: Vec<String>,
+    pub settings_failed: Vec<String>,
+    pub summary: String,
+}
+
+/// `apply_snapshot` — actually run the previewed plan against the device.
+/// Honors commitment #7 (reversibility): only `pm disable-user` writes,
+/// never re-enables a currently-enabled package the snapshot didn't list.
+#[tauri::command]
+pub async fn apply_snapshot(
+    state: State<'_, AppState>,
+    serial: String,
+    snapshot_path: String,
+) -> Result<ApplyResult, String> {
+    // Same containment check as preview_apply.
+    let path = PathBuf::from(&snapshot_path);
+    let canonical_path = tokio::fs::canonicalize(&path)
+        .await
+        .map_err(|e| format!("snapshot path: {e}"))?;
+    let canonical_dir = tokio::fs::canonicalize(&state.snapshot_dir)
+        .await
+        .map_err(|e| format!("snapshot dir: {e}"))?;
+    if !canonical_path.starts_with(&canonical_dir) {
+        return Err(format!(
+            "snapshot path is outside the configured snapshot directory ({})",
+            canonical_dir.display()
+        ));
+    }
+    let contents = tokio::fs::read_to_string(&canonical_path)
+        .await
+        .map_err(|e| format!("read snapshot: {e}"))?;
+    let snap = Snapshot::from_json(&contents).map_err(|e| format!("parse snapshot: {e}"))?;
+
+    let adb = state.adb_snapshot().await;
+    let (installed_res, disabled_res) = tokio::join!(
+        adb.shell(&serial, "pm list packages"),
+        adb.shell(&serial, "pm list packages -d"),
+    );
+    let installed = installed_res.map_err(|e| format!("pm list packages: {e}"))?;
+    let disabled = disabled_res.map_err(|e| format!("pm list packages -d: {e}"))?;
+    let installed_pkgs = parse_installed_packages_output(&installed.stdout);
+    let disabled_pkgs = parse_disabled_packages_output(&disabled.stdout);
+
+    let device = crate::commands::devices::device_profile_impl(state.inner(), &serial).await?;
+    let plan = compute_apply_plan(
+        &snap,
+        &ApplyPlanInputs {
+            target_device_type: device.device_type,
+            currently_installed: &installed_pkgs,
+            currently_disabled: &disabled_pkgs,
+        },
+    );
+
+    // 1. Disable packages from the plan (additive only — never re-enable).
+    let mut packages_disabled = Vec::new();
+    let mut packages_failed = Vec::new();
+    for pkg in &plan.packages_to_disable {
+        let cmd = format!("pm disable-user --user 0 {pkg}");
+        match adb.shell(&serial, &cmd).await {
+            Ok(out) if !out.stdout.contains("Failure") && !out.stdout.contains("Error") => {
+                packages_disabled.push(pkg.clone());
+            }
+            _ => packages_failed.push(pkg.clone()),
+        }
+    }
+
+    // 2. Set launcher if requested.
+    let mut launcher_set = false;
+    let mut launcher_message = None;
+    if let Some(launcher_pkg) = &plan.launcher_to_set {
+        // Reuse the multi-strategy set-default helper from the launcher module.
+        let result = crate::commands::launcher::set_default_launcher_impl(
+            state.inner(),
+            &serial,
+            launcher_pkg,
+        )
+        .await;
+        if let Ok(r) = result {
+            launcher_set = r.ok;
+            launcher_message = if r.ok {
+                Some(format!(
+                    "{launcher_pkg} via {}",
+                    r.strategy.unwrap_or_default()
+                ))
+            } else {
+                r.last_error
+            };
+        }
+    }
+
+    // 3. Write tracked settings — batch into a single shell call.
+    let mut settings_written = Vec::new();
+    let mut settings_failed = Vec::new();
+    if !plan.settings_to_write.is_empty() {
+        let mut parts = Vec::new();
+        let mut keys: Vec<&String> = Vec::new();
+        for (k, v) in &plan.settings_to_write {
+            // Key shape is `"ns.subkey"` per the snapshot schema.
+            if let Some((ns, key)) = k.split_once('.') {
+                parts.push(format!("settings put {ns} {key} {v}"));
+                keys.push(k);
+            }
+        }
+        let cmd = parts.join("; ");
+        match adb.shell(&serial, &cmd).await {
+            Ok(_) => {
+                for k in keys {
+                    settings_written.push(k.clone());
+                }
+            }
+            Err(e) => {
+                for k in keys {
+                    settings_failed.push(format!("{k}: {e}"));
+                }
+            }
+        }
+    }
+
+    let summary = format!(
+        "Disabled {} packages ({} failed). Launcher: {}. {} settings written.",
+        packages_disabled.len(),
+        packages_failed.len(),
+        if launcher_set { "set" } else { "unchanged" },
+        settings_written.len()
+    );
+
+    Ok(ApplyResult {
+        packages_disabled,
+        packages_failed,
+        launcher_set,
+        launcher_message,
+        settings_written,
+        settings_failed,
+        summary,
+    })
+}

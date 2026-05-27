@@ -1,0 +1,166 @@
+//! Tweaks & Display Scaling — settings the user can flip outside the Optimize
+//! flow. Mirrors v1's Set-DisplayInputTuning (§7) and Set-DisplayScaling (§8).
+
+use serde::Serialize;
+use tauri::State;
+
+use super::AppState;
+
+/// Snapshot of all the settings the Tweaks UI reads/writes. Matches the keys
+/// in `engine::snapshot::tracked_setting_keys` so a snapshot save captures
+/// the same surface.
+#[derive(Serialize)]
+pub struct TweaksState {
+    /// `1` / `0` / `null` for each HDMI-CEC sub-toggle.
+    pub hdmi_control_enabled: Option<String>,
+    pub hdmi_control_auto_wakeup_enabled: Option<String>,
+    pub hdmi_control_auto_device_off_enabled: Option<String>,
+    pub hdmi_system_audio_control_enabled: Option<String>,
+    /// `0` = Never, `1` = Seamless only, `2` = Always.
+    pub match_content_frame_rate: Option<String>,
+    /// Milliseconds.
+    pub long_press_timeout: Option<String>,
+    pub window_animation_scale: Option<String>,
+    pub transition_animation_scale: Option<String>,
+    pub animator_duration_scale: Option<String>,
+}
+
+/// `get_tweaks` — batch-fetch all Tweaks-relevant settings in one shell call.
+#[tauri::command]
+pub async fn get_tweaks(state: State<'_, AppState>, serial: String) -> Result<TweaksState, String> {
+    let adb = state.adb_snapshot().await;
+    let cmd = "settings get global hdmi_control_enabled; \
+               settings get global hdmi_control_auto_wakeup_enabled; \
+               settings get global hdmi_control_auto_device_off_enabled; \
+               settings get global hdmi_system_audio_control_enabled; \
+               settings get secure match_content_frame_rate; \
+               settings get secure long_press_timeout; \
+               settings get global window_animation_scale; \
+               settings get global transition_animation_scale; \
+               settings get global animator_duration_scale";
+    let out = adb
+        .shell(&serial, cmd)
+        .await
+        .map_err(|e| format!("settings get: {e}"))?;
+    let mut lines = out.stdout.lines().map(|s| {
+        let v = s.trim();
+        if v.is_empty() || v == "null" {
+            None
+        } else {
+            Some(v.to_string())
+        }
+    });
+    Ok(TweaksState {
+        hdmi_control_enabled: lines.next().flatten(),
+        hdmi_control_auto_wakeup_enabled: lines.next().flatten(),
+        hdmi_control_auto_device_off_enabled: lines.next().flatten(),
+        hdmi_system_audio_control_enabled: lines.next().flatten(),
+        match_content_frame_rate: lines.next().flatten(),
+        long_press_timeout: lines.next().flatten(),
+        window_animation_scale: lines.next().flatten(),
+        transition_animation_scale: lines.next().flatten(),
+        animator_duration_scale: lines.next().flatten(),
+    })
+}
+
+#[derive(Serialize)]
+pub struct WriteResult {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// `write_setting` — `settings put <namespace> <key> <value>`. Pass an empty
+/// `value` to delete (resets to default).
+#[tauri::command]
+pub async fn write_setting(
+    state: State<'_, AppState>,
+    serial: String,
+    namespace: String,
+    key: String,
+    value: String,
+) -> Result<WriteResult, String> {
+    // Whitelist namespaces so the command can't be tricked into writing to
+    // somewhere unexpected via a malformed UI request.
+    if !matches!(namespace.as_str(), "global" | "secure" | "system") {
+        return Ok(WriteResult {
+            ok: false,
+            message: format!("namespace must be global/secure/system, got {namespace}"),
+        });
+    }
+    let cmd = if value.is_empty() {
+        format!("settings delete {namespace} {key}")
+    } else {
+        // Basic value validation — reject characters that could break out of
+        // the shell quoting. Settings values in practice are numbers or short
+        // identifiers, so this is more than permissive enough.
+        if value.contains(';') || value.contains('|') || value.contains('&') {
+            return Ok(WriteResult {
+                ok: false,
+                message: "value contains shell metacharacters".to_string(),
+            });
+        }
+        format!("settings put {namespace} {key} {value}")
+    };
+    let adb = state.adb_snapshot().await;
+    let out = adb
+        .shell(&serial, &cmd)
+        .await
+        .map_err(|e| format!("{cmd}: {e}"))?;
+    let msg = if out.stdout.is_empty() {
+        out.stderr
+    } else {
+        out.stdout
+    };
+    Ok(WriteResult {
+        ok: !msg.contains("Error") && !msg.contains("Exception"),
+        message: if msg.is_empty() {
+            "ok".to_string()
+        } else {
+            msg
+        },
+    })
+}
+
+#[derive(Serialize)]
+pub struct DisplayScaleResult {
+    pub ok: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayScalePreset {
+    /// 3840x2160 @ density 540 (matches v1's Shield 4K preset).
+    Uhd4k,
+    /// 1920x1080 @ density 320 (matches v1's Shield 1080p preset).
+    Fhd1080p,
+    /// Reset both to device defaults.
+    Reset,
+}
+
+#[tauri::command]
+pub async fn set_display_scaling(
+    state: State<'_, AppState>,
+    serial: String,
+    preset: DisplayScalePreset,
+) -> Result<DisplayScaleResult, String> {
+    let adb = state.adb_snapshot().await;
+    let cmds: Vec<&str> = match preset {
+        DisplayScalePreset::Uhd4k => vec!["wm size 3840x2160", "wm density 540"],
+        DisplayScalePreset::Fhd1080p => vec!["wm size 1920x1080", "wm density 320"],
+        DisplayScalePreset::Reset => vec!["wm size reset", "wm density reset"],
+    };
+    let cmd = cmds.join("; ");
+    let out = adb
+        .shell(&serial, &cmd)
+        .await
+        .map_err(|e| format!("wm: {e}"))?;
+    Ok(DisplayScaleResult {
+        ok: !out.stdout.contains("Error") && !out.stderr.contains("Error"),
+        message: if out.stdout.is_empty() {
+            out.stderr
+        } else {
+            out.stdout
+        },
+    })
+}

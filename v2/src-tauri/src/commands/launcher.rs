@@ -111,28 +111,38 @@ pub async fn set_default_launcher(
     serial: String,
     package: String,
 ) -> Result<SetLauncherResult, String> {
+    set_default_launcher_impl(state.inner(), &serial, &package).await
+}
+
+/// Reusable implementation — callable from inside other commands without
+/// the `State<'_, T>` lifetime constraint getting in the way.
+pub async fn set_default_launcher_impl(
+    state: &AppState,
+    serial: &str,
+    package: &str,
+) -> Result<SetLauncherResult, String> {
     let adb = state.adb_snapshot().await;
 
     // 1. Enable the package — no-op for already-enabled.
-    let _ = adb.shell(&serial, &format!("pm enable {package}")).await;
+    let _ = adb.shell(serial, &format!("pm enable {package}")).await;
 
     let mut last_error: Option<String> = None;
 
     // 2. Role API.
     let role_out = adb
         .shell(
-            &serial,
+            serial,
             &format!("cmd role add-role-holder android.app.role.HOME {package}"),
         )
         .await;
     match role_out {
         Ok(out) if !out.stdout.contains("Unknown command") => {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            if active_launcher(&*adb, &serial).await.as_deref() == Some(package.as_str()) {
+            if active_launcher(&*adb, serial).await.as_deref() == Some(package) {
                 return Ok(SetLauncherResult {
                     ok: true,
                     strategy: Some("role_api".into()),
-                    current_launcher: Some(package),
+                    current_launcher: Some(package.to_string()),
                     last_error: None,
                 });
             }
@@ -148,7 +158,7 @@ pub async fn set_default_launcher(
 
     // 3. Discover activity candidates.
     let mut candidates: Vec<String> = Vec::new();
-    if let Some(activity) = discover_home_activity(&*adb, &serial, &package).await {
+    if let Some(activity) = discover_home_activity(&*adb, serial, package).await {
         candidates.push(activity);
     }
     for guess in [
@@ -165,18 +175,18 @@ pub async fn set_default_launcher(
             format!("cmd package set-home-activity --user 0 {comp}"),
             format!("pm set-home-activity --user 0 {comp}"),
         ] {
-            if let Ok(out) = adb.shell(&serial, &cmd).await {
+            if let Ok(out) = adb.shell(serial, &cmd).await {
                 last_error = Some(if out.stderr.is_empty() {
                     out.stdout.clone()
                 } else {
                     out.stderr.clone()
                 });
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                if active_launcher(&*adb, &serial).await.as_deref() == Some(package.as_str()) {
+                if active_launcher(&*adb, serial).await.as_deref() == Some(package) {
                     return Ok(SetLauncherResult {
                         ok: true,
                         strategy: Some("set_home_activity".into()),
-                        current_launcher: Some(package),
+                        current_launcher: Some(package.to_string()),
                         last_error: None,
                     });
                 }
@@ -188,13 +198,13 @@ pub async fn set_default_launcher(
     // if everything else got disabled.
     let _ = adb
         .shell(
-            &serial,
+            serial,
             "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME",
         )
         .await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let now_active = active_launcher(&*adb, &serial).await;
-    if now_active.as_deref() == Some(package.as_str()) {
+    let now_active = active_launcher(&*adb, serial).await;
+    if now_active.as_deref() == Some(package) {
         return Ok(SetLauncherResult {
             ok: true,
             strategy: Some("home_intent_kick".into()),

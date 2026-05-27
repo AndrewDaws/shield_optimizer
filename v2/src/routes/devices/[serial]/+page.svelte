@@ -559,7 +559,6 @@
               <th>App</th>
               <th>Method</th>
               <th>Risk</th>
-              <th>Default</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -568,13 +567,17 @@
               {@const state = appStates[a.package] ?? "enabled"}
               <tr>
                 <td>
-                  <div class="app-name">{a.name}</div>
+                  <div class="app-name">
+                    {a.name}
+                    {#if a.default_optimize}
+                      <span class="tag installed" title="Will be pre-selected in the Optimize wizard when that ships">RECOMMENDED</span>
+                    {/if}
+                  </div>
                   <div class="muted small mono">{a.package}</div>
                   <div class="muted small">{a.optimize_description}</div>
                 </td>
                 <td class="mono">{a.method.toUpperCase()}</td>
                 <td class={`risk risk-${a.risk}`}>{a.risk.toUpperCase()}</td>
-                <td>{a.default_optimize ? "YES" : "no"}</td>
                 <td class="row-actions">
                   {#if state === "disabled"}
                     <button
@@ -889,13 +892,14 @@
     font-size: 0.78rem;
   }
   .small-action.danger {
-    background: transparent;
-    border-color: #f85149;
+    background: #21262d;
+    border-color: #5d1b1b;
     color: #f85149;
   }
   .small-action.danger:hover {
-    background: #da3633;
+    background: #5d1b1b;
     color: #fff;
+    border-color: #f85149;
   }
   .action-message {
     margin-top: 0.4rem;

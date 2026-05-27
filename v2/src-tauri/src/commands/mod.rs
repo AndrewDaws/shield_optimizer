@@ -9,9 +9,12 @@ pub mod health;
 pub mod install;
 pub mod launcher;
 pub mod loader;
+pub mod reboot;
+pub mod recovery;
 pub mod scan;
 pub mod sideload;
 pub mod snapshot;
 pub mod state;
+pub mod tuning;
 
 pub use state::AppState;

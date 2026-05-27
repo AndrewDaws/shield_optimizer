@@ -12,7 +12,8 @@ pub mod engine;
 use std::path::PathBuf;
 
 use commands::{
-    apps, devices, health, install, launcher, loader, scan, sideload, snapshot, AppState,
+    apps, devices, health, install, launcher, loader, reboot, recovery, scan, sideload, snapshot,
+    tuning, AppState,
 };
 
 /// Resolve the OS-appropriate snapshot directory.
@@ -79,6 +80,12 @@ pub fn run() {
             snapshot::list_snapshots,
             snapshot::save_snapshot,
             snapshot::preview_apply,
+            snapshot::apply_snapshot,
+            recovery::panic_recovery,
+            reboot::reboot_device,
+            tuning::get_tweaks,
+            tuning::write_setting,
+            tuning::set_display_scaling,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
