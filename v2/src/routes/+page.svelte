@@ -96,7 +96,17 @@
     return d.status === "device" ? `/devices/${encodeURIComponent(d.serial)}` : null;
   }
 
-  onMount(refresh);
+  // Best-effort discovery on boot: if no devices show up after the initial
+  // refresh and adb is available, kick off a scan so users with already-paired
+  // devices don't have to click anything. v1 behaved similarly.
+  async function bootDiscovery() {
+    await refresh();
+    if (adbMissing) return;
+    if (devices.some((d) => d.status === "device")) return;
+    await scan();
+  }
+
+  onMount(bootDiscovery);
 </script>
 
 <section class="header-row">
