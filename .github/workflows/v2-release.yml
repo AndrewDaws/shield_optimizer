@@ -36,7 +36,89 @@ permissions:
   contents: write
 
 jobs:
+  # Compute the release notes once on a cheap runner and share the body with
+  # every per-OS bundler job. Two sources:
+  #   1. If v2/CHANGELOG.md contains a section for this tag, use it verbatim.
+  #      Format: a `## v2-X.Y.Z` heading followed by Markdown until the next
+  #      `## ` heading. This is the rich, human-written path — mirrors how
+  #      v1 wrote its release bodies.
+  #   2. Otherwise auto-generate from `git log <prev-v2-tag>..<this-tag>`.
+  notes:
+    name: Build release notes
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.compose.outputs.body }}
+      tag: ${{ steps.compose.outputs.tag }}
+      prerelease: ${{ steps.compose.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - id: compose
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          # Prerelease detection: any tag containing one of the standard
+          # pre-release markers becomes a GitHub prerelease. Covers
+          # v2-0.1.0-beta, v2-0.1.0-beta.1, v2-0.1.0-rc1, -alpha, -preview, -pre.
+          if [[ "$tag" =~ -(alpha|beta|rc|preview|pre)([.-]?[0-9]+)?$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          changelog="v2/CHANGELOG.md"
+          body=""
+          if [[ -f "$changelog" ]] && grep -q "^## $tag\b" "$changelog"; then
+            echo "Pulling notes for $tag from $changelog"
+            body=$(awk -v tag="## $tag" '
+              $0 ~ "^"tag {flag=1; next}
+              flag && /^## / {flag=0}
+              flag {print}
+            ' "$changelog")
+          fi
+
+          if [[ -z "$body" ]]; then
+            echo "No CHANGELOG entry for $tag — auto-generating from git log."
+            prev=$(git tag --list 'v2-*' --sort=-v:refname | grep -v "^$tag$" | head -1 || true)
+            if [[ -n "$prev" ]]; then
+              range="$prev..$tag"
+              body="### Changes since $prev"$'\n\n'
+            else
+              range="$tag"
+              body="### Initial release"$'\n\n'
+            fi
+            log=$(git log --no-merges --pretty=format:'- %s (%h)' "$range" -- v2/ '.github/workflows/v2-*' 2>/dev/null || true)
+            if [[ -z "$log" ]]; then
+              log=$(git log --no-merges --pretty=format:'- %s (%h)' "$range" 2>/dev/null || true)
+            fi
+            body+="$log"
+          fi
+
+          # Always append the first-run dismissal block so users know what to
+          # expect from an unsigned build.
+          body+=$'\n\n'"### First-run warnings"$'\n\n'
+          body+="These builds are unsigned. Your OS may complain on first launch:"$'\n\n'
+          body+="- **macOS** (Gatekeeper): right-click the app → Open → Open. Or run \`xattr -dr com.apple.quarantine /Applications/Shield\\ Optimizer.app\` once after installing."$'\n'
+          body+="- **Windows** (SmartScreen): \"More info\" → \"Run anyway\"."$'\n'
+          body+="- **Linux**: \`chmod +x ShieldOptimizer*.AppImage\` before running."$'\n\n'
+          body+="See the [v2 README](https://github.com/${{ github.repository }}/blob/main/v2/README.md) for setup and feature docs."
+
+          # Emit as a multi-line output.
+          {
+            echo "body<<NOTES_EOF"
+            echo "$body"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
   build:
+    needs: notes
     name: Build on ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -56,6 +138,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # Need history so we can diff against the previous v2-* tag for
+          # auto-generated release notes.
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -108,29 +194,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: v2
-          # Use the tag that triggered the workflow (or the dispatch input).
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: 'Shield Optimizer ${{ github.event.inputs.tag || github.ref_name }}'
-          releaseBody: |
-            Shield Optimizer v2 — auto-built from tag `${{ github.event.inputs.tag || github.ref_name }}`.
-
-            **Downloads below** — pick the one for your OS:
-            - **macOS**: `.dmg` (universal — works on Apple Silicon and Intel)
-            - **Windows**: `.msi` installer or `.exe` portable
-            - **Linux**: `.deb` (Debian/Ubuntu), `.AppImage` (portable), `.rpm` (Fedora/RHEL)
-
-            ### First-run warnings
-            These builds are unsigned. Your OS may complain on first launch:
-
-            - **macOS** (Gatekeeper): right-click the app → Open → Open. Or run
-              `xattr -dr com.apple.quarantine /Applications/Shield\ Optimizer.app`
-              once after installing.
-            - **Windows** (SmartScreen): "More info" → "Run anyway".
-            - **Linux**: no warning, but make `.AppImage` executable
-              (`chmod +x ShieldOptimizer*.AppImage`).
-
-            See the [v2 README](https://github.com/bryanroscoe/shield_optimizer/blob/main/v2/README.md) for setup, ADB requirements, and feature reference.
+          tagName: ${{ needs.notes.outputs.tag }}
+          releaseName: 'Shield Optimizer ${{ needs.notes.outputs.tag }}'
+          releaseBody: ${{ needs.notes.outputs.body }}
           releaseDraft: false
-          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-rc') || contains(github.event.inputs.tag || github.ref_name, '-beta') }}
+          prerelease: ${{ needs.notes.outputs.prerelease == 'true' }}
           includeUpdaterJson: false
           args: ${{ matrix.args }}
