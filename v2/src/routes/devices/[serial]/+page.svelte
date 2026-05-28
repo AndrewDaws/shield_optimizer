@@ -18,6 +18,7 @@
     TweaksState,
     SettingNamespace,
     DisplayScalePreset,
+    CurrentDisplayScaling,
     OptimizeMode,
     OptimizePlan,
     OptimizePlanItem,
@@ -78,6 +79,11 @@
   let sideloadBusy = $state(false);
   let sideloadResult = $state<string>("");
   let sideloadHint = $state<string | null>(null);
+  // Auto-discovered APK list — re-scanned whenever the user picks a folder
+  // (or after a successful install in case files were added/removed).
+  let discoveredApks = $state<import("$lib/types").DiscoveredApk[]>([]);
+  let discoveredFolder = $state<string | null>(null);
+  let discoveryBusy = $state(false);
 
   // Header actions: reboot menu visibility, disconnect/reboot status, recovery.
   let rebootMenuOpen = $state(false);
@@ -102,6 +108,7 @@
   let tweaksActionMessage = $state<string>("");
   let displayScaleBusy = $state<DisplayScalePreset | null>(null);
   let displayScaleMessage = $state<string>("");
+  let currentDisplayScaling = $state<CurrentDisplayScaling | null>(null);
 
   // Optimize / Restore wizard.
   let optimizeMode = $state<OptimizeMode>("optimize");
@@ -235,6 +242,45 @@
       for (const p of packages) out[p] = "enabled";
       return out;
     }
+  }
+
+  /// Lookup a package in the loaded app catalog (if it's there) for risk-aware
+  /// prompts when disabling from the memory table — where the user picked a
+  /// process by RAM, not a curated bloat entry.
+  function catalogEntry(pkg: string): AppEntry | undefined {
+    return apps.find((a) => a.package === pkg);
+  }
+
+  function riskLabel(entry: AppEntry | undefined): string {
+    if (!entry) return "UNKNOWN";
+    return entry.risk.toUpperCase();
+  }
+
+  async function safeDisableFromMemory(pkg: string, mb: number) {
+    // Make sure the catalog is loaded so we can look up risk.
+    if (apps.length === 0 && device) {
+      try {
+        apps = await api.appListForDevice(device.device_type);
+      } catch {
+        // Lookup is best-effort; carry on with the generic warning.
+      }
+    }
+    const entry = catalogEntry(pkg);
+    let prompt = `Disable ${pkg} (${mb.toFixed(0)} MB)?\n\n`;
+    if (entry) {
+      prompt += `Risk tier: ${entry.risk.toUpperCase()}\n`;
+      prompt += `${entry.optimize_description}\n\n`;
+      if (entry.risk === "high" || entry.risk === "advanced") {
+        prompt += "⚠ HIGH RISK — this may break system features. Re-enable via Emergency Recovery if something goes wrong.\n\n";
+      }
+    } else {
+      prompt += "⚠ This package is NOT in the curated bloat catalog — its risk is unknown.\n";
+      prompt += "Disabling unknown system services can brick the launcher or break Watch Next channels.\n";
+      prompt += "Re-enable via Emergency Recovery on the Overview tab if something goes wrong.\n\n";
+    }
+    prompt += "Proceed?";
+    if (!confirm(prompt)) return;
+    await disableApp(pkg);
   }
 
   async function disableApp(pkg: string) {
@@ -419,6 +465,50 @@
     }
   }
 
+  async function installLauncherFromStore(pkg: string) {
+    launcherActionBusy = pkg;
+    launcherActionMessage = "";
+    try {
+      const r = await api.openPlayStore(serial, pkg);
+      launcherActionMessage = r.ok
+        ? `Opened Play Store on device for ${pkg} — confirm install on the TV, then click Refresh.`
+        : `${pkg}: ${r.message.trim()}`;
+    } catch (e) {
+      launcherActionMessage = String(e);
+    } finally {
+      launcherActionBusy = null;
+    }
+  }
+
+  async function enableLauncher(pkg: string) {
+    launcherActionBusy = pkg;
+    launcherActionMessage = "";
+    try {
+      const r = await api.enablePackage(serial, pkg);
+      launcherActionMessage = `${pkg}: ${r.message.trim() || (r.ok ? "enabled" : "failed")}`;
+      if (r.ok) await loadLauncher();
+    } catch (e) {
+      launcherActionMessage = String(e);
+    } finally {
+      launcherActionBusy = null;
+    }
+  }
+
+  async function disableLauncher(pkg: string) {
+    if (!confirm(`Disable ${pkg}? You'll lose access to it as a HOME app until you re-enable.`)) return;
+    launcherActionBusy = pkg;
+    launcherActionMessage = "";
+    try {
+      const r = await api.disablePackage(serial, pkg);
+      launcherActionMessage = `${pkg}: ${r.message.trim() || (r.ok ? "disabled" : "failed")}`;
+      if (r.ok) await loadLauncher();
+    } catch (e) {
+      launcherActionMessage = String(e);
+    } finally {
+      launcherActionBusy = null;
+    }
+  }
+
   async function setDefaultLauncher(pkg: string) {
     launcherActionBusy = pkg;
     launcherActionMessage = "";
@@ -446,11 +536,42 @@
       filters: [{ name: "Android Packages", extensions: ["apk"] }],
     });
     if (!selected || Array.isArray(selected)) return;
+    // Remember the folder the user picked from so we can show the
+    // surrounding APKs as a quick-pick list.
+    const lastSep = Math.max(selected.lastIndexOf("/"), selected.lastIndexOf("\\"));
+    if (lastSep > 0) {
+      const folder = selected.slice(0, lastSep);
+      localStorage.setItem("shieldopt.lastApkFolder", folder);
+      await scanApkFolder(folder);
+    }
+    await installApkPath(selected);
+  }
+
+  async function pickApkFolder() {
+    const picked = await openDialog({ multiple: false, directory: true });
+    if (!picked || Array.isArray(picked)) return;
+    localStorage.setItem("shieldopt.lastApkFolder", picked);
+    await scanApkFolder(picked);
+  }
+
+  async function scanApkFolder(folder: string) {
+    discoveryBusy = true;
+    try {
+      discoveredApks = await api.listApksInFolder(folder);
+      discoveredFolder = folder;
+    } catch (e) {
+      sideloadResult = `Scan failed: ${e}`;
+    } finally {
+      discoveryBusy = false;
+    }
+  }
+
+  async function installApkPath(path: string) {
     sideloadBusy = true;
-    sideloadResult = "Installing…";
+    sideloadResult = `Installing ${path.split(/[\\/]/).pop()}…`;
     sideloadHint = null;
     try {
-      const r = await api.installApk(serial, selected, true);
+      const r = await api.installApk(serial, path, true);
       sideloadResult = r.message;
       sideloadHint = r.hint;
     } catch (e) {
@@ -458,6 +579,13 @@
     } finally {
       sideloadBusy = false;
     }
+  }
+
+  function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
   }
 
   async function loadSnapshots() {
@@ -574,7 +702,12 @@
     tweaksLoading = true;
     tweaksErr = null;
     try {
-      tweaks = await api.getTweaks(serial);
+      const [t, s] = await Promise.all([
+        api.getTweaks(serial),
+        api.getDisplayScaling(serial).catch(() => null),
+      ]);
+      tweaks = t;
+      currentDisplayScaling = s;
     } catch (e) {
       tweaksErr = String(e);
     } finally {
@@ -746,6 +879,8 @@
     try {
       const r = await api.setDisplayScaling(serial, preset);
       displayScaleMessage = r.message.trim() || (r.ok ? "ok" : "no output");
+      // Refresh the displayed current values.
+      currentDisplayScaling = await api.getDisplayScaling(serial).catch(() => currentDisplayScaling);
     } catch (e) {
       displayScaleMessage = String(e);
     } finally {
@@ -756,11 +891,19 @@
   // Lazy-load each tab the first time it's opened. Sideload doesn't need
   // any prefetch — the file picker fires on user action.
   $effect(() => {
-    if (activeTab === "health" && report === null && !reportLoading && !reportErr) loadHealth();
+    if (activeTab === "health") {
+      if (report === null && !reportLoading && !reportErr) loadHealth();
+      // Preload catalog so the memory table can show risk tiers.
+      if (apps.length === 0 && !appsLoading && !appsErr) loadApps();
+    }
     if (activeTab === "launcher" && launchers.length === 0 && !launcherLoading && !launcherErr) loadLauncher();
     if (activeTab === "apps" && apps.length === 0 && !appsLoading && !appsErr) loadApps();
     if (activeTab === "tweaks" && tweaks === null && !tweaksLoading && !tweaksErr) loadTweaks();
     if (activeTab === "snapshot" && snapshots.length === 0) loadSnapshots();
+    if (activeTab === "sideload" && discoveredApks.length === 0 && !discoveryBusy) {
+      const last = localStorage.getItem("shieldopt.lastApkFolder");
+      if (last) scanApkFolder(last);
+    }
   });
 
   onMount(loadDevice);
@@ -806,7 +949,12 @@
             </div>
           {/if}
         </div>
-        <button onclick={disconnectAndLeave} disabled={disconnectBusy}>
+        <button
+          class="small-action subtle"
+          onclick={disconnectAndLeave}
+          disabled={disconnectBusy}
+          title="Drop the ADB connection to this device. Useful for network devices you don't want auto-reconnecting on Refresh."
+        >
           {disconnectBusy ? "Disconnecting…" : "Disconnect"}
         </button>
       </div>
@@ -952,10 +1100,11 @@
         {:else}
           <table class="mem-table">
             <thead>
-              <tr><th>RAM</th><th>Package</th><th></th></tr>
+              <tr><th>RAM</th><th>Package</th><th class="center">Risk</th><th></th></tr>
             </thead>
             <tbody>
               {#each report.top_memory as m}
+                {@const entry = catalogEntry(m.package)}
                 <tr>
                   <td
                     class="num"
@@ -965,10 +1114,14 @@
                     {m.mb.toFixed(1)} MB
                   </td>
                   <td class="pkg">{m.package}</td>
+                  <td class={`center risk ${entry ? "risk-" + entry.risk : "risk-unknown"}`}>
+                    {riskLabel(entry)}
+                  </td>
                   <td class="row-actions">
                     <button
                       class="small-action"
-                      onclick={() => disableApp(m.package)}
+                      class:danger={!entry || entry.risk === "high" || entry.risk === "advanced"}
+                      onclick={() => safeDisableFromMemory(m.package, m.mb)}
                       disabled={appActionBusy === m.package}
                       title="pm disable-user --user 0 {m.package}"
                     >
@@ -1011,6 +1164,7 @@
           <ul class="launcher-list">
             {#each launchers as l}
               {@const isCurrent = currentLauncher?.package === l.entry.package}
+              {@const busy = launcherActionBusy === l.entry.package}
               <li>
                 <div>
                   <div class="launcher-name">
@@ -1032,15 +1186,44 @@
                       <span class="tag disabled">DISABLED</span>
                     {/if}
                   </div>
-                  {#if l.installed && !isCurrent}
+                  {#if !l.installed}
                     <button
-                      class="primary small-action"
-                      onclick={() => setDefaultLauncher(l.entry.package)}
+                      class="small-action"
+                      onclick={() => installLauncherFromStore(l.entry.package)}
                       disabled={launcherActionBusy !== null}
-                      title="Run pm enable + role API + set-home-activity strategies"
+                      title="Open the Play Store on the device to install {l.entry.name}"
                     >
-                      {launcherActionBusy === l.entry.package ? "Setting…" : "Set as default"}
+                      {busy ? "Opening…" : "Install"}
                     </button>
+                  {:else}
+                    {#if !l.enabled}
+                      <button
+                        class="small-action"
+                        onclick={() => enableLauncher(l.entry.package)}
+                        disabled={launcherActionBusy !== null}
+                        title="pm enable {l.entry.package}"
+                      >
+                        {busy ? "Enabling…" : "Enable"}
+                      </button>
+                    {/if}
+                    {#if !isCurrent}
+                      <button
+                        class="primary small-action"
+                        onclick={() => setDefaultLauncher(l.entry.package)}
+                        disabled={launcherActionBusy !== null || !l.enabled}
+                        title="Run pm enable + role API + set-home-activity strategies"
+                      >
+                        {busy ? "Setting…" : "Set as default"}
+                      </button>
+                    {/if}
+                    {#if !isCurrent && l.enabled}
+                      <button
+                        class="small-action subtle"
+                        onclick={() => disableLauncher(l.entry.package)}
+                        disabled={launcherActionBusy !== null}
+                        title="pm disable-user --user 0 {l.entry.package}"
+                      >Disable</button>
+                    {/if}
                   {/if}
                 </div>
               </li>
@@ -1143,10 +1326,10 @@
           <thead>
             <tr>
               <th>App</th>
-              <th>State</th>
-              <th>Risk</th>
+              <th class="center">State</th>
+              <th class="center">Risk</th>
               <th>Recommended</th>
-              <th>Links</th>
+              <th class="center">Links</th>
             </tr>
           </thead>
           <tbody>
@@ -1154,25 +1337,24 @@
               {@const state = appStates[a.package] ?? "enabled"}
               {@const rec = recommendation(a, state)}
               <tr>
-                <td>
-                  <div class="app-name">{a.name}</div>
-                  <div class="muted small mono">{a.package}</div>
-                  <div class="muted small">{a.optimize_description}</div>
+                <td class="app-cell">
+                  <div class="app-name-row">{a.name}</div>
+                  <div class="muted small mono pkg-id">{a.package}</div>
                 </td>
-                <td>
+                <td class="center">
                   <span class={`state-badge state-${state}`}>
                     {state === "enabled" ? "Enabled" : state === "disabled" ? "Disabled" : "Missing"}
                   </span>
                 </td>
-                <td class={`risk risk-${a.risk}`}>{a.risk.toUpperCase()}</td>
-                <td class="row-actions">
+                <td class={`risk center risk-${a.risk}`}>{a.risk.toUpperCase()}</td>
+                <td class="rec-cell">
                   {#if rec.kind === "act"}
                     <button
                       class="small-action recommended"
                       class:danger={rec.action === "uninstall"}
                       onclick={() => applyRecommendation(a.package, rec.action)}
                       disabled={appActionBusy === a.package}
-                      title="Recommended by the Optimize defaults — {a.method === 'disable' ? 'pm disable-user --user 0' : 'pm uninstall --user 0'} {a.package}"
+                      title={a.optimize_description}
                     >
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
@@ -1186,7 +1368,7 @@
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
                   {:else if rec.kind === "done"}
-                    <span class="muted small">✓ {rec.label}</span>
+                    <span class="muted small done">✓ {rec.label}</span>
                   {:else}
                     <span class="muted small">Keep</span>
                   {/if}
@@ -1208,16 +1390,18 @@
                     >Enable</button>
                   {/if}
                 </td>
-                <td class="row-actions">
+                <td class="center">
                   {#if a.default_restore || state === "missing"}
                     <button
                       class="small-action"
                       onclick={() => openInPlayStore(a.package)}
                       disabled={appActionBusy === a.package}
-                      title="am start market://details?id={a.package}"
+                      title="Open {a.name} on the Play Store on the device"
                     >
                       Play Store
                     </button>
+                  {:else}
+                    <span class="muted small">—</span>
                   {/if}
                 </td>
               </tr>
@@ -1525,22 +1709,38 @@
           Forces a specific resolution + density via <code>wm size</code> + <code>wm density</code>.
           Mostly for Shield TV — useful for testing 1080p mode on a 4K device.
         </p>
-        <div class="row-actions">
+        {#if currentDisplayScaling}
+          <div class="current-scaling muted small mono">
+            {currentDisplayScaling.size || "Size: unknown"}
+            <br />
+            {currentDisplayScaling.density || "Density: unknown"}
+          </div>
+        {/if}
+        <div class="scale-options">
           <button
-            class="small-action"
+            class="scale-option"
             disabled={displayScaleBusy !== null}
             onclick={() => applyDisplayScaling("uhd_4k")}
-          >{displayScaleBusy === "uhd_4k" ? "Applying…" : "Shield 4K"}</button>
+          >
+            <span class="scale-title">{displayScaleBusy === "uhd_4k" ? "Applying…" : "Shield 4K"}</span>
+            <span class="muted small">3840×2160, density 540</span>
+          </button>
           <button
-            class="small-action"
+            class="scale-option"
             disabled={displayScaleBusy !== null}
             onclick={() => applyDisplayScaling("fhd_1080p")}
-          >{displayScaleBusy === "fhd_1080p" ? "Applying…" : "Shield 1080p"}</button>
+          >
+            <span class="scale-title">{displayScaleBusy === "fhd_1080p" ? "Applying…" : "Shield 1080p"}</span>
+            <span class="muted small">1920×1080, density 320</span>
+          </button>
           <button
-            class="small-action"
+            class="scale-option"
             disabled={displayScaleBusy !== null}
             onclick={() => applyDisplayScaling("reset")}
-          >{displayScaleBusy === "reset" ? "Resetting…" : "Reset"}</button>
+          >
+            <span class="scale-title">{displayScaleBusy === "reset" ? "Resetting…" : "Reset"}</span>
+            <span class="muted small">Restore device defaults</span>
+          </button>
         </div>
         {#if displayScaleMessage}
           <p class="muted small mono action-message">{displayScaleMessage}</p>
@@ -1551,14 +1751,45 @@
     <div class="card" role="tabpanel" tabindex={0} id="tabpanel-sideload" aria-labelledby="tab-sideload">
       <div class="card-header">
         <h2>Install APK</h2>
-        <button class="primary" onclick={pickAndInstallApk} disabled={sideloadBusy}>
-          {sideloadBusy ? "Installing…" : "Pick APK file…"}
-        </button>
+        <div class="header-actions">
+          <button onclick={pickApkFolder} disabled={sideloadBusy || discoveryBusy}>
+            {discoveryBusy ? "Scanning…" : "Choose folder…"}
+          </button>
+          <button class="primary" onclick={pickAndInstallApk} disabled={sideloadBusy}>
+            {sideloadBusy ? "Installing…" : "Pick file…"}
+          </button>
+        </div>
       </div>
       <p class="muted small">
-        Opens a native file picker, then runs <code>adb install -r &lt;file&gt;</code> against this
-        device. Common errors are decoded with a hint.
+        Pick a file directly, or point at a folder and we'll list every APK inside.
+        Either way, install runs <code>adb install -r &lt;file&gt;</code>.
       </p>
+
+      {#if discoveredFolder && discoveredApks.length > 0}
+        <div class="apk-folder muted small mono">
+          {discoveredFolder} — {discoveredApks.length} APK{discoveredApks.length === 1 ? "" : "s"} found
+        </div>
+        <ul class="apk-list">
+          {#each discoveredApks as apk (apk.path)}
+            <li>
+              <div class="apk-meta">
+                <div class="apk-name">{apk.name}</div>
+                <div class="muted small">{formatBytes(apk.size_bytes)}</div>
+              </div>
+              <button
+                class="small-action primary"
+                onclick={() => installApkPath(apk.path)}
+                disabled={sideloadBusy}
+              >
+                {sideloadBusy ? "Working…" : "Install"}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {:else if discoveredFolder}
+        <p class="muted small">No <code>.apk</code> files in {discoveredFolder}.</p>
+      {/if}
+
       {#if sideloadResult}
         <pre class="install-output">{sideloadResult}</pre>
         {#if sideloadHint}
@@ -1734,6 +1965,33 @@
     text-align: left;
     padding: 0.5rem 0.6rem;
     border-bottom: 1px solid #21262d;
+    vertical-align: middle;
+  }
+  th.center, td.center {
+    text-align: center;
+  }
+  .app-table .app-cell {
+    line-height: 1.3;
+  }
+  .app-name-row {
+    font-size: 0.95rem;
+    font-weight: 500;
+  }
+  .app-table .pkg-id {
+    margin-top: 0.1rem;
+    font-size: 0.78rem;
+    opacity: 0.7;
+  }
+  .app-table .rec-cell {
+    /* Keep button + subtle override on one row when possible. */
+    white-space: nowrap;
+  }
+  .app-table .rec-cell .small-action {
+    margin-right: 0.3rem;
+  }
+  .app-table .rec-cell .done {
+    display: inline-block;
+    margin-right: 0.5rem;
   }
   th {
     color: #7d8590;
@@ -2018,6 +2276,39 @@
   .warn-text {
     color: #d29922;
   }
+  .current-scaling {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 0.5rem 0.7rem;
+    margin: 0.4rem 0 0.6rem;
+    line-height: 1.4;
+  }
+  .scale-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.5rem;
+    margin: 0.4rem 0;
+  }
+  .scale-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    gap: 0.2rem;
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .scale-option:hover:not(:disabled) {
+    background: #30363d;
+  }
+  .scale-option .scale-title {
+    font-weight: 500;
+    font-size: 0.92rem;
+  }
   .stock-wizard {
     margin-top: 1.5rem;
     padding-top: 1.2rem;
@@ -2071,6 +2362,35 @@
     border: 1px solid #30363d;
     border-radius: 4px;
     line-height: 1.4;
+  }
+  .apk-folder {
+    margin: 0.4rem 0;
+    padding: 0.4rem 0.6rem;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    word-break: break-all;
+  }
+  .apk-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.4rem 0 0.8rem;
+  }
+  .apk-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #21262d;
+  }
+  .apk-list li:last-child {
+    border-bottom: none;
+  }
+  .apk-name {
+    font-family: ui-monospace, monospace;
+    font-size: 0.88rem;
+    word-break: break-all;
   }
   .install-output {
     background: #0d1117;

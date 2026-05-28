@@ -65,6 +65,59 @@ pub async fn install_apk(
     })
 }
 
+#[derive(Serialize)]
+pub struct DiscoveredApk {
+    pub path: String,
+    pub name: String,
+    pub size_bytes: u64,
+}
+
+/// `list_apks_in_folder` — scan `folder` for `.apk` files. Used by the
+/// Install APK UI to surface a "pick from these" list without the user
+/// re-navigating the file picker. Mirrors v1's auto-discovery of `./apks/`.
+///
+/// Returns up to 50 entries; deeper recursion intentionally avoided.
+#[tauri::command]
+pub async fn list_apks_in_folder(folder: String) -> Result<Vec<DiscoveredApk>, String> {
+    let dir = PathBuf::from(&folder);
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut read = tokio::fs::read_dir(&dir)
+        .await
+        .map_err(|e| format!("read_dir {folder}: {e}"))?;
+    while let Some(entry) = read.next_entry().await.transpose() {
+        let entry = entry.map_err(|e| format!("read_dir entry: {e}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("apk") {
+            continue;
+        }
+        let metadata = match entry.metadata().await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        out.push(DiscoveredApk {
+            path: path.display().to_string(),
+            name,
+            size_bytes: metadata.len(),
+        });
+        if out.len() >= 50 {
+            break;
+        }
+    }
+    out.sort_by_key(|a| a.name.to_lowercase());
+    Ok(out)
+}
+
 /// Decode the common `INSTALL_FAILED_*` / `DELETE_FAILED_*` codes into a one-line
 /// hint. Mirrors v1's `Get-UninstallErrorReason` + the inline decoder in
 /// `Install-ApkFile`.

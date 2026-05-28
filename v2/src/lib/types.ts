@@ -127,7 +127,11 @@ export interface SnapshotFile {
   filename: string;
   saved_at: string;
   device_name: string;
+  device_serial: string;
+  device_type: DeviceType;
   disabled_count: number;
+  settings_count: number;
+  launcher: string | null;
 }
 
 export interface ActionResult {
@@ -147,6 +151,12 @@ export interface InstallApkResult {
   path: string;
   message: string;
   hint: string | null;
+}
+
+export interface DiscoveredApk {
+  path: string;
+  name: string;
+  size_bytes: number;
 }
 
 export interface ScanResult {
@@ -230,6 +240,11 @@ export type DisplayScalePreset = "uhd_4k" | "fhd_1080p" | "reset";
 export interface DisplayScaleResult {
   ok: boolean;
   message: string;
+}
+
+export interface CurrentDisplayScaling {
+  size: string;
+  density: string;
 }
 
 export type OptimizeMode = "optimize" | "restore";

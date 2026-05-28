@@ -8,10 +8,12 @@ import type {
   AppEntry,
   ApplyResult,
   ConnectResult,
+  CurrentDisplayScaling,
   CurrentLauncher,
   Device,
   DeviceReport,
   DeviceType,
+  DiscoveredApk,
   DisplayScalePreset,
   DisplayScaleResult,
   HealthReport,
@@ -93,6 +95,8 @@ export const api = {
 
   installApk: (serial: string, apkPath: string, reinstall = true) =>
     invoke<InstallApkResult>("install_apk", { serial, apkPath, reinstall }),
+  listApksInFolder: (folder: string) =>
+    invoke<DiscoveredApk[]>("list_apks_in_folder", { folder }),
 
   listSnapshots: () => invoke<SnapshotFile[]>("list_snapshots"),
   saveSnapshot: (serial: string, deviceName: string) =>
@@ -101,6 +105,9 @@ export const api = {
     invoke<SnapshotApplyPlan>("preview_apply", { serial, snapshotPath }),
   applySnapshot: (serial: string, snapshotPath: string) =>
     invoke<ApplyResult>("apply_snapshot", { serial, snapshotPath }),
+  deleteSnapshot: (snapshotPath: string) =>
+    invoke<void>("delete_snapshot", { snapshotPath }),
+  snapshotDirPath: () => invoke<string>("snapshot_dir_path"),
 
   panicRecovery: (serial: string) =>
     invoke<RecoveryResult>("panic_recovery", { serial }),
@@ -116,6 +123,8 @@ export const api = {
   ) => invoke<WriteResult>("write_setting", { serial, namespace, key, value }),
   setDisplayScaling: (serial: string, preset: DisplayScalePreset) =>
     invoke<DisplayScaleResult>("set_display_scaling", { serial, preset }),
+  getDisplayScaling: (serial: string) =>
+    invoke<CurrentDisplayScaling>("get_display_scaling", { serial }),
 
   prepareOptimize: (serial: string, mode: OptimizeMode) =>
     invoke<OptimizePlan>("prepare_optimize", { serial, mode }),

@@ -19,7 +19,40 @@ pub struct SnapshotFile {
     pub filename: String,
     pub saved_at: String,
     pub device_name: String,
+    pub device_serial: String,
+    pub device_type: crate::engine::DeviceType,
     pub disabled_count: usize,
+    pub settings_count: usize,
+    pub launcher: Option<String>,
+}
+
+/// `delete_snapshot` — remove a snapshot file from disk. Path is confined to
+/// the configured snapshot directory; anything outside is rejected.
+#[tauri::command]
+pub async fn delete_snapshot(
+    state: State<'_, AppState>,
+    snapshot_path: String,
+) -> Result<(), String> {
+    let path = PathBuf::from(&snapshot_path);
+    let canonical_path = tokio::fs::canonicalize(&path)
+        .await
+        .map_err(|e| format!("snapshot path: {e}"))?;
+    let canonical_dir = tokio::fs::canonicalize(&state.snapshot_dir)
+        .await
+        .map_err(|e| format!("snapshot dir: {e}"))?;
+    if !canonical_path.starts_with(&canonical_dir) {
+        return Err("snapshot path is outside the snapshot directory".into());
+    }
+    tokio::fs::remove_file(&canonical_path)
+        .await
+        .map_err(|e| format!("delete: {e}"))
+}
+
+/// `snapshot_dir_path` — where snapshots are saved on this machine. The UI
+/// uses this to surface the path and to feed it into the OS file picker.
+#[tauri::command]
+pub async fn snapshot_dir_path(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state.snapshot_dir.display().to_string())
 }
 
 /// `list_snapshots` — return saved snapshots in `snapshot_dir`, newest first.
@@ -56,7 +89,11 @@ pub async fn list_snapshots(state: State<'_, AppState>) -> Result<Vec<SnapshotFi
             filename,
             saved_at: snap.saved_at,
             device_name: snap.device_name,
+            device_serial: snap.device_serial,
+            device_type: snap.device_type,
             disabled_count: snap.disabled_packages.len(),
+            settings_count: snap.settings.len(),
+            launcher: snap.current_launcher,
         });
     }
     // Sort newest first by saved_at (ISO-8601 sorts lexicographically).
@@ -175,7 +212,11 @@ pub async fn save_snapshot(
         filename,
         saved_at: snap.saved_at,
         device_name: snap.device_name,
+        device_serial: snap.device_serial,
+        device_type: snap.device_type,
         disabled_count: snap.disabled_packages.len(),
+        settings_count: snap.settings.len(),
+        launcher: snap.current_launcher,
     })
 }
 

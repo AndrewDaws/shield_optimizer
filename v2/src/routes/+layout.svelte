@@ -118,6 +118,7 @@
   :global(.risk-medium) { color: #d29922; }
   :global(.risk-high) { color: #f85149; }
   :global(.risk-advanced) { color: #a371f7; }
+  :global(.risk-unknown) { color: #d29922; font-weight: 500; }
 
   .app {
     display: grid;
