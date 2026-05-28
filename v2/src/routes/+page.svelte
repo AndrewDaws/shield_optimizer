@@ -6,6 +6,19 @@
   import { deviceTypeLabel } from "$lib/types";
 
   let devices = $state<Device[]>([]);
+
+  /// Sort priority: authorized first (status === "device"), then unauthorized
+  /// (the user can act on them via the inline guidance), then offline. Tiebreak
+  /// by display name so the order doesn't shuffle on refresh.
+  const STATUS_ORDER: Record<string, number> = { device: 0, unauthorized: 1, offline: 2 };
+  let sortedDevices = $derived(
+    [...devices].sort((a, b) => {
+      const sa = STATUS_ORDER[a.status] ?? 9;
+      const sb = STATUS_ORDER[b.status] ?? 9;
+      if (sa !== sb) return sa - sb;
+      return a.name.localeCompare(b.name);
+    }),
+  );
   let loading = $state(true);
   let error = $state<string | null>(null);
 
@@ -308,7 +321,7 @@
   </div>
 {:else}
   <ul class="device-list">
-    {#each devices as d (d.serial)}
+    {#each sortedDevices as d (d.serial)}
       {@const href = deviceHref(d)}
       <li>
         {#if href}
