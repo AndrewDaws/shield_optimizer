@@ -24,6 +24,7 @@
     OptimizePlanItem,
     HomeHandler,
     StockLauncherResult,
+    Safety,
   } from "$lib/types";
   import { deviceTypeLabel } from "$lib/types";
 
@@ -42,6 +43,10 @@
   let liveRefresh = $state(false);
   let liveRefreshTimer: ReturnType<typeof setInterval> | null = null;
   const LIVE_REFRESH_INTERVAL_MS = 3000;
+  /// Cached safety classifications for the visible memory-table rows. Populated
+  /// in batch whenever the health report refreshes so each row knows whether
+  /// the Disable button should be hard-blocked.
+  let safetyMap = $state<Record<string, Safety>>({});
 
   let launchers = $state<LauncherStatus[]>([]);
   let currentLauncher = $state<CurrentLauncher | null>(null);
@@ -141,6 +146,20 @@
     try {
       report = await api.healthReport(serial);
       reportLastRefreshed = new Date();
+      // Resolve safety for every visible row in parallel — single ms each,
+      // pure lookup against the engine const list. Cached so re-renders
+      // don't re-query.
+      const pkgs = report.top_memory.map((m) => m.package);
+      const results = await Promise.all(
+        pkgs.map((p) =>
+          safetyMap[p]
+            ? Promise.resolve(safetyMap[p])
+            : api.safetyInfo(p).catch(() => ({ kind: "safe" } as Safety)),
+        ),
+      );
+      const next = { ...safetyMap };
+      results.forEach((s, i) => (next[pkgs[i]] = s));
+      safetyMap = next;
     } catch (e) {
       reportErr = String(e);
     } finally {
@@ -265,18 +284,35 @@
         // Lookup is best-effort; carry on with the generic warning.
       }
     }
+
+    // Authoritative safety check — backend will refuse never-disable
+    // packages anyway, but we surface the reason inline so the user
+    // doesn't get a confusing "Refusing to disable" message after a
+    // pointless confirm.
+    let safety: Safety;
+    try {
+      safety = await api.safetyInfo(pkg);
+    } catch {
+      safety = { kind: "safe" };
+    }
+    if (safety.kind === "never_disable") {
+      alert(`Cannot disable ${pkg}.\n\n${safety.reason}`);
+      return;
+    }
+
     const entry = catalogEntry(pkg);
     let prompt = `Disable ${pkg} (${mb.toFixed(0)} MB)?\n\n`;
+    if (safety.kind === "caution") {
+      prompt += `⚠ ${safety.reason}\n\n`;
+    }
     if (entry) {
       prompt += `Risk tier: ${entry.risk.toUpperCase()}\n`;
       prompt += `${entry.optimize_description}\n\n`;
       if (entry.risk === "high" || entry.risk === "advanced") {
         prompt += "⚠ HIGH RISK — this may break system features. Re-enable via Emergency Recovery if something goes wrong.\n\n";
       }
-    } else {
-      prompt += "⚠ This package is NOT in the curated bloat catalog — its risk is unknown.\n";
-      prompt += "Disabling unknown system services can brick the launcher or break Watch Next channels.\n";
-      prompt += "Re-enable via Emergency Recovery on the Overview tab if something goes wrong.\n\n";
+    } else if (safety.kind === "safe") {
+      prompt += "ℹ This package is not in the curated bloat catalog — disabling is allowed but unverified. Re-enable via Emergency Recovery if something goes wrong.\n\n";
     }
     prompt += "Proceed?";
     if (!confirm(prompt)) return;
@@ -1105,7 +1141,9 @@
             <tbody>
               {#each report.top_memory as m}
                 {@const entry = catalogEntry(m.package)}
-                <tr>
+                {@const safety = safetyMap[m.package] ?? { kind: "safe" }}
+                {@const blocked = safety.kind === "never_disable"}
+                <tr class:dim={blocked}>
                   <td
                     class="num"
                     class:warn={m.mb >= 200}
@@ -1114,19 +1152,38 @@
                     {m.mb.toFixed(1)} MB
                   </td>
                   <td class="pkg">{m.package}</td>
-                  <td class={`center risk ${entry ? "risk-" + entry.risk : "risk-unknown"}`}>
-                    {riskLabel(entry)}
+                  <td
+                    class={`center risk ${entry
+                      ? "risk-" + entry.risk
+                      : blocked
+                        ? "risk-blocked"
+                        : safety.kind === "caution"
+                          ? "risk-medium"
+                          : "risk-unknown"}`}
+                    title={safety.kind !== "safe" ? safety.reason : ""}
+                  >
+                    {#if blocked}
+                      SYSTEM
+                    {:else if safety.kind === "caution"}
+                      CAUTION
+                    {:else}
+                      {riskLabel(entry)}
+                    {/if}
                   </td>
                   <td class="row-actions">
-                    <button
-                      class="small-action"
-                      class:danger={!entry || entry.risk === "high" || entry.risk === "advanced"}
-                      onclick={() => safeDisableFromMemory(m.package, m.mb)}
-                      disabled={appActionBusy === m.package}
-                      title="pm disable-user --user 0 {m.package}"
-                    >
-                      {appActionBusy === m.package ? "…" : "Disable"}
-                    </button>
+                    {#if blocked}
+                      <span class="muted small" title={safety.reason}>Protected</span>
+                    {:else}
+                      <button
+                        class="small-action"
+                        class:danger={!entry || (entry && (entry.risk === "high" || entry.risk === "advanced")) || safety.kind === "caution"}
+                        onclick={() => safeDisableFromMemory(m.package, m.mb)}
+                        disabled={appActionBusy === m.package}
+                        title="pm disable-user --user 0 {m.package}"
+                      >
+                        {appActionBusy === m.package ? "…" : "Disable"}
+                      </button>
+                    {/if}
                   </td>
                 </tr>
               {/each}

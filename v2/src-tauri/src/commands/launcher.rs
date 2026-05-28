@@ -303,7 +303,9 @@ const STOCK_LAUNCHER_NAMES: &[(&str, &str)] = &[
 
 /// `list_home_handlers` — every HOME-capable package the device reports,
 /// excluding `target_package` (the chosen custom launcher) and any custom
-/// launcher already in our catalog. Mirrors v1's `Get-HomeHandlers` (§6.4).
+/// launcher already in our catalog. Mirrors v1's `Get-HomeHandlers` (§6.4):
+/// invokes `cmd package query-activities` (without `--components`, which gives
+/// the richer ResolveInfo dump) and parses `packageName=<pkg>` rows.
 #[tauri::command]
 pub async fn list_home_handlers(
     state: State<'_, AppState>,
@@ -314,7 +316,7 @@ pub async fn list_home_handlers(
     let out = adb
         .shell(
             &serial,
-            "cmd package query-activities --components -a android.intent.action.MAIN -c android.intent.category.HOME",
+            "cmd package query-activities -a android.intent.action.MAIN -c android.intent.category.HOME",
         )
         .await
         .map_err(|e| format!("query-activities: {e}"))?;
@@ -326,35 +328,45 @@ pub async fn list_home_handlers(
         .map_err(|e| format!("pm list packages -d: {e}"))?;
     let disabled = crate::adb::parse_disabled_packages_output(&disabled_out.stdout);
 
-    // Component lines look like `<pkg>/<activity>` — pull unique packages.
     let mut seen = std::collections::HashSet::new();
     let mut handlers = Vec::new();
-    for line in out.stdout.lines() {
-        let line = line.trim();
-        let Some((pkg, _)) = line.split_once('/') else {
-            continue;
-        };
-        if pkg == target_package {
-            continue;
-        }
-        if !seen.insert(pkg.to_string()) {
+    for pkg in parse_home_handler_packages(&out.stdout) {
+        if pkg == target_package || !seen.insert(pkg.clone()) {
             continue;
         }
         let name = STOCK_LAUNCHER_NAMES
             .iter()
-            .find(|(p, _)| *p == pkg)
+            .find(|(p, _)| *p == pkg.as_str())
             .map(|(_, n)| (*n).to_string())
-            .unwrap_or_else(|| pkg.to_string());
-        let enabled = !disabled.iter().any(|d| d == pkg);
-        let safe_fallback = SAFE_FALLBACKS.contains(&pkg);
+            .unwrap_or_else(|| pkg.clone());
+        let enabled = !disabled.iter().any(|d| d == &pkg);
+        // A handler is "off-limits" if it's a HOME-emergency fallback OR if
+        // the broader safety list says don't touch it. The UI uses this to
+        // disable the checkbox in the stock-launcher wizard.
+        let safe_fallback =
+            SAFE_FALLBACKS.contains(&pkg.as_str()) || crate::engine::is_never_disable(&pkg);
         handlers.push(HomeHandler {
-            package: pkg.to_string(),
+            package: pkg,
             name,
             enabled,
             safe_fallback,
         });
     }
     Ok(handlers)
+}
+
+/// Parse `cmd package query-activities` output for `packageName=<pkg>` rows.
+/// Each Activity block exposes one packageName line. Strict regex (real
+/// package names start with a letter and only contain `[a-zA-Z0-9_.]`)
+/// avoids matching anything that happens to contain the string.
+fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^\s*packageName=([a-zA-Z][a-zA-Z0-9_.]+)\s*$").unwrap()
+    });
+    stdout
+        .lines()
+        .filter_map(|line| RE.captures(line).map(|c| c[1].to_string()))
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -380,7 +392,10 @@ pub async fn disable_stock_launchers(
     let mut failed = Vec::new();
     let mut skipped_safe = Vec::new();
     for pkg in packages {
-        if SAFE_FALLBACKS.contains(&pkg.as_str()) {
+        // Two-tier guard: the original SAFE_FALLBACKS list (HOME-handler
+        // emergency fallbacks like com.android.tv.settings), AND the broader
+        // engine::safety::NEVER_DISABLE list (anything that would brick).
+        if SAFE_FALLBACKS.contains(&pkg.as_str()) || crate::engine::is_never_disable(&pkg) {
             skipped_safe.push(pkg);
             continue;
         }
@@ -455,4 +470,42 @@ pub async fn channel_provider_disabled(
         .stdout
         .lines()
         .any(|l| l.trim() == "package:com.android.providers.tv"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_home_handler_packages_from_resolveinfo() {
+        let input = "Activity #0:\n  \
+                     Priority=0 PreferredOrder=0 Match=0x108000 Specific=null\n  \
+                     ActivityInfo:\n    \
+                     name=com.spocky.projengmenu.ui.home.MainActivity\n    \
+                     packageName=com.spocky.projengmenu\n    \
+                     labelRes=0x7f0e0000\n\n\
+                     Activity #1:\n  \
+                     ActivityInfo:\n    \
+                     name=com.google.android.tvlauncher.MainActivity\n    \
+                     packageName=com.google.android.tvlauncher\n";
+        let pkgs = parse_home_handler_packages(input);
+        assert_eq!(
+            pkgs,
+            vec![
+                "com.spocky.projengmenu".to_string(),
+                "com.google.android.tvlauncher".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_lines_with_slashes_or_paths() {
+        // /data/... should never be matched as a package. Only well-formed
+        // `packageName=<pkg>` lines qualify.
+        let input = "Path: /data/local/tmp\nResult: foo/bar\npackageName=com.example.foo\n";
+        assert_eq!(
+            parse_home_handler_packages(input),
+            vec!["com.example.foo".to_string()]
+        );
+    }
 }

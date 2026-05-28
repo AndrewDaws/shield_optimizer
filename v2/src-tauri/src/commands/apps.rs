@@ -11,8 +11,17 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::adb::{parse_disabled_packages_output, parse_installed_packages_output};
+use crate::engine::{classify_safety, Safety};
 
 use super::AppState;
+
+/// `safety_info` — pure lookup the frontend uses to decide between "show a
+/// loud confirm", "show a hard block badge", and "no extra ceremony".
+/// Cheap; doesn't touch the device.
+#[tauri::command]
+pub fn safety_info(package: String) -> Safety {
+    classify_safety(&package)
+}
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -69,12 +78,22 @@ pub struct ActionResult {
 }
 
 /// `disable_package` — `pm disable-user --user 0 <pkg>`. Reversible.
+///
+/// Refuses outright if `package` is on the engine's NEVER_DISABLE list —
+/// these would brick the device or break ADB. The user can't override this
+/// from the UI; they'd have to use `adb shell` directly.
 #[tauri::command]
 pub async fn disable_package(
     state: State<'_, AppState>,
     serial: String,
     package: String,
 ) -> Result<ActionResult, String> {
+    if let Safety::NeverDisable { reason } = classify_safety(&package) {
+        return Ok(ActionResult {
+            ok: false,
+            message: format!("Refusing to disable {package}: {reason}"),
+        });
+    }
     run(
         &state,
         &serial,
@@ -118,12 +137,21 @@ pub fn decode_uninstall_error(stdout: &str) -> Option<&'static str> {
 /// `uninstall_package` — `pm uninstall --user 0 <pkg>`. Semi-reversible via
 /// `cmd package install-existing` (if the APK is still on /system) or the
 /// Play Store.
+///
+/// Same NEVER_DISABLE refusal as `disable_package` — uninstalling these has
+/// the same brick risk as disabling them, and is less reversible.
 #[tauri::command]
 pub async fn uninstall_package(
     state: State<'_, AppState>,
     serial: String,
     package: String,
 ) -> Result<ActionResult, String> {
+    if let Safety::NeverDisable { reason } = classify_safety(&package) {
+        return Ok(ActionResult {
+            ok: false,
+            message: format!("Refusing to uninstall {package}: {reason}"),
+        });
+    }
     let mut result = run(&state, &serial, &format!("pm uninstall --user 0 {package}")).await?;
     if !result.ok {
         if let Some(hint) = decode_uninstall_error(&result.message) {

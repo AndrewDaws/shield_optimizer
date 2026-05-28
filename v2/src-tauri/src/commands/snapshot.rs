@@ -334,9 +334,16 @@ pub async fn apply_snapshot(
     );
 
     // 1. Disable packages from the plan (additive only — never re-enable).
+    // Defense-in-depth: refuse to disable anything on the NEVER_DISABLE list
+    // even if a malformed snapshot lists it. Categorized as "failed" so the
+    // UI surfaces it instead of silently ignoring.
     let mut packages_disabled = Vec::new();
     let mut packages_failed = Vec::new();
     for pkg in &plan.packages_to_disable {
+        if crate::engine::is_never_disable(pkg) {
+            packages_failed.push(format!("{pkg} (refused: brick risk)"));
+            continue;
+        }
         let cmd = format!("pm disable-user --user 0 {pkg}");
         match adb.shell(&serial, &cmd).await {
             Ok(out) if !out.stdout.contains("Failure") && !out.stdout.contains("Error") => {

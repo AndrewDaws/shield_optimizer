@@ -198,6 +198,11 @@ export interface ApplyResult {
   summary: string;
 }
 
+export type Safety =
+  | { kind: "never_disable"; reason: string }
+  | { kind: "caution"; reason: string }
+  | { kind: "safe" };
+
 export interface RecoveryFailure {
   package: string;
   error: string;

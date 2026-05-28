@@ -9,6 +9,7 @@ pub mod app_lists;
 pub mod detection;
 pub mod launcher;
 pub mod optimize;
+pub mod safety;
 pub mod snapshot;
 pub mod types;
 
@@ -16,6 +17,7 @@ pub use app_lists::{AppList, AppListBundle};
 pub use detection::{detect_device_type, DeviceType};
 pub use launcher::{launcher_catalog, LauncherEntry};
 pub use optimize::{compute_plan, OptimizeInputs, OptimizePlan};
+pub use safety::{classify as classify_safety, is_never_disable, Safety};
 pub use snapshot::{Snapshot, SnapshotApplyPlan, SnapshotError, SCHEMA_VERSION};
 pub use types::{
     ActionMethod, AppEntry, Device, DeviceProperties, DeviceStatus, OptimizeAction, OptimizeMode,

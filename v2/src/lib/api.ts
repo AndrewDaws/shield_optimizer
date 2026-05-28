@@ -29,6 +29,7 @@ import type {
   RebootResult,
   RecoveryResult,
   RestartResult,
+  Safety,
   ScanResult,
   SetLauncherResult,
   SettingNamespace,
@@ -92,6 +93,7 @@ export const api = {
       "package_states",
       { serial, packages },
     ),
+  safetyInfo: (pkg: string) => invoke<Safety>("safety_info", { package: pkg }),
 
   installApk: (serial: string, apkPath: string, reinstall = true) =>
     invoke<InstallApkResult>("install_apk", { serial, apkPath, reinstall }),
