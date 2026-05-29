@@ -54,6 +54,13 @@ The Linux runner needs `libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libayatana
 - **Windows MSI versioning gotcha**: WiX rejects non-numeric pre-release identifiers — `0.1.0-beta` and `0.1.0-rc1` both fail with "optional pre-release identifier in app version must be numeric-only and cannot be greater than 65535 for msi target". `release.sh` works around this by setting `bundle.windows.wix.version` to a derived `major.minor.patch.N` (where N is the trailing digits of the pre-release tag, or 0). The main version stays human-readable for Linux/macOS/NSIS. If you hand-bump versions, set `bundle.windows.wix.version` too.
 - **Don't pipe `yes` into `release.sh`.** The auto-mode classifier blocks it (correctly) — the script's interactive gates are the safety net. Run it interactively, or do the steps by hand.
 
+### Homebrew tap
+
+The macOS distribution channel is a Homebrew tap at [`bryanroscoe/homebrew-shield-optimizer`](https://github.com/bryanroscoe/homebrew-shield-optimizer). One cask, `shield-optimizer`, pointing at the universal `.dmg` from the latest `v2-*` release.
+
+- The cask strips `com.apple.quarantine` in a `postflight` block. This is what lets users skip the macOS 15+ Gatekeeper dance after `brew install --cask`. Don't remove that block unless we start signing the build.
+- The `bump-tap` job in `.github/workflows/v2-release.yml` updates the cask on every release: downloads the universal DMG, computes the SHA256, rewrites `version` and `sha256` in `Casks/shield-optimizer.rb`, and pushes to the tap. It needs the `HOMEBREW_TAP_TOKEN` secret — a fine-grained PAT scoped to the tap repo with `contents:write`. If the secret is missing the job logs that and skips (rather than failing the whole release).
+
 ## Conventions
 
 - **Commits**: always create a new commit. Never `--amend` unless explicitly asked. No `Co-Authored-By` trailers on commits.

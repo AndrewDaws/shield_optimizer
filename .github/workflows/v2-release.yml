@@ -203,3 +203,82 @@ jobs:
           prerelease: ${{ needs.notes.outputs.prerelease == 'true' }}
           includeUpdaterJson: false
           args: ${{ matrix.args }}
+
+  # Bump the Homebrew tap (bryanroscoe/homebrew-shield-optimizer) to point at
+  # the new universal macOS DMG. Runs after all three bundlers succeed so the
+  # asset is guaranteed to be on the GitHub Release before we reference it.
+  # Requires the HOMEBREW_TAP_TOKEN secret — a fine-grained PAT scoped to
+  # bryanroscoe/homebrew-shield-optimizer with contents:write. If the secret
+  # is missing, this job is skipped (not failed) so the rest of the release
+  # still ships.
+  bump-tap:
+    needs: [notes, build]
+    name: Bump Homebrew tap
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Check secret presence
+        id: secret
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "$TAP_TOKEN" ]]; then
+            echo "HOMEBREW_TAP_TOKEN not set; skipping tap bump."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout tap
+        if: steps.secret.outputs.skip == 'false'
+        uses: actions/checkout@v5
+        with:
+          repository: bryanroscoe/homebrew-shield-optimizer
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update cask
+        if: steps.secret.outputs.skip == 'false'
+        working-directory: tap
+        env:
+          TAG: ${{ needs.notes.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Tag is v2-X.Y.Z[-pre]; cask version is the part after v2-.
+          version="${TAG#v2-}"
+          dmg_url="https://github.com/${{ github.repository }}/releases/download/${TAG}/Shield.Optimizer_${version}_universal.dmg"
+
+          echo "Fetching $dmg_url to compute SHA256…"
+          # The release upload may take a beat to surface; retry briefly.
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL -o /tmp/sho.dmg "$dmg_url"; then
+              break
+            fi
+            echo "  attempt $attempt failed, retrying in 10s…"
+            sleep 10
+          done
+          [[ -s /tmp/sho.dmg ]] || { echo "Failed to download $dmg_url"; exit 1; }
+          sha=$(sha256sum /tmp/sho.dmg | awk '{print $1}')
+          echo "SHA256: $sha"
+
+          python3 - <<PY
+          import pathlib, re
+          p = pathlib.Path("Casks/shield-optimizer.rb")
+          t = p.read_text()
+          t, n1 = re.subn(r'version "[^"]+"', f'version "$version"', t, count=1)
+          assert n1 == 1, "version line not found in cask"
+          t, n2 = re.subn(r'sha256 "[a-f0-9]{64}"', f'sha256 "$sha"', t, count=1)
+          assert n2 == 1, "sha256 line not found in cask"
+          p.write_text(t)
+          PY
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/shield-optimizer.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date; nothing to commit."
+          else
+            git commit -m "Bump shield-optimizer to $version"
+            git push
+            echo "Tap updated to $version."
+          fi

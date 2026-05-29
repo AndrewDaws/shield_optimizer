@@ -27,6 +27,19 @@ This directory is the v2 workspace. v1 (`Shield-Optimizer.ps1` at the repo root)
 
 The behavior spec is at [`docs/FEATURES.md`](../docs/FEATURES.md). The porting roadmap is in [`PLAN.md`](PLAN.md).
 
+## Install
+
+Installers for each `v2-*` tag land on [the Releases page](https://github.com/bryanroscoe/shield_optimizer/releases) — `.dmg` for macOS, `.msi` / `.exe` for Windows, `.deb` / `.AppImage` / `.rpm` for Linux. Builds are unsigned; the release body lists the one-time first-launch dismissal steps for each OS.
+
+**macOS users: install via Homebrew** to skip the Gatekeeper dance entirely:
+
+```sh
+brew tap bryanroscoe/shield-optimizer
+brew install --cask shield-optimizer
+```
+
+The cask strips the quarantine bit in a postflight, so the app opens with a normal double-click — no `xattr`, no Settings dance. Upgrades follow with `brew upgrade --cask shield-optimizer`. The tap is auto-bumped by [the release workflow](../.github/workflows/v2-release.yml) on every `v2-*` tag push.
+
 ## Technology choices
 
 | Layer | Pick | Rationale |
