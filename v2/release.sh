@@ -24,6 +24,7 @@ cd "$(dirname "$0")"
 
 TAURI_CONF="src-tauri/tauri.conf.json"
 CARGO_TOML="src-tauri/Cargo.toml"
+CARGO_LOCK="src-tauri/Cargo.lock"
 PACKAGE_JSON="package.json"
 
 # --- Parse flags -------------------------------------------------------------
@@ -144,6 +145,20 @@ cargo, n = re.subn(r'(?m)^(version\s*=\s*)"[^"]+"', rf'\1"{new}"', cargo, count=
 assert n == 1, "Cargo.toml: no top-level version= line found"
 pathlib.Path("$CARGO_TOML").write_text(cargo)
 
+# Cargo.lock — find the [[package]] block whose name matches the crate and
+# rewrite its version line. Without this, the next `cargo build` rewrites
+# Cargo.lock and leaves the working tree dirty after a release.
+lock_path = pathlib.Path("$CARGO_LOCK")
+lock = lock_path.read_text()
+lock, n = re.subn(
+    r'(\[\[package\]\]\r?\nname = "shield-optimizer-v2"\r?\nversion = )"[^"]+"',
+    rf'\1"{new}"',
+    lock,
+    count=1,
+)
+assert n == 1, "Cargo.lock: shield-optimizer-v2 package entry not found"
+lock_path.write_text(lock)
+
 # package.json
 p = pathlib.Path("$PACKAGE_JSON")
 pkg = json.loads(p.read_text())
@@ -151,11 +166,11 @@ pkg["version"] = new
 p.write_text(json.dumps(pkg, indent=2) + "\n")
 PY
 
-git diff --stat "$TAURI_CONF" "$CARGO_TOML" "$PACKAGE_JSON"
+git diff --stat "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK" "$PACKAGE_JSON"
 
 # --- Commit + tag + push -----------------------------------------------------
 
-git add "$TAURI_CONF" "$CARGO_TOML" "$PACKAGE_JSON"
+git add "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK" "$PACKAGE_JSON"
 git commit -m "Release $TAG"
 git tag -a "$TAG" -m "Release $TAG"
 
