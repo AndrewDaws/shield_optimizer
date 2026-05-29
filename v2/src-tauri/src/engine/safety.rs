@@ -18,9 +18,13 @@ use serde::Serialize;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Safety {
     /// Operation refused at the host layer. No `pm disable-user` will be sent.
-    NeverDisable { reason: &'static str },
+    NeverDisable {
+        reason: &'static str,
+    },
     /// Recoverable, but the UI should surface a loud confirm.
-    Caution { reason: &'static str },
+    Caution {
+        reason: &'static str,
+    },
     Safe,
 }
 
@@ -63,7 +67,10 @@ fn caution_reason(package: &str) -> Option<&'static str> {
 
 const NEVER_DISABLE: &[(&str, &str)] = &[
     // --- The framework itself ---
-    ("android", "The Android framework. Disabling bricks the device."),
+    (
+        "android",
+        "The Android framework. Disabling bricks the device.",
+    ),
     (
         "com.android.systemui",
         "System UI — the launcher's host process. Disabling makes the device unusable.",
@@ -211,10 +218,7 @@ mod tests {
 
     #[test]
     fn framework_is_never_disable() {
-        assert!(matches!(
-            classify("android"),
-            Safety::NeverDisable { .. }
-        ));
+        assert!(matches!(classify("android"), Safety::NeverDisable { .. }));
         assert!(matches!(
             classify("com.android.systemui"),
             Safety::NeverDisable { .. }
@@ -242,10 +246,7 @@ mod tests {
 
     #[test]
     fn unknown_package_is_safe() {
-        assert!(matches!(
-            classify("com.example.bloat"),
-            Safety::Safe
-        ));
+        assert!(matches!(classify("com.example.bloat"), Safety::Safe));
     }
 
     #[test]
