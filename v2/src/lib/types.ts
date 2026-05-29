@@ -1,0 +1,296 @@
+// TypeScript counterparts of the Rust types in src-tauri/src/engine/types.rs
+// and src-tauri/src/commands/*.rs. Keep in sync.
+
+export type ConnectionType = "network" | "usb";
+export type DeviceStatus = "device" | "unauthorized" | "offline";
+export type DeviceType = "shield" | "google_tv" | "unknown";
+export type ActionMethod = "disable" | "uninstall";
+export type RiskTier = "safe" | "medium" | "high" | "advanced";
+
+export interface DeviceProperties {
+  friendly_name: string | null;
+  brand: string;
+  model: string;
+  device_codename: string;
+  manufacturer: string;
+  android_release: string;
+  sdk_level: string;
+  build_id: string;
+  board_platform: string;
+}
+
+export interface Device {
+  id: number;
+  serial: string;
+  name: string;
+  model: string;
+  device_type: DeviceType;
+  status: DeviceStatus;
+  connection: ConnectionType;
+  properties: DeviceProperties | null;
+}
+
+export interface AppEntry {
+  package: string;
+  name: string;
+  method: ActionMethod;
+  risk: RiskTier;
+  optimize_description: string;
+  restore_description: string;
+  default_optimize: boolean;
+  default_restore: boolean;
+}
+
+export interface LauncherEntry {
+  name: string;
+  package: string;
+}
+
+export interface LauncherStatus {
+  entry: LauncherEntry;
+  installed: boolean;
+  enabled: boolean;
+}
+
+export interface CurrentLauncher {
+  package: string | null;
+  activity: string | null;
+}
+
+export interface ConnectResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface DisplayMode {
+  resolution: string | null;
+  refresh_hz: number | null;
+  hdr_types: string[];
+}
+
+export interface MemoryEntry {
+  package: string;
+  mb: number;
+}
+
+export interface RamInfo {
+  total_mb: number | null;
+  used_mb: number | null;
+  free_mb: number | null;
+  swap_mb: number | null;
+}
+
+export interface StorageInfo {
+  total: string | null;
+  used: string | null;
+  available: string | null;
+  used_percent: number | null;
+}
+
+export interface HealthReport {
+  display: DisplayMode;
+  ram: RamInfo;
+  storage: StorageInfo;
+  temperature_c: number | null;
+  audio_device: string | null;
+  top_memory: MemoryEntry[];
+}
+
+export interface DeviceReport {
+  serial: string;
+  name: string;
+  report: HealthReport | null;
+  error: string | null;
+}
+
+export interface HomeHandler {
+  package: string;
+  name: string;
+  enabled: boolean;
+  safe_fallback: boolean;
+}
+
+export interface StockLauncherResult {
+  processed: string[];
+  failed: string[];
+  skipped_safe: string[];
+  summary: string;
+}
+
+export interface RestartResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface SnapshotFile {
+  path: string;
+  filename: string;
+  saved_at: string;
+  device_name: string;
+  device_serial: string;
+  device_type: DeviceType;
+  disabled_count: number;
+  settings_count: number;
+  launcher: string | null;
+}
+
+export interface ActionResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface SetLauncherResult {
+  ok: boolean;
+  strategy: string | null;
+  current_launcher: string | null;
+  last_error: string | null;
+}
+
+export interface InstallApkResult {
+  ok: boolean;
+  path: string;
+  message: string;
+  hint: string | null;
+}
+
+export interface DiscoveredApk {
+  path: string;
+  name: string;
+  size_bytes: number;
+}
+
+export interface ScanResult {
+  subnet: string | null;
+  found: string[];
+  connected: string[];
+  failed: string[];
+  message: string;
+}
+
+export interface AdbStatus {
+  available: boolean;
+  path: string | null;
+  last_probe: string | null;
+}
+
+export interface InstallResult {
+  ok: boolean;
+  path: string | null;
+  message: string;
+}
+
+export interface SnapshotApplyPlan {
+  packages_to_disable: string[];
+  packages_already_disabled: string[];
+  packages_not_installed: string[];
+  launcher_to_set: string | null;
+  settings_to_write: Record<string, string>;
+  cross_device_warning: string | null;
+}
+
+export interface ApplyResult {
+  packages_disabled: string[];
+  packages_failed: string[];
+  launcher_set: boolean;
+  launcher_message: string | null;
+  settings_written: string[];
+  settings_failed: string[];
+  summary: string;
+}
+
+export type Safety =
+  | { kind: "never_disable"; reason: string }
+  | { kind: "caution"; reason: string }
+  | { kind: "safe" };
+
+export interface RecoveryFailure {
+  package: string;
+  error: string;
+}
+
+export interface RecoveryResult {
+  restored: string[];
+  failed: RecoveryFailure[];
+  message: string;
+}
+
+export type RebootMode = "normal" | "recovery" | "bootloader";
+
+export interface RebootResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface TweaksState {
+  hdmi_control_enabled: string | null;
+  hdmi_control_auto_wakeup_enabled: string | null;
+  hdmi_control_auto_device_off_enabled: string | null;
+  hdmi_system_audio_control_enabled: string | null;
+  match_content_frame_rate: string | null;
+  long_press_timeout: string | null;
+  window_animation_scale: string | null;
+  transition_animation_scale: string | null;
+  animator_duration_scale: string | null;
+}
+
+export type SettingNamespace = "global" | "secure" | "system";
+
+export interface WriteResult {
+  ok: boolean;
+  message: string;
+}
+
+export type DisplayScalePreset = "uhd_4k" | "fhd_1080p" | "reset";
+
+export interface DisplayScaleResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface CurrentDisplayScaling {
+  size: string;
+  density: string;
+}
+
+export type OptimizeMode = "optimize" | "restore";
+
+export type SkipReason = "not_installed" | "already_disabled" | "already_enabled" | "user_choice";
+
+export type OptimizeAction =
+  | { kind: "disable" }
+  | { kind: "uninstall" }
+  | { kind: "enable" }
+  | { kind: "skip"; reason: SkipReason };
+
+export interface OptimizePlanItem {
+  entry: AppEntry;
+  action: OptimizeAction;
+  memory_mb?: number | null;
+}
+
+export interface OptimizePlan {
+  mode: OptimizeMode;
+  items: OptimizePlanItem[];
+}
+
+export type PerformanceProfile = "optimized" | "default";
+
+export interface PerformanceResult {
+  ok: boolean;
+  message: string;
+}
+
+export function deviceTypeLabel(t: DeviceType): string {
+  switch (t) {
+    case "shield":
+      return "Nvidia Shield";
+    case "google_tv":
+      return "Google TV";
+    case "unknown":
+      return "Unknown";
+  }
+}
+
+export function riskBadgeClass(r: RiskTier): string {
+  return `risk-${r}`;
+}

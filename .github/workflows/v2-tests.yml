@@ -1,0 +1,101 @@
+# Shield Optimizer v2 CI — Rust engine + ADB layer tests and frontend type check.
+#
+# This workflow does NOT run Tauri's full bundle build (that lives in
+# v2-release.yml). It does run `cargo clippy --lib --tests` and `cargo test`
+# which still need the platform-specific dev libs because the tauri crate's
+# build script links against them — hence the Linux apt-get step.
+
+name: v2 Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'v2/**'
+      - '.github/workflows/v2-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'v2/**'
+      - '.github/workflows/v2-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  rust:
+    name: Rust tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned to ubuntu-22.04 to match v2-release.yml — both jobs need the
+        # same libwebkit2gtk-4.1-dev package name and 24.04+ ships it under
+        # slightly different paths.
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # The tauri crate's build script links against gtk + webkit + appindicator
+      # even for `cargo check` / `cargo clippy --lib`. Without these the Linux
+      # job dies with "gio-2.0.pc not found". macOS and Windows already ship
+      # the bits they need.
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            v2/src-tauri/target
+          key: ${{ runner.os }}-cargo-v2-${{ hashFiles('v2/src-tauri/Cargo.lock') }}
+
+      - name: cargo fmt
+        working-directory: v2/src-tauri
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: v2/src-tauri
+        run: cargo clippy --lib --tests -- -D warnings
+
+      - name: cargo test
+        working-directory: v2/src-tauri
+        run: cargo test --lib
+
+  frontend:
+    name: Frontend type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+
+      - name: Install dependencies
+        working-directory: v2
+        run: npm ci
+
+      - name: svelte-check
+        working-directory: v2
+        run: npm run check
+
+      - name: Frontend build
+        working-directory: v2
+        run: npm run build

@@ -1,0 +1,203 @@
+# Shield Optimizer v2 release pipeline.
+#
+# Trigger: push of a `v2-*` tag (matches `v2-0.1.0`, `v2-0.1.0-rc1`, etc.).
+# v1's `v0.x.x` tags do NOT fire this — keep the two release tracks separate.
+#
+# What runs:
+#   - ubuntu-22.04 → .deb, .AppImage, .rpm
+#   - macos-latest → universal .dmg / .app.tar.gz (Apple Silicon + Intel)
+#   - windows-latest → .msi + .exe
+# All artifacts land on a GitHub Release for the tag.
+#
+# Signing: intentionally unsigned. Users will see the macOS "unidentified
+# developer" Gatekeeper prompt and the Windows SmartScreen warning on first
+# launch — both are dismissible. See README's release section for the
+# documented workaround. When we're ready to add signing:
+#   - SIGNING(macOS): set APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+#     APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID as
+#     repo secrets and tauri-action picks them up automatically.
+#   - SIGNING(Windows): an EV cert ($300-500/yr) buys immediate SmartScreen
+#     trust. Add WINDOWS_CERTIFICATE + WINDOWS_CERTIFICATE_PASSWORD and
+#     tauri-action signs the .msi / .exe.
+
+name: v2 Release
+
+on:
+  push:
+    tags:
+      - 'v2-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name (manual dispatch only — overrides the trigger tag for testing)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  # Compute the release notes once on a cheap runner and share the body with
+  # every per-OS bundler job. Two sources:
+  #   1. If v2/CHANGELOG.md contains a section for this tag, use it verbatim.
+  #      Format: a `## v2-X.Y.Z` heading followed by Markdown until the next
+  #      `## ` heading. This is the rich, human-written path — mirrors how
+  #      v1 wrote its release bodies.
+  #   2. Otherwise auto-generate from `git log <prev-v2-tag>..<this-tag>`.
+  notes:
+    name: Build release notes
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.compose.outputs.body }}
+      tag: ${{ steps.compose.outputs.tag }}
+      prerelease: ${{ steps.compose.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - id: compose
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          # Prerelease detection: any tag containing one of the standard
+          # pre-release markers becomes a GitHub prerelease. Covers
+          # v2-0.1.0-beta, v2-0.1.0-beta.1, v2-0.1.0-rc1, -alpha, -preview, -pre.
+          if [[ "$tag" =~ -(alpha|beta|rc|preview|pre)([.-]?[0-9]+)?$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          changelog="v2/CHANGELOG.md"
+          body=""
+          if [[ -f "$changelog" ]] && grep -q "^## $tag\b" "$changelog"; then
+            echo "Pulling notes for $tag from $changelog"
+            body=$(awk -v tag="## $tag" '
+              $0 ~ "^"tag {flag=1; next}
+              flag && /^## / {flag=0}
+              flag {print}
+            ' "$changelog")
+          fi
+
+          if [[ -z "$body" ]]; then
+            echo "No CHANGELOG entry for $tag — auto-generating from git log."
+            prev=$(git tag --list 'v2-*' --sort=-v:refname | grep -v "^$tag$" | head -1 || true)
+            if [[ -n "$prev" ]]; then
+              range="$prev..$tag"
+              body="### Changes since $prev"$'\n\n'
+            else
+              range="$tag"
+              body="### Initial release"$'\n\n'
+            fi
+            log=$(git log --no-merges --pretty=format:'- %s (%h)' "$range" -- v2/ '.github/workflows/v2-*' 2>/dev/null || true)
+            if [[ -z "$log" ]]; then
+              log=$(git log --no-merges --pretty=format:'- %s (%h)' "$range" 2>/dev/null || true)
+            fi
+            body+="$log"
+          fi
+
+          # Always append the first-run dismissal block so users know what to
+          # expect from an unsigned build.
+          body+=$'\n\n'"### First-run warnings"$'\n\n'
+          body+="These builds are unsigned. Your OS may complain on first launch:"$'\n\n'
+          body+="- **macOS** (Gatekeeper): right-click the app → Open → Open. Or run \`xattr -dr com.apple.quarantine /Applications/Shield\\ Optimizer.app\` once after installing."$'\n'
+          body+="- **Windows** (SmartScreen): \"More info\" → \"Run anyway\"."$'\n'
+          body+="- **Linux**: \`chmod +x ShieldOptimizer*.AppImage\` before running."$'\n\n'
+          body+="See the [v2 README](https://github.com/${{ github.repository }}/blob/main/v2/README.md) for setup and feature docs."
+
+          # Emit as a multi-line output.
+          {
+            echo "body<<NOTES_EOF"
+            echo "$body"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: notes
+    name: Build on ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: Linux
+            args: ''
+          - os: macos-latest
+            label: macOS (universal)
+            args: '--target universal-apple-darwin'
+          - os: windows-latest
+            label: Windows
+            args: ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Need history so we can diff against the previous v2-* tag for
+          # auto-generated release notes.
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both arches needed for the universal macOS target. No-op on the
+          # Linux/Windows runners — rustup just notes the target is supported.
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            v2/src-tauri/target
+          key: ${{ runner.os }}-cargo-v2-release-${{ hashFiles('v2/src-tauri/Cargo.lock') }}
+
+      # Tauri's bundler on Linux needs webkit2gtk and friends. Pinning to
+      # 22.04 because 24.04 ships libwebkit2gtk-4.1 only under a slightly
+      # different package name on noble/oracular.
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        working-directory: v2
+        run: npm ci
+
+      # tauri-action handles: running beforeBuildCommand (npm run build),
+      # invoking `cargo tauri build`, collecting bundle outputs, creating
+      # (or updating) the GitHub release, and uploading every artifact.
+      - name: Build + publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: v2
+          tagName: ${{ needs.notes.outputs.tag }}
+          releaseName: 'Shield Optimizer ${{ needs.notes.outputs.tag }}'
+          releaseBody: ${{ needs.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: ${{ needs.notes.outputs.prerelease == 'true' }}
+          includeUpdaterJson: false
+          args: ${{ matrix.args }}
