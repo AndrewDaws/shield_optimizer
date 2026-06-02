@@ -21,6 +21,11 @@ src-tauri/gen/
 .DS_Store
 Thumbs.db
 
+# Screenshot capture intermediates — regenerable via `npm run screenshots`.
+# gallery.gif is committed; the per-screen frames are not.
+screenshots/frames/
+screenshots/palette.png
+
 # Tauri update signing keys (NEVER commit)
 *.pem
 *.key
