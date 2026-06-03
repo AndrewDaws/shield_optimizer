@@ -17,6 +17,20 @@ When you add a new section, put it at the top; older releases go below.
 
 ---
 
+## v2-0.1.0-beta.4
+
+### Fixed
+
+- **Restart ADB now reconnects network devices.** `adb kill-server` drops every
+  TCP connection, and network devices (`ip:port`) don't re-attach on their own
+  the way USB devices do — so after a restart the device list came back empty
+  even though the daemon restarted fine. Restart ADB now remembers the
+  connected network devices and reconnects them automatically, and reports
+  which ones came back (or which to reconnect manually via Scan Network /
+  Connect IP). (Reddit report.)
+
+---
+
 ## v2-0.1.0-beta.3
 
 ### Fixed

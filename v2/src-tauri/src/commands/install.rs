@@ -7,7 +7,8 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::adb::driver::discover_adb_binary;
-use crate::adb::{install_platform_tools, AdbDriver, SubprocessAdb};
+use crate::adb::{install_platform_tools, parse_device_list, AdbDriver, SubprocessAdb};
+use crate::engine::types::ConnectionType;
 
 use super::AppState;
 
@@ -63,29 +64,77 @@ pub struct RestartResult {
 #[tauri::command]
 pub async fn restart_adb(state: State<'_, AppState>) -> Result<RestartResult, String> {
     let adb = state.adb_snapshot().await;
+
+    // kill-server drops every TCP connection. USB devices re-enumerate on
+    // their own after the daemon restarts; network devices (ip:port) do not —
+    // so capture them first and reconnect afterward. Without this, "Restart
+    // ADB" silently disconnects the user's network device and the list comes
+    // back empty even though the daemon restarted fine.
+    let network_serials: Vec<String> = match adb.raw(&["devices"]).await {
+        Ok(out) => parse_device_list(&out.stdout)
+            .into_iter()
+            .filter(|e| e.connection == ConnectionType::Network)
+            .map(|e| e.serial)
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+
     // kill-server can fail with no daemon running — that's fine, we still
     // care about the start-server result.
     let _ = adb.raw(&["kill-server"]).await;
-    match adb.raw(&["start-server"]).await {
-        Ok(out) => {
-            // start-server prints "* daemon not running…" on first start;
-            // that's success. Real failures contain "error" / "cannot".
-            let s = format!("{}{}", out.stdout, out.stderr);
-            let ok = !s.to_lowercase().contains("error") && !s.to_lowercase().contains("cannot");
-            Ok(RestartResult {
-                ok,
-                message: if s.trim().is_empty() {
-                    "ADB server restarted.".to_string()
-                } else {
-                    s
-                },
+    let start_output = match adb.raw(&["start-server"]).await {
+        Ok(out) => format!("{}{}", out.stdout, out.stderr),
+        Err(e) => {
+            return Ok(RestartResult {
+                ok: false,
+                message: e.to_string(),
             })
         }
-        Err(e) => Ok(RestartResult {
-            ok: false,
-            message: e.to_string(),
-        }),
+    };
+
+    // start-server prints "* daemon not running…" on first start; that's
+    // success. Real failures contain "error" / "cannot".
+    let lower = start_output.to_lowercase();
+    let mut ok = !lower.contains("error") && !lower.contains("cannot");
+
+    // Reconnect the network devices we saw before the restart.
+    let mut reconnected = Vec::new();
+    let mut failed = Vec::new();
+    for serial in &network_serials {
+        let connected = match adb.raw(&["connect", serial]).await {
+            // "connected to X" and "already connected to X" both pass;
+            // "failed to connect" / "cannot connect" do not.
+            Ok(out) => format!("{}{}", out.stdout, out.stderr)
+                .to_lowercase()
+                .contains("connected to"),
+            Err(_) => false,
+        };
+        if connected {
+            reconnected.push(serial.clone());
+        } else {
+            failed.push(serial.clone());
+        }
     }
+    if !failed.is_empty() {
+        ok = false;
+    }
+
+    let mut message = if start_output.trim().is_empty() {
+        "ADB server restarted.".to_string()
+    } else {
+        start_output.trim().to_string()
+    };
+    if !reconnected.is_empty() {
+        message.push_str(&format!("\nReconnected: {}", reconnected.join(", ")));
+    }
+    if !failed.is_empty() {
+        message.push_str(&format!(
+            "\nCould not reconnect: {} — try Scan Network or Connect IP.",
+            failed.join(", ")
+        ));
+    }
+
+    Ok(RestartResult { ok, message })
 }
 
 /// `install_adb` — download Google's platform-tools archive, extract into the
