@@ -28,6 +28,13 @@ When you add a new section, put it at the top; older releases go below.
   connected network devices and reconnects them automatically, and reports
   which ones came back (or which to reconnect manually via Scan Network /
   Connect IP). (Reddit report.)
+- **Windows: installers now upgrade in place.** Previously the `.msi` made you
+  uninstall the old version first. The MSI version encoded the release counter
+  in the 4th version field — which Windows Installer ignores for upgrade
+  detection — so every build looked like the same version. The build/3rd field
+  now carries a strictly-increasing, semver-ordered value, so new releases
+  install on top of the old one. (First applies upgrading **from** this build
+  forward.)
 
 ---
 

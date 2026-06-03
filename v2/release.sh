@@ -133,21 +133,39 @@ import json, re, pathlib
 
 new = "$NEW"
 
-# Compute an MSI-compliant version. WiX requires major.minor.patch[.build]
-# with each field <= 65535 and only numeric pre-release identifiers — so
-# `0.1.0-beta.1` is invalid for MSI. We derive a numeric build field from
-# any trailing digits in the pre-release tag (or 0 if absent) and store it
-# at bundle.windows.wix.version, which overrides the main version only for
-# MSI. Linux .deb / macOS .dmg / NSIS .exe keep the pretty version.
+# Compute an MSI-compliant version. Two WiX constraints drive this:
+#   1. Pre-release identifiers must be numeric-only (so `0.1.0-beta.1` is
+#      invalid as-is for MSI).
+#   2. Windows Installer IGNORES the 4th version field for upgrade detection —
+#      it compares only major.minor.build (each <= 65535). A scheme that only
+#      varied the 4th field made every pre-release read as the same version,
+#      so Windows refused in-place upgrades ("uninstall the existing version
+#      first"). Homebrew/Linux are unaffected and keep the human version.
+#
+# So we encode (patch, pre-release type, pre-release number) into the 3rd
+# (build) field, which IS compared, guaranteeing each release strictly
+# increases in the correct semver order (alpha < beta < rc < stable):
+#   build3 = patch*1000 + typeBase + n
+# where typeBase bands keep the ordering (alpha 0, beta 300, rc 600, stable
+# 999) and n (0-99) is the trailing number within a type. Examples:
+#   0.1.0-beta.3 -> 0.1.303     0.1.0-rc.1 -> 0.1.601     0.1.0 -> 0.1.999
+#   0.1.1-beta.1 -> 0.1.1301    1.0.0      -> 1.0.999
+# Caps patch at 64 (64*1000+999 < 65535). Bare `-beta` (no number) -> n=1.
 m = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9.\-]+))?$', new)
 assert m, f"version {new!r} does not match major.minor.patch[-pre]"
-major, minor, patch, pre = m.groups()
-build = "0"
+major, minor, patch_s, pre = m.groups()
+patch = int(patch_s)
+assert patch <= 64, "patch > 64 overflows the MSI 3rd-field encoding"
 if pre:
+    type_match = re.match(r'^([A-Za-z]+)', pre)
+    ptype = type_match.group(1).lower() if type_match else ""
+    type_base = {"alpha": 0, "preview": 0, "pre": 0, "beta": 300, "rc": 600}.get(ptype, 300)
     tail = re.search(r'(\d+)$', pre)
-    if tail:
-        build = tail.group(1)
-wix_version = f"{major}.{minor}.{patch}.{build}"
+    n = min(int(tail.group(1)), 99) if tail else 1
+    build3 = patch * 1000 + type_base + n
+else:
+    build3 = patch * 1000 + 999  # stable sentinel — outranks every pre-release
+wix_version = f"{major}.{minor}.{build3}"
 
 # tauri.conf.json
 p = pathlib.Path("$TAURI_CONF")
