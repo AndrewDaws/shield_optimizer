@@ -35,6 +35,12 @@ When you add a new section, put it at the top; older releases go below.
   now carries a strictly-increasing, semver-ordered value, so new releases
   install on top of the old one. (First applies upgrading **from** this build
   forward.)
+- **Network scan now connects the devices it finds.** The scan could report
+  "found N devices, connected 0" — the port sweep detected them, but the
+  follow-up `adb connect` raced a cold adb daemon and failed (which is why a
+  manual Restart ADB then made them connect). The scan now starts the adb
+  server first and retries each connect once, so found devices connect on the
+  first pass. (Reddit report.)
 
 ---
 

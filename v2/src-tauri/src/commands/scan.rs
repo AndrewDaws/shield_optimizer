@@ -1,9 +1,11 @@
 //! Network-scan command — matches v1's `Scan-Network` UX.
 
+use std::time::Duration;
+
 use serde::Serialize;
 use tauri::State;
 
-use crate::adb::{local_subnet_prefix, scan_subnet};
+use crate::adb::{local_subnet_prefix, scan_subnet, AdbDriver};
 
 use super::AppState;
 
@@ -20,6 +22,20 @@ pub struct ScanResult {
     pub failed: Vec<String>,
     /// Human-readable summary line — useful diagnostic for the UI.
     pub message: String,
+}
+
+/// `adb connect <target>` succeeded? Detection is text-based on the combined
+/// streams ("connected to X" / "already connected to X") rather than the exit
+/// code, since `adb connect`'s exit-code conventions vary across versions. A
+/// nonzero exit surfaces as `Err` from the driver and counts as not-connected.
+async fn adb_connect_ok(adb: &dyn AdbDriver, target: &str) -> bool {
+    match adb.raw(&["connect", target]).await {
+        Ok(out) => {
+            let s = format!("{}{}", out.stdout, out.stderr).to_lowercase();
+            s.contains("connected to") && !s.contains("failed") && !s.contains("cannot")
+        }
+        Err(_) => false,
+    }
 }
 
 /// `scan_network` — sweep the local /24 for ADB-listening devices and try
@@ -44,15 +60,28 @@ pub async fn scan_network(state: State<'_, AppState>) -> Result<ScanResult, Stri
     let found: Vec<String> = hits.iter().map(|h| h.ip.clone()).collect();
 
     let adb = state.adb_snapshot().await;
+
+    // Warm the adb daemon before connecting. The port sweep just opened and
+    // dropped raw TCP sockets against each device's adbd; firing `adb connect`
+    // immediately afterward — especially against a cold daemon — tends to get
+    // a transient refusal, which is why a manual "Restart ADB" (which starts
+    // the daemon) made the same devices connect. Starting the server here, plus
+    // a single retry below, makes the scan connect on its own.
+    let _ = adb.raw(&["start-server"]).await;
+
     let mut connected = Vec::new();
     let mut failed = Vec::new();
     for hit in &hits {
         let target = format!("{}:5555", hit.ip);
-        match adb.raw(&["connect", &target]).await {
-            Ok(out) if out.success() && !out.stdout.contains("failed") => {
-                connected.push(hit.ip.clone());
-            }
-            _ => failed.push(hit.ip.clone()),
+        let mut ok = adb_connect_ok(adb.as_ref(), &target).await;
+        if !ok {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            ok = adb_connect_ok(adb.as_ref(), &target).await;
+        }
+        if ok {
+            connected.push(hit.ip.clone());
+        } else {
+            failed.push(hit.ip.clone());
         }
     }
 
