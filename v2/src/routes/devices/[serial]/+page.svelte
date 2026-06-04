@@ -816,31 +816,45 @@
     }
   }
 
-  /// The plan's recommended action for a row (what the dropdown defaults to),
-  /// or null for rows the backend already marked skip (not installed / already
-  /// in target state) — those aren't actionable and get no dropdown.
-  function recommendedAction(item: OptimizePlanItem): RowAction | null {
+  /// The natural action the engine computed for an actionable row (disable /
+  /// uninstall in optimize mode, enable in restore mode), or null for rows the
+  /// backend marked skip (not installed / already in target state) — those
+  /// aren't actionable and get no dropdown.
+  function naturalAction(item: OptimizePlanItem): RowAction | null {
     return item.action.kind === "skip" ? null : item.action.kind;
   }
 
+  /// What the dropdown defaults to. This mirrors v1's per-app defaults: only
+  /// apps flagged default_optimize / default_restore are pre-selected for
+  /// action; everything else defaults to Skip so the wizard never removes a
+  /// streaming app (or anything not on the curated default list) unless the
+  /// user explicitly chooses to. Returns null for non-actionable rows.
+  function defaultAction(item: OptimizePlanItem): RowAction | null {
+    const natural = naturalAction(item);
+    if (natural === null) return null;
+    const isDefault =
+      optimizeMode === "optimize" ? item.entry.default_optimize : item.entry.default_restore;
+    return isDefault ? natural : "skip";
+  }
+
   /// The action that will actually run: the user's dropdown pick if they made
-  /// one, otherwise the recommendation (or skip for non-actionable rows).
+  /// one, otherwise the per-app default (or skip for non-actionable rows).
   function effectiveAction(item: OptimizePlanItem): RowAction {
-    return optimizeOverrides[item.entry.package] ?? recommendedAction(item) ?? "skip";
+    return optimizeOverrides[item.entry.package] ?? defaultAction(item) ?? "skip";
   }
 
   /// Dropdown choices for a row, in mode-appropriate order. Restore only ever
   /// produces enable rows, so its menu is Enable / Skip; optimize rows can be
   /// downgraded (uninstall→disable) or upgraded (disable→uninstall).
   function actionOptions(item: OptimizePlanItem): RowAction[] {
-    return recommendedAction(item) === "enable"
+    return naturalAction(item) === "enable"
       ? ["enable", "skip"]
       : ["disable", "uninstall", "skip"];
   }
 
   function actionLabel(item: OptimizePlanItem, action: RowAction): string {
     const base = { disable: "Disable", uninstall: "Uninstall", enable: "Enable", skip: "Skip" }[action];
-    return action === recommendedAction(item) ? `${base} (recommended)` : base;
+    return action === defaultAction(item) ? `${base} (recommended)` : base;
   }
 
   function setOptimizeAction(pkg: string, action: RowAction) {
@@ -1455,6 +1469,9 @@
               <tr>
                 <td class="app-cell">
                   <div class="app-name-row">{a.name}</div>
+                  {#if a.optimize_description}
+                    <div class="muted small app-desc">{a.optimize_description}</div>
+                  {/if}
                   <div class="muted small mono pkg-id">{a.package}</div>
                 </td>
                 <td class="center">
@@ -1605,7 +1622,8 @@
             {#each optimizePlan.items as item (item.entry.package)}
               {@const skip = skipReasonLabel(item)}
               {@const progress = optimizeProgress[item.entry.package]}
-              <tr class:dim={effectiveAction(item) === "skip"}>
+              {@const eff = effectiveAction(item)}
+              <tr class:dim={eff === "skip"} class:acting={!skip && eff !== "skip"}>
                 <td>
                   <div class="app-name">
                     {item.entry.name}
@@ -1613,6 +1631,9 @@
                       <span class="tag installed">DEFAULT</span>
                     {/if}
                   </div>
+                  {#if item.entry.optimize_description}
+                    <div class="muted small app-desc">{item.entry.optimize_description}</div>
+                  {/if}
                   <div class="muted small mono">{item.entry.package}</div>
                 </td>
                 <td class="num">
@@ -1632,8 +1653,10 @@
                   {:else}
                     <select
                       class="action-select"
-                      class:will-skip={effectiveAction(item) === "skip"}
-                      value={effectiveAction(item)}
+                      class:will-skip={eff === "skip"}
+                      class:will-remove={eff === "uninstall"}
+                      class:will-act={eff === "disable" || eff === "enable"}
+                      value={eff}
                       onchange={(e) =>
                         setOptimizeAction(
                           item.entry.package,
@@ -2088,6 +2111,11 @@
     font-size: 0.95rem;
     font-weight: 500;
   }
+  .app-table .app-desc {
+    margin-top: 0.15rem;
+    font-size: 0.82rem;
+    max-width: 42rem;
+  }
   .app-table .pkg-id {
     margin-top: 0.1rem;
     font-size: 0.78rem;
@@ -2448,8 +2476,17 @@
     border-radius: 4px;
     font-size: 0.9rem;
   }
+  /* Skipped rows recede; rows that WILL be acted on stand out with a left
+     accent bar and a faint tint so the consequential rows are obvious at a
+     glance (the dim-everything approach was too subtle to read). */
   .optimize-table tr.dim {
-    opacity: 0.55;
+    opacity: 0.45;
+  }
+  .optimize-table tr.acting td {
+    background: color-mix(in srgb, var(--accent-strong) 8%, transparent);
+  }
+  .optimize-table tr.acting td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent-strong);
   }
   .checkbox-row {
     display: flex;
@@ -2464,11 +2501,20 @@
     padding: 0.25rem 0.5rem;
     min-width: 9.5rem;
   }
-  /* Visually mark a row the user dropped to Skip without dimming the control
-     itself (the whole row dims via tr.dim). */
+  /* Color the dropdown by what it will do, so each row's intent is legible at
+     a glance: muted italic for Skip, accent for disable/enable, danger for the
+     destructive uninstall. */
   .action-select.will-skip {
     color: var(--fg-muted);
     font-style: italic;
+  }
+  .action-select.will-act {
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .action-select.will-remove {
+    color: var(--danger-strong);
+    font-weight: 500;
   }
   .legend {
     display: flex;
