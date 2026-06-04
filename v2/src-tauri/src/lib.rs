@@ -63,6 +63,7 @@ pub fn run() {
             devices::connect_device,
             devices::disconnect_device,
             devices::pair_device,
+            devices::rename_device,
             health::health_report,
             health::app_list_for_device,
             health::report_all,
