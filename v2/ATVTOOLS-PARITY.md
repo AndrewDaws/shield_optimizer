@@ -16,16 +16,16 @@ Research notes: aTV Tools is a **phone/tablet companion app** (Android 8.1+/iOS 
 | Network scan / auto-discovery | partial (manual IP) | ✅ |
 | Disable/enable/uninstall apps | ✅ (Pro) | ✅ |
 | Sideload APK | ✅ | ✅ |
-| **APK backup/extract (device → local file)** | ✅ | ❌ |
-| **Install extracted APK to another device (app cloning)** | manual two-step | ❌ (have install half) |
+| **APK backup/extract (device → local file)** | ✅ | ✅ (PR #40) |
+| **Install extracted APK to another device (app cloning)** | manual two-step | ✅ one-click (PR #40) |
 | **File manager (browse / push / pull)** | ✅ | ❌ |
-| **Screenshots of the TV** | ✅ | ❌ |
+| **Screenshots of the TV** | ✅ | ✅ (PR #39) |
 | Screen recording | ✅ (Pro, no DRM content) | ❌ |
 | Remote control / D-pad / mouse | ✅ (Pro) | ❌ |
-| **Send text to TV (type from keyboard)** | ✅ | ❌ |
+| **Send text to TV (type from keyboard)** | ✅ | ✅ (PR #41) |
 | Permissions grant/revoke | ✅ | ❌ |
-| Bulk cache clear | ✅ | ❌ |
-| Running apps + force-stop | ✅ | partial (top-memory + disable, no force-stop) |
+| Bulk cache clear | ✅ | ✅ (PR #41) |
+| Running apps + force-stop | ✅ | ✅ (PR #39) |
 | Resource monitor | CPU/RAM/net/storage | RAM/temp/storage/display (no CPU/net) |
 | Shell runner with bookmarks | ✅ | ❌ |
 | Screen mirroring / gamepad / media remote | ✅ (phone-centric) | — (out of scope for desktop) |
@@ -34,6 +34,12 @@ Research notes: aTV Tools is a **phone/tablet companion app** (Android 8.1+/iOS 
 **Bottom line:** we beat aTV Tools on the *debloat/optimize/safety* core, they beat us on *general device utilities*. The gaps worth closing are the utilities that complement debloating; the phone-centric features aren't our product.
 
 ## Prioritized roadmap
+
+> **Status (2026-06-04):** P1.1 + P1.2 shipped in PR #40, P1.4 in PR #39,
+> P2.5 in PR #39, P2.6 + P2.8 in PR #41. Next up: **P1.3 file manager**
+> (Bryan re-confirmed: browse + download + upload, the biggest remaining
+> piece) and the **remote control panel** below (promoted from P3 on
+> request).
 
 ### P1 — App backup / cloning + file management (the asked-for set)
 
@@ -61,10 +67,20 @@ Shape: `adb -s X exec-out screencap -p > local.png`, save to a user folder, show
 **8. Bulk cache clear** — `pm trim-caches 999999999999` (one call, no per-app loop).
 **9. CPU + network monitor** — add `top -n1` / `/proc/stat` parse and `/proc/net/dev` deltas to the Health report.
 
+**9b. Remote control panel** *(promoted from P3 — requested 2026-06-04)* —
+a compact remote area on the device page that goes beyond the batch
+send-text shipped in PR #41:
+- **Live typing**: a focused capture field that relays keystrokes as you
+  type — `input text` per chunk, `input keyevent KEYCODE_DEL` for
+  backspace, `KEYCODE_ENTER` for submit. Each keystroke is an adb
+  round-trip (~100–300 ms on network ADB), i.e. typing-over-SSH feel —
+  fine for passwords/searches.
+- **D-pad + nav buttons**: `input keyevent` for up/down/left/right (19–22),
+  select (23), back (4), home (3), play/pause (85), volume (24/25).
+
 ### P3 — Evaluate later
 **10. Screen recording** — `screenrecord` (3-min cap, no DRM), pull + save. Nice demo material.
 **11. Permissions viewer/grant/revoke** — `dumpsys package <pkg>` parse + `pm grant/revoke`. Niche; gate behind Advanced.
-**12. Remote control / D-pad** — `input keyevent` buttons. Probably low value on desktop (TV remote in hand), but trivial if requested.
 **Skip:** screen mirroring, gamepad, media remote — phone-form-factor features.
 
 ## Related design items (from beta feedback)
@@ -75,8 +91,10 @@ Shape: `adb -s X exec-out screencap -p > local.png`, save to a user folder, show
 
 ## Suggested sequencing
 
-1. P1.1 + P1.2 (APK backup → cloning) — directly requested, builds on existing install path
-2. P1.4 screenshots (small, high-delight) and P2.5 force-stop (trivial)
-3. P1.3 file manager (largest single piece)
-4. A (optional-apps section) — data-model + UI, pairs naturally with the App List
-5. P2.6–9 as filler between releases
+1. ~~P1.1 + P1.2 (APK backup → cloning)~~ — shipped (PR #40)
+2. ~~P1.4 screenshots and P2.5 force-stop~~ — shipped (PR #39)
+3. **P1.3 file manager (largest single piece) — next**
+4. **9b remote control panel** — next after (or alongside) the file manager
+5. A (optional-apps section) — data-model + UI, pairs naturally with the App List
+6. P2.7 (shell runner) + P2.9 (CPU/net monitor) as filler between releases
+   (~~P2.6 + P2.8~~ shipped in PR #41)
