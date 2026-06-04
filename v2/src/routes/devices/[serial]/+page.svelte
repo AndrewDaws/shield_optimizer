@@ -584,12 +584,30 @@
   }
 
   async function enableLauncher(pkg: string) {
+    const prevDefault = currentLauncher?.package ?? null;
     launcherActionBusy = pkg;
     launcherActionMessage = "";
     try {
       const r = await api.enablePackage(serial, pkg);
-      launcherActionMessage = `${pkg}: ${r.message.trim() || (r.ok ? "enabled" : "failed")}`;
-      if (r.ok) await loadLauncher();
+      if (!r.ok) {
+        launcherActionMessage = `${pkg}: ${r.message.trim() || "failed"}`;
+        return;
+      }
+      await loadLauncher();
+      // Android clears its preferred-HOME record when a launcher package's
+      // state changes, so a freshly re-enabled launcher (especially stock)
+      // can steal the active-launcher slot. Enabling ≠ switching — put the
+      // user's previous default back.
+      if (prevDefault && prevDefault !== pkg && currentLauncher?.package === pkg) {
+        const back = await api.setDefaultLauncher(serial, prevDefault);
+        await loadLauncher();
+        launcherActionMessage = back.ok
+          ? `Enabled ${pkg}. Android made it the active launcher, so ${prevDefault} was re-set as your default.`
+          : `Enabled ${pkg} — Android made it the active launcher, and re-setting ${prevDefault} failed` +
+            `${back.last_error ? `: ${back.last_error}` : ""}. Use "Set as default" on your preferred launcher.`;
+      } else {
+        launcherActionMessage = `${pkg}: enabled`;
+      }
     } catch (e) {
       launcherActionMessage = String(e);
     } finally {
@@ -1729,6 +1747,13 @@
                         disabled={launcherActionBusy !== null}
                         title="pm disable-user --user 0 {l.entry.package}"
                       >Disable</button>
+                    {:else if isCurrent}
+                      <span
+                        class="muted small"
+                        title="Disabling the launcher you're currently using would leave the TV with no Home screen"
+                      >
+                        Set another launcher as default to disable this one
+                      </span>
                     {/if}
                   {/if}
                 </div>
