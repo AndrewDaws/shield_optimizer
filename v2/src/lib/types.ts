@@ -157,6 +157,7 @@ export interface ScanResult {
   subnet: string | null;
   found: string[];
   connected: string[];
+  unauthorized: string[];
   failed: string[];
   message: string;
 }
