@@ -12,8 +12,8 @@ pub mod engine;
 use std::path::PathBuf;
 
 use commands::{
-    apps, devices, health, install, launcher, loader, optimize, reboot, recovery, scan, screenshot,
-    sideload, snapshot, tuning, AppState,
+    apps, backup, devices, health, install, launcher, loader, optimize, reboot, recovery, scan,
+    screenshot, sideload, snapshot, tuning, AppState,
 };
 
 /// Resolve the OS-appropriate app data root (snapshots live in a `snapshots`
@@ -86,6 +86,8 @@ pub fn run() {
             apps::safety_info,
             sideload::install_apk,
             sideload::list_apks_in_folder,
+            backup::backup_apk,
+            backup::clone_app,
             snapshot::list_snapshots,
             snapshot::save_snapshot,
             snapshot::preview_apply,
