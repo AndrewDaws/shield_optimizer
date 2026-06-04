@@ -45,6 +45,12 @@ Latest pushed commit: `2bfe1de`. Major landings:
 **Status as of commit e5a6b0e+: every v1 must-fix is now landed.** See §2A
 "Parity status" below for the full row-by-row match-up against FEATURES.md.
 
+**Next feature wave (post-beta.7):** see [`ATVTOOLS-PARITY.md`](ATVTOOLS-PARITY.md)
+— comparison against aTV Tools and a prioritized roadmap. Headline items:
+APK backup → app cloning across devices, a /sdcard file manager, screenshots,
+force-stop, a shell runner, and an "Everything else / not curated" App List
+section for optional preinstalled apps.
+
 ### Big feature: Optimize / Restore wizard (LANDED in 1d9cd41)
 
 v1's `Run-Task -Mode Optimize` does:
