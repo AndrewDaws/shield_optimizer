@@ -83,6 +83,35 @@ send-text shipped in PR #41:
 **11. Permissions viewer/grant/revoke** — `dumpsys package <pkg>` parse + `pm grant/revoke`. Niche; gate behind Advanced.
 **Skip:** screen mirroring, gamepad, media remote — phone-form-factor features.
 
+**9c. App-files backup ("save the Projectivy theme")** *(requested 2026-06-04)* —
+pull known per-app config/export files to a durable local folder, push them
+back later. Builds on the file manager's pull/push.
+- **Reality check:** real app data lives in `/data/data/<pkg>` — unreachable
+  without root. What IS reachable is whatever the app exports to `/sdcard`
+  (Projectivy's Settings → Backup writes there, wallpaper/theme included).
+  So the feature is a **curated app-files catalog**: package → known export
+  path(s) on `/sdcard` + a one-line "export it in the app first" instruction
+  where needed. Runtime data, not code — same pattern as the app lists.
+- Saves land in `<app-data>/backups/<device>/<pkg>/…` with Open-folder
+  reveal (same pattern as screenshots), and a **Restore** (push back)
+  button per saved file. "Built-in links to do something with it" → at
+  minimum reveal-in-Finder + restore-to-device; uploading elsewhere stays
+  manual from the revealed folder.
+
+**9d. Curated sideload catalog on the Install APK tab** *(requested
+2026-06-04)* — a "Popular sideloads" section listing apps that must be
+downloaded outside the Play Store: SmartTube, TizenTube, etc.
+- Data-driven (`v2/data/sideload-catalog.json`): name, package id, one-line
+  description, **official** release/download URL (GitHub releases only — no
+  mirrors). UI: an "Open download page" button per entry (system browser);
+  the existing APK-folder scan then picks the file up for install.
+- Possible v2: fetch the latest release asset straight from the GitHub
+  releases API and install in one click — needs a per-entry asset-matching
+  rule and a clear "you are sideloading third-party software" note.
+- Platform check before shipping the list: TizenTube targets Samsung Tizen
+  TVs, not Android TV — confirm which build (e.g. TizenTube Cobalt?) is
+  meant, or swap in Android-TV-native equivalents.
+
 ## Related design items (from beta feedback)
 
 **A. "Optional" apps not in the catalog.** Many preinstalled apps aren't in our curated list but are safe-if-unused (user request). Proposal: an "Everything else" section at the bottom of the App List — third-party packages (`pm list packages -3`) not in the catalog, badged `NOT CURATED`, default action **Keep**, with Disable/Uninstall available behind the standard safety gate + a one-line "Optional — remove if you don't use it" description. Keeps the curated list authoritative while making the long tail actionable.
@@ -95,6 +124,8 @@ send-text shipped in PR #41:
 2. ~~P1.4 screenshots and P2.5 force-stop~~ — shipped (PR #39)
 3. **P1.3 file manager (largest single piece) — next**
 4. **9b remote control panel** — next after (or alongside) the file manager
-5. A (optional-apps section) — data-model + UI, pairs naturally with the App List
-6. P2.7 (shell runner) + P2.9 (CPU/net monitor) as filler between releases
+5. **9c app-files backup** — rides on the file manager's pull/push
+6. **9d sideload catalog** — small, independent; good filler PR
+7. A (optional-apps section) — data-model + UI, pairs naturally with the App List
+8. P2.7 (shell runner) + P2.9 (CPU/net monitor) as filler between releases
    (~~P2.6 + P2.8~~ shipped in PR #41)
