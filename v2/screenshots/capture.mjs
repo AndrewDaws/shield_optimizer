@@ -91,6 +91,11 @@ async function captureScreens(page, shot) {
     await page.getByText("Live typing", { exact: false }).first().waitFor();
     await shot("remote");
 
+    // 9. Files.
+    await page.locator("#tab-files").click();
+    await page.getByText("Download", { exact: true }).first().waitFor();
+    await shot("files");
+
     // 9. Install APK.
     await page.locator("#tab-sideload").click();
     await page.getByText("Install APK", { exact: false }).first().waitFor();
