@@ -2667,8 +2667,8 @@
         {/if}
       {/if}
 
-      <div class="sideload-catalog">
-        <h3>Popular sideloads</h3>
+      <details class="sideload-catalog">
+        <summary>Popular sideloads — common apps you download to install ({sideloadCatalog.length})</summary>
         <p class="muted small">
           Apps people commonly install that aren't on the Play Store. Links go to the
           official source only — download the APK there, then install it with the
@@ -2693,7 +2693,7 @@
             </li>
           {/each}
         </ul>
-      </div>
+      </details>
     </div>
   {:else if activeTab === "remote"}
     <div class="card" role="tabpanel" tabindex={0} id="tabpanel-remote" aria-labelledby="tab-remote">
@@ -3340,6 +3340,10 @@
     padding-top: 1.2rem;
     border-top: 1px solid var(--border);
   }
+  .sideload-catalog summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
   .catalog-list {
     list-style: none;
     padding: 0;
@@ -3352,6 +3356,10 @@
     gap: 1rem;
     padding: 0.6rem 0;
     border-bottom: 1px solid var(--bg-button);
+  }
+  .catalog-list li button {
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .remote-layout {
     display: flex;
