@@ -35,13 +35,23 @@ pub async fn prepare_optimize(
     device_type: crate::engine::DeviceType,
     mode: OptimizeMode,
 ) -> Result<OptimizePlan, String> {
+    prepare_optimize_impl(state.inner(), &serial, device_type, mode).await
+}
+
+/// Device-free core of `prepare_optimize` so it can run against a mock driver.
+pub async fn prepare_optimize_impl(
+    state: &AppState,
+    serial: &str,
+    device_type: crate::engine::DeviceType,
+    mode: OptimizeMode,
+) -> Result<OptimizePlan, String> {
     let apps = state.app_lists.for_device(device_type);
 
     let adb = state.adb_snapshot().await;
     let (installed_res, disabled_res, meminfo_res) = tokio::join!(
-        adb.shell(&serial, "pm list packages"),
-        adb.shell(&serial, "pm list packages -d"),
-        adb.shell(&serial, "dumpsys meminfo"),
+        adb.shell(serial, "pm list packages"),
+        adb.shell(serial, "pm list packages -d"),
+        adb.shell(serial, "dumpsys meminfo"),
     );
     let installed = installed_res.map_err(|e| format!("pm list packages: {e}"))?;
     let disabled = disabled_res.map_err(|e| format!("pm list packages -d: {e}"))?;
@@ -117,4 +127,71 @@ pub async fn apply_performance_settings(
         ok: !message.contains("Error") && !message.contains("Exception"),
         message,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::test_support::MockAdb;
+    use crate::engine::{
+        ActionMethod, AppEntry, AppListBundle, DeviceType, OptimizeAction, RiskTier,
+    };
+    use std::sync::Arc;
+
+    fn bloat(pkg: &str) -> AppEntry {
+        AppEntry {
+            package: pkg.into(),
+            name: pkg.into(),
+            method: ActionMethod::Disable,
+            risk: RiskTier::Safe,
+            optimize_description: String::new(),
+            restore_description: String::new(),
+            default_optimize: true,
+            default_restore: false,
+            play_store: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_optimize_builds_plan_from_device_state() {
+        let bundle = AppListBundle {
+            common: vec![bloat("com.example.bloat"), bloat("com.example.gone")],
+            shield: vec![],
+            googletv: vec![],
+        };
+        // "packages -d" rule must precede "pm list packages" — the disabled
+        // command contains both needles and MockAdb takes the first match.
+        let mock = MockAdb::default()
+            .on_shell("packages -d", "")
+            .on_shell(
+                "pm list packages",
+                "package:com.example.bloat\npackage:com.android.systemui",
+            )
+            .on_shell("meminfo", "");
+        let state = AppState::new(Arc::new(mock), bundle, std::env::temp_dir());
+
+        let plan =
+            prepare_optimize_impl(&state, "serial", DeviceType::Shield, OptimizeMode::Optimize)
+                .await
+                .expect("plan");
+
+        let installed = plan
+            .items
+            .iter()
+            .find(|i| i.entry.package == "com.example.bloat")
+            .expect("installed bloat in plan");
+        assert!(
+            matches!(installed.action, OptimizeAction::Disable),
+            "installed default-optimize app should be actionable"
+        );
+        let absent = plan
+            .items
+            .iter()
+            .find(|i| i.entry.package == "com.example.gone")
+            .expect("absent app in plan");
+        assert!(
+            matches!(absent.action, OptimizeAction::Skip { .. }),
+            "not-installed app should be skipped"
+        );
+    }
 }
