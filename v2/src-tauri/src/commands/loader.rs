@@ -80,10 +80,31 @@ mod tests {
         let names = load_known_names();
         assert!(!names.is_empty(), "known-names map should not be empty");
         assert_eq!(
-            names.get("com.limelight.noir").map(String::as_str),
-            Some("Artemis (Moonlight)"),
-            "Artemis package must map to its friendly name"
+            names.get("ca.devmesh.overseerrtv").map(String::as_str),
+            Some("Overseerr (TV)"),
+            "a known non-catalog sideload must map to its friendly name"
         );
+    }
+
+    #[test]
+    fn known_names_do_not_duplicate_catalog_entries() {
+        // Catalog members never reach "Everything else", so a known-name for one
+        // is dead data — keep the two sets disjoint.
+        let names = load_known_names();
+        let bundle = load_embedded_app_lists().expect("parse");
+        let catalog: std::collections::HashSet<&str> = bundle
+            .common
+            .iter()
+            .chain(bundle.shield.iter())
+            .chain(bundle.googletv.iter())
+            .map(|e| e.package.as_str())
+            .collect();
+        for pkg in names.keys() {
+            assert!(
+                !catalog.contains(pkg.as_str()),
+                "{pkg} is in both the catalog and known-names; drop it from one"
+            );
+        }
     }
 
     #[test]

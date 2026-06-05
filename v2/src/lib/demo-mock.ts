@@ -225,7 +225,7 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
     case "list_other_packages":
       return [
         { package: "com.teamsmart.videomanager.tv", system: false, enabled: true, name: "SmartTube" },
-        { package: "com.limelight.noir", system: false, enabled: true, name: "Artemis (Moonlight)" },
+        { package: "ca.devmesh.overseerrtv", system: false, enabled: true, name: "Overseerr (TV)" },
         { package: "org.fdroid.fdroid", system: false, enabled: true, name: "F-Droid" },
         { package: "com.android.vending", system: true, enabled: true, name: null },
         { package: "com.android.providers.media", system: true, enabled: true, name: null },

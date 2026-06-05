@@ -1,16 +1,17 @@
 {
-  "com.limelight.noir": "Artemis (Moonlight)",
-  "com.limelight": "Moonlight",
   "ca.devmesh.overseerrtv": "Overseerr (TV)",
   "com.spocky.projengmenu": "Projectivy Launcher",
   "org.pbskids.video": "PBS Kids Video",
-  "org.smarttube.stable": "SmartTube",
   "com.teamsmart.videomanager.tv": "SmartTube",
   "com.liskovsoft.smarttubetv.beta": "SmartTube (Beta)",
-  "io.gh.reisxd.tizentube.cobalt": "TizenTube Cobalt",
-  "org.jellyfin.androidtv": "Jellyfin",
-  "com.plexapp.android": "Plex",
-  "org.xbmc.kodi": "Kodi",
   "org.fdroid.fdroid": "F-Droid",
-  "com.stremio.one": "Stremio"
+  "air.com.shirogames.evoland12": "Evoland 2",
+  "net.eightbitape.dungeoncrawl": "Dungeon Crawl",
+  "com.adultswim.apps.now": "Adult Swim",
+  "com.imdbtv.livingroom": "IMDb TV (Freevee)",
+  "com.nest.android": "Google Nest",
+  "com.onemainstream.smithsonia.android": "Smithsonian Channel",
+  "com.amazon.music.tv": "Amazon Music",
+  "com.overdevs.at4k": "AT4K (Apple TV 4K launcher)",
+  "tv.projectivy.plugin.wallpaperprovider.overflight": "Projectivy Wallpaper: Overflight"
 }
