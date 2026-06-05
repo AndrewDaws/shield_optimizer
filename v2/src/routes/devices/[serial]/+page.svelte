@@ -2234,7 +2234,7 @@
       {:else}
         {@const actionable = optimizePlan.items.filter((i) => effectiveAction(i) !== "skip").length}
         {@const totalRunning = optimizePlan.items
-          .filter((i) => effectiveAction(i) !== "skip")
+          .filter((i) => naturalAction(i) !== null)
           .reduce((acc, i) => acc + (i.memory_mb ?? 0), 0)}
         <div class="plan-summary">
           <strong>{actionable}</strong> of {optimizePlan.items.length} items will be acted on.
@@ -2296,15 +2296,17 @@
                   <div class="muted small mono">{item.entry.package}</div>
                 </td>
                 <td class="num">
-                  {#if item.memory_mb && eff !== "skip"}
+                  {#if item.memory_mb && naturalAction(item) !== null}
+                    <!-- Show live RAM for any installed + enabled app (whether or
+                         not it's selected for action) — that's the "this is worth
+                         disabling" cue. Gate on state, not the chosen action.
+                         naturalAction is null for not-installed / already-disabled
+                         rows, so a residual process on a disabled app stays hidden. -->
                     <span
                       class:warn={item.memory_mb >= 200}
                       class:caution={item.memory_mb >= 100 && item.memory_mb < 200}
                     >{item.memory_mb.toFixed(1)} MB</span>
                   {:else}
-                    <!-- Skipped rows (already disabled / not installed) reclaim no
-                         RAM — a residual process lingering until reboot isn't
-                         actionable, so don't show a misleading figure. -->
                     <span class="muted">—</span>
                   {/if}
                 </td>
