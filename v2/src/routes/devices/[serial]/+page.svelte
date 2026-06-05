@@ -3011,6 +3011,19 @@
   }
   .app-table .app-cell {
     line-height: 1.3;
+    /* Long system package ids (com.google.android.overlay.modules.…) are one
+       unbreakable token; without this they force the column — and the whole
+       table — wider than the viewport, pushing the action buttons off-screen.
+       `anywhere` (not `break-word`) also shrinks the column's min-content width
+       so the table stops overflowing. Inherited by the child name/pkg rows. */
+    overflow-wrap: anywhere;
+  }
+  .app-table .rec-cell,
+  .app-table .tools-cell {
+    /* Keep the action/tool buttons from being squeezed once the name column
+       can shrink — they stay on one line at their natural width. */
+    white-space: nowrap;
+    width: 1%;
   }
   .app-name-row {
     font-size: 0.95rem;
