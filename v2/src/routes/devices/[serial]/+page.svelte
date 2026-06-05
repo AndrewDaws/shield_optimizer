@@ -73,6 +73,10 @@
   let filesEntries = $state<FileEntry[] | null>(null);
   let filesLoading = $state(false);
   let filesErr = $state<string | null>(null);
+  /// Power-user opt-in: browse the whole filesystem, not just /sdcard. Most
+  /// system paths are permission-denied without root; deletes outside /sdcard
+  /// get an extra confirmation and protected mounts are refused outright.
+  let powerUserPaths = $state(false);
   let filesBusy = $state<string | null>(null); // entry name currently being acted on
   let filesMessage = $state("");
   /// package → found backup-file paths (null until that app was searched).
@@ -1055,7 +1059,7 @@
     filesErr = null;
     filesMessage = "";
     try {
-      filesEntries = await api.listDir(serial, path);
+      filesEntries = await api.listDir(serial, path, powerUserPaths);
       filesPath = path;
     } catch (e) {
       filesErr = String(e);
@@ -1104,7 +1108,7 @@
     filesBusy = name;
     filesMessage = "";
     try {
-      const r = await api.pullFile(serial, `${filesPath}/${name}`, folder as string);
+      const r = await api.pullFile(serial, `${filesPath}/${name}`, folder as string, powerUserPaths);
       filesMessage = r.message;
     } catch (e) {
       filesMessage = String(e);
@@ -1119,7 +1123,7 @@
     filesBusy = "__upload__";
     filesMessage = "";
     try {
-      const r = await api.pushFile(serial, file as string, filesPath);
+      const r = await api.pushFile(serial, file as string, filesPath, powerUserPaths);
       filesMessage = r.message;
       if (r.ok) await loadFiles(filesPath);
     } catch (e) {
@@ -1131,11 +1135,16 @@
 
   async function deleteEntry(entry: FileEntry) {
     const what = entry.is_dir ? "folder AND EVERYTHING IN IT" : "file";
-    if (!confirm(`Delete ${what} "${entry.name}" from the device? This cannot be undone.`)) return;
+    const outsideSdcard = !filesPath.startsWith("/sdcard");
+    const prefix = outsideSdcard
+      ? `⚠️ SYSTEM PATH (${filesPath}). Deleting here can break the device.\n\n`
+      : "";
+    if (!confirm(`${prefix}Delete ${what} "${entry.name}" from the device? This cannot be undone.`))
+      return;
     filesBusy = entry.name;
     filesMessage = "";
     try {
-      const r = await api.deletePath(serial, `${filesPath}/${entry.name}`);
+      const r = await api.deletePath(serial, `${filesPath}/${entry.name}`, powerUserPaths);
       filesMessage = r.message;
       if (r.ok) await loadFiles(filesPath);
     } catch (e) {
@@ -1173,7 +1182,10 @@
   }
 
   function goToFolder(path: string) {
-    const dir = path.slice(0, path.lastIndexOf("/")) || "/sdcard";
+    // Parent dir. Below /sdcard normally; in power-user mode you can climb to
+    // the filesystem root.
+    const floor = powerUserPaths ? "/" : "/sdcard";
+    const dir = path.slice(0, path.lastIndexOf("/")) || floor;
     loadFiles(dir);
   }
 
@@ -1516,7 +1528,7 @@
     renaming = false; renameValue = "";
     remoteEcho = ""; remoteMessage = ""; remoteBuffer = "";
     sendTextValue = ""; sendTextMessage = ""; trimMessage = "";
-    filesPath = "/sdcard"; filesEntries = null; filesErr = null; filesMessage = "";
+    filesPath = "/sdcard"; filesEntries = null; filesErr = null; filesMessage = ""; powerUserPaths = false;
     appFilesResults = {}; fileCopyName = null; fileCopyTargets = [];
     applyResult = null; applyErr = null;
     tweaks = null; tweaksErr = null; tweaksActionMessage = ""; currentDisplayScaling = null; displayScaleMessage = "";
@@ -2583,8 +2595,24 @@
           </button>
         </div>
       </div>
-      <p class="muted small">
-        Browsing the device's user storage (<code>/sdcard</code>). System paths are off-limits by design.
+      <p class="muted small files-intro">
+        {#if powerUserPaths}
+          Browsing the whole filesystem. Most system paths are read-only without root;
+          deletes outside <code>/sdcard</code> are double-confirmed and critical mounts are refused.
+        {:else}
+          Browsing the device's user storage (<code>/sdcard</code>).
+        {/if}
+        <label class="inline-check">
+          <input
+            type="checkbox"
+            checked={powerUserPaths}
+            onchange={(e) => {
+              powerUserPaths = e.currentTarget.checked;
+              loadFiles(powerUserPaths ? filesPath : "/sdcard");
+            }}
+          />
+          Show system paths (power user)
+        </label>
       </p>
 
       <details class="app-backups">
@@ -2638,7 +2666,7 @@
         <button
           class="small-action subtle"
           onclick={() => goToFolder(filesPath)}
-          disabled={filesPath === "/sdcard" || filesLoading}
+          disabled={filesPath === "/" || (filesPath === "/sdcard" && !powerUserPaths) || filesLoading}
           title="Up one level"
         >
           ↑ Up

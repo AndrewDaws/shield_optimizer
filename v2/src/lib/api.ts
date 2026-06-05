@@ -123,14 +123,14 @@ export const api = {
   cloneApp: (sourceSerial: string, targetSerial: string, pkg: string) =>
     invoke<CloneAppResult>("clone_app", { sourceSerial, targetSerial, package: pkg }),
 
-  listDir: (serial: string, path: string) =>
-    invoke<FileEntry[]>("list_dir", { serial, path }),
-  pullFile: (serial: string, remotePath: string, localDir: string) =>
-    invoke<FileTransferResult>("pull_file", { serial, remotePath, localDir }),
-  pushFile: (serial: string, localPath: string, remoteDir: string) =>
-    invoke<FileTransferResult>("push_file", { serial, localPath, remoteDir }),
-  deletePath: (serial: string, path: string) =>
-    invoke<FileTransferResult>("delete_path", { serial, path }),
+  listDir: (serial: string, path: string, allowSystem = false) =>
+    invoke<FileEntry[]>("list_dir", { serial, path, allowSystem }),
+  pullFile: (serial: string, remotePath: string, localDir: string, allowSystem = false) =>
+    invoke<FileTransferResult>("pull_file", { serial, remotePath, localDir, allowSystem }),
+  pushFile: (serial: string, localPath: string, remoteDir: string, allowSystem = false) =>
+    invoke<FileTransferResult>("push_file", { serial, localPath, remoteDir, allowSystem }),
+  deletePath: (serial: string, path: string, allowSystem = false) =>
+    invoke<FileTransferResult>("delete_path", { serial, path, allowSystem }),
   findFiles: (serial: string, dirs: string[], pattern: string) =>
     invoke<string[]>("find_files", { serial, dirs, pattern }),
   copyFileToDevice: (sourceSerial: string, remotePath: string, targetSerial: string, targetDir: string) =>

@@ -11,13 +11,15 @@ use crate::adb::{parse_ls_output, FileEntry};
 
 use super::AppState;
 
-/// Validate a device path for file-manager use: must live under `/sdcard`,
-/// no `..` traversal, no control characters (they'd corrupt the shell line
-/// even quoted). Returns the trimmed path.
-fn validate_sdcard_path(path: &str) -> Result<String, String> {
+/// Validate a device path for file-manager use. Always absolute, no `..`
+/// traversal, no control characters (they'd corrupt the shell line even
+/// quoted). When `allow_system` is false the path must also live under
+/// `/sdcard`; power-user mode lifts only that boundary — the injection guards
+/// stay. Returns the trimmed path.
+fn validate_device_path(path: &str, allow_system: bool) -> Result<String, String> {
     let p = path.trim();
-    if p != "/sdcard" && !p.starts_with("/sdcard/") {
-        return Err(format!("Path must be under /sdcard: {p:?}"));
+    if !p.starts_with('/') {
+        return Err(format!("Path must be absolute: {p:?}"));
     }
     if p.split('/').any(|seg| seg == "..") {
         return Err("Path traversal (`..`) is not allowed.".to_string());
@@ -25,7 +27,16 @@ fn validate_sdcard_path(path: &str) -> Result<String, String> {
     if p.chars().any(|c| c.is_control()) {
         return Err("Path contains control characters.".to_string());
     }
+    if !allow_system && p != "/sdcard" && !p.starts_with("/sdcard/") {
+        return Err(format!("Path must be under /sdcard: {p:?}"));
+    }
     Ok(p.to_string())
+}
+
+/// `/sdcard`-confined validation — for the paths that are user-storage only by
+/// design (the device-to-device copy and the backup finder).
+fn validate_sdcard_path(path: &str) -> Result<String, String> {
+    validate_device_path(path, false)
 }
 
 /// Single-quote a validated device path for the device-side shell.
@@ -39,8 +50,9 @@ pub async fn list_dir(
     state: State<'_, AppState>,
     serial: String,
     path: String,
+    allow_system: bool,
 ) -> Result<Vec<FileEntry>, String> {
-    let path = validate_sdcard_path(&path)?;
+    let path = validate_device_path(&path, allow_system)?;
     let adb = state.adb_snapshot().await;
     // Trailing slash matters: `/sdcard` is itself a symlink (to
     // /storage/self/primary), and `ls -lA` on a bare symlink lists the link
@@ -81,8 +93,9 @@ pub async fn pull_file(
     serial: String,
     remote_path: String,
     local_dir: String,
+    allow_system: bool,
 ) -> Result<FileTransferResult, String> {
-    let remote = validate_sdcard_path(&remote_path)?;
+    let remote = validate_device_path(&remote_path, allow_system)?;
     let dir = PathBuf::from(&local_dir);
     if !dir.is_dir() {
         return Err(format!("Not a folder: {local_dir}"));
@@ -114,8 +127,9 @@ pub async fn push_file(
     serial: String,
     local_path: String,
     remote_dir: String,
+    allow_system: bool,
 ) -> Result<FileTransferResult, String> {
-    let remote_dir = validate_sdcard_path(&remote_dir)?;
+    let remote_dir = validate_device_path(&remote_dir, allow_system)?;
     let local = PathBuf::from(&local_path);
     if !local.is_file() {
         return Err(format!("Not a file: {local_path}"));
@@ -198,17 +212,40 @@ fn sanitize_temp(name: &str) -> String {
         .collect()
 }
 
-/// `delete_path` — remove a file or directory (recursively) under `/sdcard`.
-/// The UI confirms before calling; `/sdcard` itself is refused.
+/// Refuse deleting the filesystem root, `/sdcard` itself, or a critical system
+/// mount even in power-user mode — a recursive delete there could brick the
+/// device. Subpaths are the user's call (and mostly permission-denied without
+/// root). Returns the refusal message, or `None` if the path is deletable.
+fn protected_delete_reason(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed == "/sdcard" {
+        return Some("Refusing to delete /sdcard itself.".to_string());
+    }
+    const PROTECTED: &[&str] = &[
+        "", "/system", "/data", "/vendor", "/proc", "/sys", "/dev", "/boot", "/init", "/sbin",
+        "/bin", "/etc",
+    ];
+    if PROTECTED.contains(&trimmed) {
+        return Some(format!(
+            "Refusing to delete a protected system path: {path}"
+        ));
+    }
+    None
+}
+
+/// `delete_path` — remove a file or directory (recursively). Confined to
+/// `/sdcard` unless `allow_system` (power-user) is set; the UI confirms before
+/// calling, and `protected_delete_reason` still blocks catastrophic targets.
 #[tauri::command]
 pub async fn delete_path(
     state: State<'_, AppState>,
     serial: String,
     path: String,
+    allow_system: bool,
 ) -> Result<FileTransferResult, String> {
-    let path = validate_sdcard_path(&path)?;
-    if path.trim_end_matches('/') == "/sdcard" {
-        return Err("Refusing to delete /sdcard itself.".to_string());
+    let path = validate_device_path(&path, allow_system)?;
+    if let Some(reason) = protected_delete_reason(&path) {
+        return Err(reason);
     }
     let adb = state.adb_snapshot().await;
     let out = adb
@@ -314,6 +351,31 @@ mod tests {
         assert!(validate_sdcard_path("/sdcardX/evil").is_err());
         assert!(validate_sdcard_path("/sdcard/a\nb").is_err());
         assert!(validate_sdcard_path("").is_err());
+    }
+
+    #[test]
+    fn power_user_mode_allows_system_paths_but_keeps_injection_guards() {
+        // System paths are reachable only with allow_system.
+        assert!(validate_device_path("/system/app", false).is_err());
+        assert_eq!(
+            validate_device_path("/system/app", true).unwrap(),
+            "/system/app"
+        );
+        assert_eq!(validate_device_path("/", true).unwrap(), "/");
+        // The shell-safety guards never relax.
+        assert!(validate_device_path("/system/../x", true).is_err());
+        assert!(validate_device_path("/system/a\nb", true).is_err());
+        assert!(validate_device_path("relative/path", true).is_err());
+    }
+
+    #[test]
+    fn protected_paths_are_never_deletable() {
+        for p in ["/", "/system", "/data", "/vendor", "/sdcard", "/system/"] {
+            assert!(protected_delete_reason(p).is_some(), "{p} must be refused");
+        }
+        // Real targets are allowed through the guard.
+        assert!(protected_delete_reason("/sdcard/Download/old.zip").is_none());
+        assert!(protected_delete_reason("/system/app/Bloat/Bloat.apk").is_none());
     }
 
     #[test]
