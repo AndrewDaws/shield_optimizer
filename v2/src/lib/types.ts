@@ -138,6 +138,8 @@ export interface OtherPackage {
   package: string;
   system: boolean;
   enabled: boolean;
+  /// Friendly name for recognized sideloads (Artemis, Overseerr, …); null otherwise.
+  name?: string | null;
 }
 
 export interface SetLauncherResult {

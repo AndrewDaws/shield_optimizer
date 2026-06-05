@@ -224,11 +224,12 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return packageStates((args.packages as string[]) ?? []);
     case "list_other_packages":
       return [
-        { package: "com.teamsmart.videomanager.tv", system: false, enabled: true },
-        { package: "org.fdroid.fdroid", system: false, enabled: true },
-        { package: "com.android.vending", system: true, enabled: true },
-        { package: "com.android.providers.media", system: true, enabled: true },
-        { package: "com.nvidia.ota", system: true, enabled: false },
+        { package: "com.teamsmart.videomanager.tv", system: false, enabled: true, name: "SmartTube" },
+        { package: "com.limelight.noir", system: false, enabled: true, name: "Artemis (Moonlight)" },
+        { package: "org.fdroid.fdroid", system: false, enabled: true, name: "F-Droid" },
+        { package: "com.android.vending", system: true, enabled: true, name: null },
+        { package: "com.android.providers.media", system: true, enabled: true, name: null },
+        { package: "com.nvidia.ota", system: true, enabled: false, name: null },
       ];
     case "safety_info":
       return { kind: "safe" };

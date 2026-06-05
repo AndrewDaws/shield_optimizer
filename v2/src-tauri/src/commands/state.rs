@@ -1,5 +1,6 @@
 //! Shared application state held across Tauri command invocations.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,6 +22,12 @@ pub struct AppState {
     pub data_dir: PathBuf,
     /// Directory where snapshots are read from / written to.
     pub snapshot_dir: PathBuf,
+    /// package → friendly name for popular sideloads that aren't in the curated
+    /// catalog (Artemis, Overseerr, …). Display-only: lets the App List show and
+    /// search "Everything else" by a recognizable name instead of a bare package
+    /// ID. There's no cheap way to read an app's label over adb, so this is a
+    /// curated map loaded from `data/app-lists/known-names.json`.
+    pub known_names: HashMap<String, String>,
 }
 
 impl AppState {
@@ -30,7 +37,15 @@ impl AppState {
             app_lists,
             snapshot_dir: data_dir.join("snapshots"),
             data_dir,
+            known_names: HashMap::new(),
         }
+    }
+
+    /// Attach the curated package→name map. Builder-style so the existing
+    /// constructors (and their test callers) stay unchanged.
+    pub fn with_known_names(mut self, known_names: HashMap<String, String>) -> Self {
+        self.known_names = known_names;
+        self
     }
 
     /// Build the standard runtime state. If no adb binary can be found, we

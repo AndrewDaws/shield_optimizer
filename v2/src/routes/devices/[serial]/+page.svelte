@@ -130,7 +130,7 @@
   let visibleOthers = $derived(
     otherPackages.filter((o) => {
       if (!showSystemOthers && o.system) return false;
-      return matchesSearch(o.package, o.package);
+      return matchesSearch(o.name ?? o.package, o.package);
     }),
   );
   let appActionBusy = $state<string | null>(null);
@@ -2129,7 +2129,14 @@
               <tbody>
                 {#each visibleOthers as o (o.package)}
                   <tr>
-                    <td class="app-cell"><div class="mono small">{o.package}</div></td>
+                    <td class="app-cell">
+                      {#if o.name}
+                        <div class="app-name-row">{o.name}</div>
+                        <div class="muted small mono pkg-id">{o.package}</div>
+                      {:else}
+                        <div class="mono small">{o.package}</div>
+                      {/if}
+                    </td>
                     <td class="center type-cell">
                       <span class={`tag ${o.system ? "missing" : "installed"}`}>{o.system ? "SYSTEM" : "3RD-PARTY"}</span>
                     </td>

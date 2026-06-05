@@ -51,7 +51,8 @@ pub fn run() {
         }
     };
 
-    let state = AppState::default_for_runtime(app_lists, default_data_dir());
+    let state = AppState::default_for_runtime(app_lists, default_data_dir())
+        .with_known_names(loader::load_known_names());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

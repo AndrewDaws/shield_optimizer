@@ -90,6 +90,10 @@ pub struct OtherPackage {
     /// Preinstalled (not in `pm list packages -3`).
     pub system: bool,
     pub enabled: bool,
+    /// Friendly name from the curated known-names map, when recognized. Lets the
+    /// UI show and search "Everything else" by a real name (e.g. "Artemis")
+    /// instead of only the package id. `None` for unrecognized packages.
+    pub name: Option<String>,
 }
 
 /// Package-name prefixes that belong to the device vendor / OS, not the user.
@@ -117,11 +121,18 @@ pub async fn list_other_packages(
     state: State<'_, AppState>,
     serial: String,
 ) -> Result<Vec<OtherPackage>, String> {
+    list_other_packages_impl(state.inner(), &serial).await
+}
+
+pub async fn list_other_packages_impl(
+    state: &AppState,
+    serial: &str,
+) -> Result<Vec<OtherPackage>, String> {
     let adb = state.adb_snapshot().await;
     let (all_res, third_res, disabled_res) = tokio::join!(
-        adb.shell(&serial, "pm list packages"),
-        adb.shell(&serial, "pm list packages -3"),
-        adb.shell(&serial, "pm list packages -d"),
+        adb.shell(serial, "pm list packages"),
+        adb.shell(serial, "pm list packages -3"),
+        adb.shell(serial, "pm list packages -d"),
     );
     let all = all_res.map_err(|e| format!("pm list packages: {e}"))?;
     let third = third_res.map_err(|e| format!("pm list packages -3: {e}"))?;
@@ -150,6 +161,7 @@ pub async fn list_other_packages(
             // happens to flag third-party (updated Google IMEs, etc.).
             system: !third.contains(&package) || is_first_party_package(&package),
             enabled: !disabled.contains(&package),
+            name: state.known_names.get(&package).cloned(),
             package,
         })
         .collect();
@@ -397,5 +409,43 @@ mod tests {
     #[test]
     fn unrecognized_returns_none() {
         assert!(decode_uninstall_error("Something totally weird").is_none());
+    }
+
+    #[tokio::test]
+    async fn list_other_packages_attaches_known_friendly_names() {
+        use crate::commands::test_support::{state_with, MockAdb};
+        use std::collections::HashMap;
+
+        // Two sideloads not in the (empty) catalog: one known, one not.
+        let mock = MockAdb::default()
+            .on_shell(
+                "pm list packages -3",
+                "package:com.limelight.noir\npackage:com.unknown.app",
+            )
+            .on_shell(
+                "pm list packages",
+                "package:com.limelight.noir\npackage:com.unknown.app",
+            );
+        let mut names = HashMap::new();
+        names.insert(
+            "com.limelight.noir".to_string(),
+            "Artemis (Moonlight)".to_string(),
+        );
+        let state = state_with(mock).with_known_names(names);
+
+        let others = list_other_packages_impl(&state, "serial").await.unwrap();
+        let artemis = others
+            .iter()
+            .find(|o| o.package == "com.limelight.noir")
+            .expect("artemis listed");
+        assert_eq!(artemis.name.as_deref(), Some("Artemis (Moonlight)"));
+        let unknown = others
+            .iter()
+            .find(|o| o.package == "com.unknown.app")
+            .expect("unknown listed");
+        assert_eq!(
+            unknown.name, None,
+            "unrecognized package has no friendly name"
+        );
     }
 }
