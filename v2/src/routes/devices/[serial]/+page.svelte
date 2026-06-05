@@ -2354,7 +2354,7 @@
                        null ⇒ not-installed / already-disabled, where a residual
                        process isn't reclaimable). -->
                   {#if item.memory_mb && naturalAction(item) !== null}
-                    <RamBadge mb={item.memory_mb} />
+                    <RamBadge mb={item.memory_mb} label={false} />
                   {:else}
                     <span class="muted">—</span>
                   {/if}
