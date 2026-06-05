@@ -475,3 +475,38 @@ pub async fn apply_snapshot(
         summary,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::current_settings_map;
+    use crate::commands::test_support::MockAdb;
+
+    #[tokio::test]
+    async fn current_settings_map_pairs_keys_to_values_in_order() {
+        // tracked_setting_keys order: window/transition/animator scale,
+        // 4x hdmi, match_content_frame_rate, long_press_timeout.
+        let mock =
+            MockAdb::default().on_shell("settings get", "0.5\n0.5\n0.5\n1\nnull\n0\n1\n2\n400\n");
+        let map = current_settings_map(&mock, "serial").await;
+        assert_eq!(
+            map.get("global.window_animation_scale").map(String::as_str),
+            Some("0.5")
+        );
+        assert_eq!(
+            map.get("global.hdmi_system_audio_control_enabled")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            map.get("secure.match_content_frame_rate")
+                .map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            map.get("secure.long_press_timeout").map(String::as_str),
+            Some("400")
+        );
+        // "null" line is dropped, not stored.
+        assert!(!map.contains_key("global.hdmi_control_auto_wakeup_enabled"));
+    }
+}

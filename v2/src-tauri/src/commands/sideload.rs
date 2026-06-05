@@ -181,3 +181,22 @@ pub(crate) fn decode_install_error(text: &str) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::decode_install_error;
+
+    #[test]
+    fn decodes_common_install_failures() {
+        assert!(decode_install_error("INSTALL_FAILED_INSUFFICIENT_STORAGE")
+            .unwrap()
+            .contains("storage"));
+        assert!(decode_install_error("INSTALL_FAILED_VERSION_DOWNGRADE")
+            .unwrap()
+            .contains("newer"));
+        assert!(decode_install_error("INSTALL_FAILED_NO_MATCHING_ABIS")
+            .unwrap()
+            .contains("architecture"));
+        assert!(decode_install_error("Success").is_none());
+    }
+}

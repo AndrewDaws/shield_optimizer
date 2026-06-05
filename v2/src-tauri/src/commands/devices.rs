@@ -386,6 +386,35 @@ fn friendly_model_for(device_type: DeviceType, props: &DeviceProperties) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::test_support::{state_with, MockAdb};
+
+    #[tokio::test]
+    async fn list_devices_impl_parses_authorized_and_unauthorized() {
+        let mock = MockAdb::default()
+            .on_raw(
+                "devices",
+                "List of devices attached\n\
+                 192.168.42.71:5555\tdevice\n\
+                 192.168.42.143:5555\tunauthorized\n",
+            )
+            // harvest_properties' batched getprop — give a brand so the name
+            // resolves; other props default.
+            .on_shell("settings get global device_name", "Living Room\nNVIDIA\n");
+        let state = state_with(mock);
+        let devices = list_devices_impl(&state).await.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].serial, "192.168.42.71:5555");
+        assert_eq!(
+            devices[0].status,
+            crate::engine::types::DeviceStatus::Device
+        );
+        // Unauthorized device is surfaced with no properties.
+        assert_eq!(
+            devices[1].status,
+            crate::engine::types::DeviceStatus::Unauthorized
+        );
+        assert!(devices[1].properties.is_none());
+    }
 
     #[test]
     fn normalize_accepts_bare_ip() {

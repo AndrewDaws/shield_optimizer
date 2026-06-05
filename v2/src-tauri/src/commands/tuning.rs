@@ -69,6 +69,27 @@ pub struct WriteResult {
     pub message: String,
 }
 
+/// Build the `settings` shell command for a write/delete, with the safety
+/// checks that keep a malformed UI request from writing somewhere unexpected
+/// or breaking out of the shell. Pure so it can be unit-tested.
+fn build_setting_command(namespace: &str, key: &str, value: &str) -> Result<String, String> {
+    // Whitelist namespaces.
+    if !matches!(namespace, "global" | "secure" | "system") {
+        return Err(format!(
+            "namespace must be global/secure/system, got {namespace}"
+        ));
+    }
+    if value.is_empty() {
+        return Ok(format!("settings delete {namespace} {key}"));
+    }
+    // Settings values in practice are numbers or short identifiers; reject
+    // anything that could break out of the shell quoting.
+    if value.contains(';') || value.contains('|') || value.contains('&') {
+        return Err("value contains shell metacharacters".to_string());
+    }
+    Ok(format!("settings put {namespace} {key} {value}"))
+}
+
 /// `write_setting` — `settings put <namespace> <key> <value>`. Pass an empty
 /// `value` to delete (resets to default).
 #[tauri::command]
@@ -79,27 +100,9 @@ pub async fn write_setting(
     key: String,
     value: String,
 ) -> Result<WriteResult, String> {
-    // Whitelist namespaces so the command can't be tricked into writing to
-    // somewhere unexpected via a malformed UI request.
-    if !matches!(namespace.as_str(), "global" | "secure" | "system") {
-        return Ok(WriteResult {
-            ok: false,
-            message: format!("namespace must be global/secure/system, got {namespace}"),
-        });
-    }
-    let cmd = if value.is_empty() {
-        format!("settings delete {namespace} {key}")
-    } else {
-        // Basic value validation — reject characters that could break out of
-        // the shell quoting. Settings values in practice are numbers or short
-        // identifiers, so this is more than permissive enough.
-        if value.contains(';') || value.contains('|') || value.contains('&') {
-            return Ok(WriteResult {
-                ok: false,
-                message: "value contains shell metacharacters".to_string(),
-            });
-        }
-        format!("settings put {namespace} {key} {value}")
+    let cmd = match build_setting_command(&namespace, &key, &value) {
+        Ok(c) => c,
+        Err(message) => return Ok(WriteResult { ok: false, message }),
     };
     let adb = state.adb_snapshot().await;
     let out = adb
@@ -202,4 +205,37 @@ pub async fn set_display_scaling(
             out.stdout
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_setting_command;
+
+    #[test]
+    fn builds_put_for_valid_namespaces() {
+        assert_eq!(
+            build_setting_command("global", "window_animation_scale", "0.5").unwrap(),
+            "settings put global window_animation_scale 0.5"
+        );
+        assert_eq!(
+            build_setting_command("secure", "match_content_frame_rate", "2").unwrap(),
+            "settings put secure match_content_frame_rate 2"
+        );
+    }
+
+    #[test]
+    fn empty_value_deletes() {
+        assert_eq!(
+            build_setting_command("system", "foo", "").unwrap(),
+            "settings delete system foo"
+        );
+    }
+
+    #[test]
+    fn rejects_bad_namespace_and_metacharacters() {
+        assert!(build_setting_command("evil", "k", "1").is_err());
+        assert!(build_setting_command("global", "k", "1; rm -rf /").is_err());
+        assert!(build_setting_command("global", "k", "a|b").is_err());
+        assert!(build_setting_command("global", "k", "a&b").is_err());
+    }
 }
