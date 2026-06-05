@@ -17,6 +17,23 @@ When you add a new section, put it at the top; older releases go below.
 
 ---
 
+## v2-2.0.0-beta.10
+
+The version now reads as **2.0.0** so the app no longer looks like a v0 build —
+it's been a v2 beta all along.
+
+### Fixed
+
+- **App List and Optimize tabs rendered blank.** Two streaming apps (Pluto TV,
+  Tubi) were duplicated in the catalog; the table render aborted on the repeated
+  key, so the counts loaded but the rows never appeared. Removed the duplicates
+  and hardened the loader so a stray repeat can never blank the UI again.
+- **Optimize was slow to load the plan.** It re-profiled every connected device
+  first (and stalled on unauthorized ones). It now uses the type the page
+  already detected and goes straight to the device query.
+- **"Update available" link** now opens the full releases list instead of
+  redirecting to the latest v1 (PowerShell) release.
+
 ## v2-0.1.0-beta.9
 
 ### Added
