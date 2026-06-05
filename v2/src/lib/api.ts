@@ -26,6 +26,7 @@ import type {
   LauncherStatus,
   OptimizeMode,
   OptimizePlan,
+  OtherPackage,
   PerformanceProfile,
   PerformanceResult,
   RebootMode,
@@ -100,6 +101,8 @@ export const api = {
       "package_states",
       { serial, packages },
     ),
+  listOtherPackages: (serial: string) =>
+    invoke<OtherPackage[]>("list_other_packages", { serial }),
   safetyInfo: (pkg: string) => invoke<Safety>("safety_info", { package: pkg }),
   trimCaches: (serial: string) => invoke<ActionResult>("trim_caches", { serial }),
   sendText: (serial: string, text: string) =>

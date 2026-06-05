@@ -133,6 +133,12 @@ export interface ActionResult {
   message: string;
 }
 
+export interface OtherPackage {
+  package: string;
+  system: boolean;
+  enabled: boolean;
+}
+
 export interface SetLauncherResult {
   ok: boolean;
   strategy: string | null;

@@ -213,6 +213,14 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return apps;
     case "package_states":
       return packageStates((args.packages as string[]) ?? []);
+    case "list_other_packages":
+      return [
+        { package: "com.teamsmart.videomanager.tv", system: false, enabled: true },
+        { package: "org.fdroid.fdroid", system: false, enabled: true },
+        { package: "com.android.vending", system: true, enabled: true },
+        { package: "com.android.providers.media", system: true, enabled: true },
+        { package: "com.nvidia.ota", system: true, enabled: false },
+      ];
     case "safety_info":
       return { kind: "safe" };
     case "list_launchers":

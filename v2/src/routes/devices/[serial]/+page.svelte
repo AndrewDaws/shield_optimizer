@@ -25,6 +25,7 @@
     OptimizeMode,
     OptimizePlan,
     OptimizePlanItem,
+    OtherPackage,
     ScreenshotResult,
     FileEntry,
     Safety,
@@ -103,6 +104,32 @@
   let appsErr = $state<string | null>(null);
   /// package → 'enabled' | 'disabled' | 'missing' — refreshed alongside the app list.
   let appStates = $state<Record<string, "enabled" | "disabled" | "missing">>({});
+  let appSearch = $state("");
+  let hideNotInstalled = $state(false);
+  let showSystemOthers = $state(false);
+  /// Installed packages not in the curated catalog (sideloaded apps like
+  /// SmartTube + system internals). Loaded lazily on the Apps tab.
+  let otherPackages = $state<OtherPackage[]>([]);
+  let othersLoading = $state(false);
+
+  function matchesSearch(name: string, pkg: string): boolean {
+    const q = appSearch.trim().toLowerCase();
+    if (!q) return true;
+    return name.toLowerCase().includes(q) || pkg.toLowerCase().includes(q);
+  }
+
+  let visibleApps = $derived(
+    apps.filter((a) => {
+      if (hideNotInstalled && (appStates[a.package] ?? "enabled") === "missing") return false;
+      return matchesSearch(a.name, a.package);
+    }),
+  );
+  let visibleOthers = $derived(
+    otherPackages.filter((o) => {
+      if (!showSystemOthers && o.system) return false;
+      return matchesSearch(o.package, o.package);
+    }),
+  );
   let appActionBusy = $state<string | null>(null);
   let appActionMessage = $state("");
   /// Package the "Copy to another device" panel is open for, plus targets.
@@ -319,6 +346,72 @@
       appsErr = String(e);
     } finally {
       appsLoading = false;
+    }
+    loadOtherPackages();
+  }
+
+  // Everything installed that isn't in the curated catalog — sideloaded apps
+  // (SmartTube etc.) plus system internals. Loaded after the catalog so the
+  // curated list paints first; failures here don't block the main list.
+  async function loadOtherPackages() {
+    othersLoading = true;
+    try {
+      otherPackages = await api.listOtherPackages(serial);
+    } catch (e) {
+      appActionMessage = `Could not list other packages: ${e}`;
+    } finally {
+      othersLoading = false;
+    }
+  }
+
+  function patchOtherState(pkg: string, enabled: boolean | "removed") {
+    if (enabled === "removed") {
+      otherPackages = otherPackages.filter((o) => o.package !== pkg);
+    } else {
+      otherPackages = otherPackages.map((o) => (o.package === pkg ? { ...o, enabled } : o));
+    }
+  }
+
+  async function disableOther(pkg: string) {
+    appActionBusy = pkg;
+    appActionMessage = "";
+    try {
+      const r = await api.disablePackage(serial, pkg);
+      appActionMessage = `${pkg}: ${r.message.trim() || (r.ok ? "disabled" : "failed")}`;
+      if (r.ok) patchOtherState(pkg, false);
+    } catch (e) {
+      appActionMessage = `${pkg}: ${e}`;
+    } finally {
+      appActionBusy = null;
+    }
+  }
+
+  async function enableOther(pkg: string) {
+    appActionBusy = pkg;
+    appActionMessage = "";
+    try {
+      const r = await api.enablePackage(serial, pkg);
+      appActionMessage = `${pkg}: ${r.message.trim() || (r.ok ? "enabled" : "failed")}`;
+      if (r.ok) patchOtherState(pkg, true);
+    } catch (e) {
+      appActionMessage = `${pkg}: ${e}`;
+    } finally {
+      appActionBusy = null;
+    }
+  }
+
+  async function uninstallOther(pkg: string) {
+    if (!confirm(`Uninstall ${pkg}? Semi-reversible (Play Store reinstall or pm install-existing).`)) return;
+    appActionBusy = pkg;
+    appActionMessage = "";
+    try {
+      const r = await api.uninstallPackage(serial, pkg);
+      appActionMessage = `${pkg}: ${r.message.trim()}`;
+      if (r.ok) patchOtherState(pkg, "removed");
+    } catch (e) {
+      appActionMessage = `${pkg}: ${e}`;
+    } finally {
+      appActionBusy = null;
     }
   }
 
@@ -1300,6 +1393,7 @@
     launchers = []; currentLauncher = null; channelDisabled = null;
     launcherErr = null; launcherActionMessage = "";
     apps = []; appsErr = null; appStates = {}; appActionMessage = "";
+    otherPackages = []; appSearch = ""; hideNotInstalled = false; showSystemOthers = false;
     clonePkg = null; cloneTargets = [];
     snapshots = []; snapshotsErr = null; preview = null; previewPath = null; previewErr = null; saveResult = "";
     sideloadResult = ""; sideloadHint = null; discoveredApks = []; discoveredFolder = null;
@@ -1784,11 +1878,26 @@
       <div class="card-header">
         <h2>App List for {deviceTypeLabel(device.device_type)}</h2>
         <div class="header-actions">
-          <span class="muted">{apps.length} entries</span>
+          <span class="muted">{apps.length} curated · {otherPackages.length} other</span>
           <button onclick={loadApps} disabled={appsLoading}>
             {appsLoading ? "Loading…" : "Refresh"}
           </button>
         </div>
+      </div>
+      <div class="app-toolbar">
+        <input
+          class="app-search"
+          placeholder="Search apps by name or package…"
+          bind:value={appSearch}
+        />
+        <label class="inline-check">
+          <input type="checkbox" bind:checked={hideNotInstalled} />
+          Hide not installed
+        </label>
+        <label class="inline-check">
+          <input type="checkbox" bind:checked={showSystemOthers} />
+          Show system packages
+        </label>
       </div>
       {#if appsErr}
         <div class="error">{appsErr}</div>
@@ -1828,7 +1937,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each apps as a}
+            {#each visibleApps as a (a.package)}
               {@const state = appStates[a.package] ?? "enabled"}
               {@const rec = recommendation(a, state)}
               <tr>
@@ -1922,8 +2031,58 @@
                 </td>
               </tr>
             {/each}
+            {#if visibleApps.length === 0}
+              <tr><td colspan="5" class="muted">No curated apps match your filters.</td></tr>
+            {/if}
           </tbody>
         </table>
+
+        <div class="other-apps">
+          <h3>Everything else {othersLoading ? "" : `(${visibleOthers.length})`}</h3>
+          <p class="muted small">
+            Installed apps that aren't in the curated list — sideloaded apps (SmartTube etc.)
+            get the same <strong>Backup</strong> and <strong>Copy to…</strong> tools.
+            {showSystemOthers ? "Showing system packages too — disable these only if you know what they are." : "System packages are hidden; tick \"Show system packages\" to include them."}
+          </p>
+          {#if othersLoading}
+            <div class="muted">Loading installed packages…</div>
+          {:else if visibleOthers.length === 0}
+            <p class="muted">{otherPackages.length === 0 ? "No non-catalog packages found." : "Nothing matches your filters."}</p>
+          {:else}
+            <table class="app-table">
+              <thead>
+                <tr><th>Package</th><th class="center">Type</th><th class="center">State</th><th>Actions</th><th class="center">Tools</th></tr>
+              </thead>
+              <tbody>
+                {#each visibleOthers as o (o.package)}
+                  <tr>
+                    <td class="app-cell"><div class="mono small">{o.package}</div></td>
+                    <td class="center">
+                      <span class={`tag ${o.system ? "missing" : "installed"}`}>{o.system ? "SYSTEM" : "3RD PARTY"}</span>
+                    </td>
+                    <td class="center">
+                      <span class={`state-badge state-${o.enabled ? "enabled" : "disabled"}`}>
+                        {o.enabled ? "Enabled" : "Disabled"}
+                      </span>
+                    </td>
+                    <td class="rec-cell">
+                      {#if o.enabled}
+                        <button class="small-action subtle" onclick={() => disableOther(o.package)} disabled={appActionBusy === o.package} title="pm disable-user --user 0">Disable</button>
+                        <button class="small-action subtle danger" onclick={() => uninstallOther(o.package)} disabled={appActionBusy === o.package} title="pm uninstall --user 0">Uninstall</button>
+                      {:else}
+                        <button class="small-action subtle" onclick={() => enableOther(o.package)} disabled={appActionBusy === o.package} title="pm enable">Enable</button>
+                      {/if}
+                    </td>
+                    <td class="center tools-cell">
+                      <button class="small-action subtle" onclick={() => backupApkFor(o.package)} disabled={appActionBusy === o.package} title="Save this app's APK(s) to a folder on this computer">Backup</button>
+                      <button class="small-action subtle" onclick={() => startClone(o.package)} disabled={appActionBusy === o.package} title="Install this app onto another connected device">Copy to…</button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {/if}
+        </div>
       {/if}
     </div>
   {:else if activeTab === "optimize"}
@@ -3246,6 +3405,30 @@
     font-size: 0.95rem;
   }
   .dir-link:hover { color: var(--accent); }
+  .app-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 0.6rem 0;
+  }
+  .app-search {
+    flex: 1;
+    min-width: 220px;
+    max-width: 380px;
+  }
+  .inline-check {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
+  .other-apps {
+    margin-top: 1.6rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--border);
+  }
   .plan-summary {
     margin: 0.4rem 0;
     padding: 0.5rem 0.8rem;
