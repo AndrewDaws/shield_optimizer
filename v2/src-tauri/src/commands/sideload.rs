@@ -70,6 +70,27 @@ pub struct DiscoveredApk {
     pub path: String,
     pub name: String,
     pub size_bytes: u64,
+    /// Package id read from the APK's AndroidManifest.xml, when decodable.
+    /// Lets the UI flag APKs that are already installed on the device.
+    pub package: Option<String>,
+}
+
+/// Read the `package` attribute from an APK's binary `AndroidManifest.xml`.
+/// Returns `None` if the file isn't a readable APK or the manifest can't be
+/// decoded — best-effort; the install flow doesn't depend on it.
+fn read_apk_package_id(apk_path: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(apk_path).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    let mut manifest = zip.by_name("AndroidManifest.xml").ok()?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut manifest, &mut bytes).ok()?;
+    let doc = axmldecoder::parse(&bytes).ok()?;
+    if let Some(axmldecoder::Node::Element(root)) = doc.get_root() {
+        if root.get_tag() == "manifest" {
+            return root.get_attributes().get("package").cloned();
+        }
+    }
+    None
 }
 
 /// `list_apks_in_folder` — scan `folder` for `.apk` files. Used by the
@@ -105,10 +126,12 @@ pub async fn list_apks_in_folder(folder: String) -> Result<Vec<DiscoveredApk>, S
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
+        let package = read_apk_package_id(&path);
         out.push(DiscoveredApk {
             path: path.display().to_string(),
             name,
             size_bytes: metadata.len(),
+            package,
         });
         if out.len() >= 50 {
             break;

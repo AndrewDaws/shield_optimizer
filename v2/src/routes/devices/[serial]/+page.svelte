@@ -793,11 +793,17 @@
     await scanApkFolder(picked);
   }
 
+  /// package id → state, for the discovered APKs, so each row can say whether
+  /// it's already installed on this device.
+  let apkInstallState = $state<Record<string, "enabled" | "disabled" | "missing">>({});
+
   async function scanApkFolder(folder: string) {
     discoveryBusy = true;
     try {
       discoveredApks = await api.listApksInFolder(folder);
       discoveredFolder = folder;
+      const pkgs = discoveredApks.map((a) => a.package).filter((p): p is string => !!p);
+      apkInstallState = pkgs.length ? await api.packageStates(serial, pkgs) : {};
     } catch (e) {
       sideloadResult = `Scan failed: ${e}`;
     } finally {
@@ -1462,7 +1468,7 @@
     otherPackages = []; appSearch = ""; hideNotInstalled = false; showSystemOthers = false;
     clonePkg = null; cloneTargets = [];
     snapshots = []; snapshotsErr = null; preview = null; previewPath = null; previewErr = null; saveResult = "";
-    sideloadResult = ""; sideloadHint = null; sideloadResultPath = null; discoveredApks = []; discoveredFolder = null;
+    sideloadResult = ""; sideloadHint = null; sideloadResultPath = null; discoveredApks = []; discoveredFolder = null; apkInstallState = {};
     headerActionMsg = ""; recoveryResult = null; recoveryErr = null; screenshot = null;
     renaming = false; renameValue = "";
     remoteEcho = ""; remoteMessage = ""; remoteBuffer = "";
@@ -2674,7 +2680,17 @@
               <div class="apk-row">
                 <div class="apk-meta">
                   <div class="apk-name">{apk.name}</div>
-                  <div class="muted small">{formatBytes(apk.size_bytes)}</div>
+                  <div class="muted small">
+                    {formatBytes(apk.size_bytes)}
+                    {#if apk.package}
+                      · {apk.package}
+                      {#if apkInstallState[apk.package] === "enabled"}
+                        <span class="tag installed">INSTALLED</span>
+                      {:else if apkInstallState[apk.package] === "disabled"}
+                        <span class="tag disabled">INSTALLED (disabled)</span>
+                      {/if}
+                    {/if}
+                  </div>
                 </div>
                 <button
                   class="small-action primary"

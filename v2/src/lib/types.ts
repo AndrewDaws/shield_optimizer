@@ -161,6 +161,7 @@ export interface DiscoveredApk {
   path: string;
   name: string;
   size_bytes: number;
+  package: string | null;
 }
 
 export interface BackupApkResult {
