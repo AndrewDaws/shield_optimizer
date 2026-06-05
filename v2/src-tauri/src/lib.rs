@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use commands::{
     apps, backup, devices, files, health, input, install, launcher, loader, optimize, reboot,
-    recovery, scan, screenshot, sideload, snapshot, tuning, AppState,
+    recovery, scan, screenshot, sideload, snapshot, tuning, update, AppState,
 };
 
 /// Resolve the OS-appropriate app data root (snapshots live in a `snapshots`
@@ -113,6 +113,7 @@ pub fn run() {
             tuning::get_display_scaling,
             optimize::prepare_optimize,
             optimize::apply_performance_settings,
+            update::check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

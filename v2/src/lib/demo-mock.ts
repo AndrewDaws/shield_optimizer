@@ -205,6 +205,13 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
   switch (cmd) {
     case "adb_status":
       return { available: true, path: "/opt/homebrew/bin/adb", last_probe: "2026-06-02T14:40:00Z" };
+    case "check_for_update":
+      return {
+        current: "0.1.0-beta.9",
+        latest: "0.1.0-beta.9",
+        update_available: false,
+        url: "https://github.com/bryanroscoe/shield_optimizer/releases/latest",
+      };
     case "list_devices":
       return [device];
     case "device_profile":

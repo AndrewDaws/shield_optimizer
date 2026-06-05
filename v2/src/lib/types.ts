@@ -216,6 +216,13 @@ export interface AdbStatus {
   last_probe: string | null;
 }
 
+export interface UpdateInfo {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  url: string;
+}
+
 export interface InstallResult {
   ok: boolean;
   path: string | null;

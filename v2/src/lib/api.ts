@@ -42,11 +42,13 @@ import type {
   SnapshotApplyPlan,
   SnapshotFile,
   TweaksState,
+  UpdateInfo,
   WriteResult,
 } from "./types";
 
 export const api = {
   adbStatus: () => invoke<AdbStatus>("adb_status"),
+  checkForUpdate: () => invoke<UpdateInfo>("check_for_update"),
   installAdb: () => invoke<InstallResult>("install_adb"),
   restartAdb: () => invoke<RestartResult>("restart_adb"),
   scanNetwork: () => invoke<ScanResult>("scan_network"),

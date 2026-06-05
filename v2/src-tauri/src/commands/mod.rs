@@ -22,5 +22,6 @@ pub mod sideload;
 pub mod snapshot;
 pub mod state;
 pub mod tuning;
+pub mod update;
 
 pub use state::AppState;

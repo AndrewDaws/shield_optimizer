@@ -1,14 +1,33 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { page } from "$app/stores";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { getThemePref, setThemePref, type ThemePref } from "$lib/theme";
+  import { api } from "$lib/api";
+  import type { UpdateInfo } from "$lib/types";
 
   let { children } = $props();
 
   let theme = $state<ThemePref>("system");
+  let update = $state<UpdateInfo | null>(null);
+
   onMount(() => {
     theme = getThemePref();
+    // Best-effort update check — never blocks the UI; failures stay silent.
+    api
+      .checkForUpdate()
+      .then((u) => (update = u))
+      .catch(() => {});
   });
+
+  async function openReleasePage() {
+    if (!update) return;
+    try {
+      await openUrl(update.url);
+    } catch {
+      /* ignore */
+    }
+  }
 
   function pickTheme(pref: ThemePref) {
     theme = pref;
@@ -27,7 +46,16 @@
     <div class="brand">
       <span class="logo-dot"></span>
       <span class="title">Shield Optimizer</span>
-      <span class="version">v2</span>
+      {#if update}
+        <span class="version" title="Installed version">v{update.current}</span>
+        {#if update.update_available}
+          <button class="update-badge" onclick={openReleasePage} title="Open the release page">
+            Update available → v{update.latest}
+          </button>
+        {/if}
+      {:else}
+        <span class="version">v2</span>
+      {/if}
     </div>
     <div class="header-right">
       <nav>
@@ -270,9 +298,23 @@
   }
   .version {
     color: var(--fg-muted);
-    font-weight: 400;
-    font-size: 0.85rem;
+    font-weight: 500;
+    font-size: 0.9rem;
+    font-family: ui-monospace, monospace;
   }
+  .update-badge {
+    margin-left: 0.6rem;
+    padding: 0.15rem 0.6rem;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: var(--accent-surface, transparent);
+    color: var(--accent);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .update-badge:hover { background: var(--accent); color: #fff; }
   .header-right {
     display: flex;
     align-items: center;
