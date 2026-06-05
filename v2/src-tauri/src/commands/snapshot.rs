@@ -13,11 +13,39 @@ use crate::engine::snapshot::{
 
 use super::AppState;
 
+/// Read the device's current values for the tracked setting keys, keyed the
+/// same way snapshots store them (`"<ns>.<key>"`). Used so apply-plans can
+/// skip settings already at the target value. Best-effort — a failed read
+/// yields an empty map (everything treated as needing a write).
+async fn current_settings_map(
+    adb: &dyn crate::adb::AdbDriver,
+    serial: &str,
+) -> std::collections::BTreeMap<String, String> {
+    let keys = tracked_setting_keys();
+    let cmd = keys
+        .iter()
+        .map(|(ns, key)| format!("settings get {ns} {key}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let mut map = std::collections::BTreeMap::new();
+    if let Ok(out) = adb.shell(serial, &cmd).await {
+        for ((ns, key), raw) in keys.iter().zip(out.stdout.lines()) {
+            let v = raw.trim();
+            if !v.is_empty() && v != "null" {
+                map.insert(format!("{ns}.{key}"), v.to_string());
+            }
+        }
+    }
+    map
+}
+
 #[derive(Serialize)]
 pub struct SnapshotFile {
     pub path: String,
     pub filename: String,
     pub saved_at: String,
+    /// User-given snapshot name (schema v2+); None for older snapshots.
+    pub label: Option<String>,
     pub device_name: String,
     pub device_serial: String,
     pub device_type: crate::engine::DeviceType,
@@ -93,6 +121,7 @@ pub async fn list_snapshots(state: State<'_, AppState>) -> Result<Vec<SnapshotFi
             path: path.display().to_string(),
             filename,
             saved_at: snap.saved_at,
+            label: snap.label,
             device_name: snap.device_name,
             device_serial: snap.device_serial,
             device_type: snap.device_type,
@@ -112,7 +141,12 @@ pub async fn save_snapshot(
     state: State<'_, AppState>,
     serial: String,
     device_name: String,
+    label: Option<String>,
 ) -> Result<SnapshotFile, String> {
+    // Empty/whitespace label is treated as "no label".
+    let label = label
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let adb = state.adb_snapshot().await;
 
     // Pull all the inputs the engine needs.
@@ -176,6 +210,7 @@ pub async fn save_snapshot(
     let snap = Snapshot {
         schema_version: SCHEMA_VERSION,
         saved_at: saved_at.clone(),
+        label: label.clone(),
         device_name: device_name.clone(),
         device_serial: serial.clone(),
         device_type,
@@ -191,7 +226,9 @@ pub async fn save_snapshot(
         .await
         .map_err(|e| format!("create snapshot dir: {e}"))?;
 
-    let safe_name: String = device_name
+    // Filename stem prefers the user's label, falling back to the device name.
+    let stem_source = label.as_deref().unwrap_or(&device_name);
+    let safe_name: String = stem_source
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
@@ -216,6 +253,7 @@ pub async fn save_snapshot(
         path: path.display().to_string(),
         filename,
         saved_at: snap.saved_at,
+        label: snap.label,
         device_name: snap.device_name,
         device_serial: snap.device_serial,
         device_type: snap.device_type,
@@ -267,6 +305,7 @@ pub async fn preview_apply(
     let disabled_pkgs = parse_disabled_packages_output(&disabled.stdout);
 
     let device = crate::commands::devices::device_profile_impl(state.inner(), &serial).await?;
+    let current_settings = current_settings_map(adb.as_ref(), &serial).await;
 
     let plan = compute_apply_plan(
         &snap,
@@ -274,6 +313,7 @@ pub async fn preview_apply(
             target_device_type: device.device_type,
             currently_installed: &installed_pkgs,
             currently_disabled: &disabled_pkgs,
+            current_settings: &current_settings,
         },
     );
     Ok(plan)
@@ -329,12 +369,14 @@ pub async fn apply_snapshot(
     let disabled_pkgs = parse_disabled_packages_output(&disabled.stdout);
 
     let device = crate::commands::devices::device_profile_impl(state.inner(), &serial).await?;
+    let current_settings = current_settings_map(adb.as_ref(), &serial).await;
     let plan = compute_apply_plan(
         &snap,
         &ApplyPlanInputs {
             target_device_type: device.device_type,
             currently_installed: &installed_pkgs,
             currently_disabled: &disabled_pkgs,
+            current_settings: &current_settings,
         },
     );
 
@@ -363,10 +405,14 @@ pub async fn apply_snapshot(
     let mut launcher_message = None;
     if let Some(launcher_pkg) = &plan.launcher_to_set {
         // Reuse the multi-strategy set-default helper from the launcher module.
+        // No stock takeover here: a snapshot that had stock disabled carries
+        // that in its disabled-packages list, so the polite strategies plus
+        // the package application get the same end state without surprises.
         let result = crate::commands::launcher::set_default_launcher_impl(
             state.inner(),
             &serial,
             launcher_pkg,
+            false,
         )
         .await;
         if let Ok(r) = result {

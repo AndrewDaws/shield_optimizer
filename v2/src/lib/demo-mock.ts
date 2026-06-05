@@ -105,6 +105,7 @@ const snapshots: SnapshotFile[] = [
     path: "/Users/you/Library/Application Support/com.shieldoptimizer.app/snapshots/shield-living-room-2026-05-12.json",
     filename: "shield-living-room-2026-05-12.json",
     saved_at: "2026-05-12T18:42:09Z",
+    label: "After debloat + Projectivy",
     device_name: "NVIDIA SHIELD Android TV",
     device_serial: SERIAL,
     device_type: "shield",
@@ -116,6 +117,7 @@ const snapshots: SnapshotFile[] = [
     path: "/Users/you/Library/Application Support/com.shieldoptimizer.app/snapshots/shield-bedroom-2026-04-28.json",
     filename: "shield-bedroom-2026-04-28.json",
     saved_at: "2026-04-28T09:15:33Z",
+    label: null,
     device_name: "SHIELD (Bedroom)",
     device_serial: "192.168.1.57:5555",
     device_type: "shield",
@@ -181,12 +183,35 @@ function optimizePlan(mode: "optimize" | "restore"): OptimizePlan {
   return { mode, items };
 }
 
+function demoFiles(path: string) {
+  if (path === "/sdcard") {
+    return [
+      { name: "Download", is_dir: true, is_symlink: false, size_bytes: 4096, modified: "2026-05-28 19:02" },
+      { name: "Movies", is_dir: true, is_symlink: false, size_bytes: 4096, modified: "2026-04-11 21:47" },
+      { name: "Projectivy", is_dir: true, is_symlink: false, size_bytes: 4096, modified: "2026-05-12 18:40" },
+      { name: "device-report.txt", is_dir: false, is_symlink: false, size_bytes: 18432, modified: "2026-06-01 09:15" },
+      { name: "screen-test.png", is_dir: false, is_symlink: false, size_bytes: 2411724, modified: "2026-05-30 20:08" },
+    ];
+  }
+  return [
+    { name: "smarttube-backup.json", is_dir: false, is_symlink: false, size_bytes: 9216, modified: "2026-05-12 18:41" },
+    { name: "wallpaper.jpg", is_dir: false, is_symlink: false, size_bytes: 1048576, modified: "2026-05-12 18:40" },
+  ];
+}
+
 // Map of command name → handler. Unlisted commands fall through to a benign
 // success so a stray click during capture never throws.
 function handle(cmd: string, args: Record<string, unknown>): unknown {
   switch (cmd) {
     case "adb_status":
       return { available: true, path: "/opt/homebrew/bin/adb", last_probe: "2026-06-02T14:40:00Z" };
+    case "check_for_update":
+      return {
+        current: "0.1.0-beta.9",
+        latest: "0.1.0-beta.9",
+        update_available: false,
+        url: "https://github.com/bryanroscoe/shield_optimizer/releases/latest",
+      };
     case "list_devices":
       return [device];
     case "device_profile":
@@ -197,6 +222,14 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return apps;
     case "package_states":
       return packageStates((args.packages as string[]) ?? []);
+    case "list_other_packages":
+      return [
+        { package: "com.teamsmart.videomanager.tv", system: false, enabled: true },
+        { package: "org.fdroid.fdroid", system: false, enabled: true },
+        { package: "com.android.vending", system: true, enabled: true },
+        { package: "com.android.providers.media", system: true, enabled: true },
+        { package: "com.nvidia.ota", system: true, enabled: false },
+      ];
     case "safety_info":
       return { kind: "safe" };
     case "list_launchers":
@@ -207,6 +240,8 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return false;
     case "get_tweaks":
       return tweaks;
+    case "list_dir":
+      return demoFiles(args.path as string);
     case "get_display_scaling":
       return { size: "1920x1080 (default)", density: "320 (default)" };
     case "list_snapshots":
@@ -231,6 +266,7 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
           "secure.match_content_frame_rate": "2",
           "global.window_animation_scale": "0.5",
         },
+        settings_already_set: ["global.transition_animation_scale", "global.animator_duration_scale"],
         cross_device_warning: null,
       };
     case "apply_snapshot":

@@ -120,6 +120,7 @@ export interface SnapshotFile {
   path: string;
   filename: string;
   saved_at: string;
+  label: string | null;
   device_name: string;
   device_serial: string;
   device_type: DeviceType;
@@ -133,11 +134,20 @@ export interface ActionResult {
   message: string;
 }
 
+export interface OtherPackage {
+  package: string;
+  system: boolean;
+  enabled: boolean;
+}
+
 export interface SetLauncherResult {
   ok: boolean;
   strategy: string | null;
   current_launcher: string | null;
   last_error: string | null;
+  /// Polite strategies failed, but disabling the active stock launcher would
+  /// work — the UI confirms with the user and retries with allowStockDisable.
+  stock_takeover_available: boolean;
 }
 
 export interface InstallApkResult {
@@ -151,6 +161,7 @@ export interface DiscoveredApk {
   path: string;
   name: string;
   size_bytes: number;
+  package: string | null;
 }
 
 export interface BackupApkResult {
@@ -186,10 +197,31 @@ export interface SendTextResult {
   message: string;
 }
 
+export interface FileEntry {
+  name: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  size_bytes: number;
+  modified: string;
+}
+
+export interface FileTransferResult {
+  ok: boolean;
+  message: string;
+  local_path: string | null;
+}
+
 export interface AdbStatus {
   available: boolean;
   path: string | null;
   last_probe: string | null;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  url: string;
 }
 
 export interface InstallResult {
@@ -204,6 +236,7 @@ export interface SnapshotApplyPlan {
   packages_not_installed: string[];
   launcher_to_set: string | null;
   settings_to_write: Record<string, string>;
+  settings_already_set: string[];
   cross_device_warning: string | null;
 }
 

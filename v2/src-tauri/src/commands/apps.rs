@@ -85,6 +85,83 @@ pub async fn package_states(
 }
 
 #[derive(Serialize)]
+pub struct OtherPackage {
+    pub package: String,
+    /// Preinstalled (not in `pm list packages -3`).
+    pub system: bool,
+    pub enabled: bool,
+}
+
+/// Package-name prefixes that belong to the device vendor / OS, not the user.
+/// Android flags some of these as third-party (a preinstalled Google language
+/// IME updated into `/data` shows up in `pm list packages -3`), which would
+/// otherwise mislabel them and bury genuinely-sideloaded apps. Treating these
+/// as system keeps the default view focused on what the user actually added.
+fn is_first_party_package(pkg: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "com.google.",
+        "com.android.",
+        "com.nvidia.",
+        "com.amazon.",
+        "org.chromium.",
+    ];
+    pkg == "android" || PREFIXES.iter().any(|p| pkg.starts_with(p))
+}
+
+/// `list_other_packages` — every installed package that is NOT in the curated
+/// catalog, so the App List can act on the long tail (sideloaded apps like
+/// SmartTube most of all — they get the same Backup / Copy / Disable tools).
+/// Third-party first, then system, names ascending.
+#[tauri::command]
+pub async fn list_other_packages(
+    state: State<'_, AppState>,
+    serial: String,
+) -> Result<Vec<OtherPackage>, String> {
+    let adb = state.adb_snapshot().await;
+    let (all_res, third_res, disabled_res) = tokio::join!(
+        adb.shell(&serial, "pm list packages"),
+        adb.shell(&serial, "pm list packages -3"),
+        adb.shell(&serial, "pm list packages -d"),
+    );
+    let all = all_res.map_err(|e| format!("pm list packages: {e}"))?;
+    let third = third_res.map_err(|e| format!("pm list packages -3: {e}"))?;
+    let disabled = disabled_res.map_err(|e| format!("pm list packages -d: {e}"))?;
+
+    let third: HashSet<String> = parse_installed_packages_output(&third.stdout)
+        .into_iter()
+        .collect();
+    let disabled: HashSet<String> = parse_disabled_packages_output(&disabled.stdout)
+        .into_iter()
+        .collect();
+    let catalog: HashSet<&str> = state
+        .app_lists
+        .common
+        .iter()
+        .chain(state.app_lists.shield.iter())
+        .chain(state.app_lists.googletv.iter())
+        .map(|e| e.package.as_str())
+        .collect();
+
+    let mut out: Vec<OtherPackage> = parse_installed_packages_output(&all.stdout)
+        .into_iter()
+        .filter(|p| !catalog.contains(p.as_str()))
+        .map(|package| OtherPackage {
+            // System if Android says so OR it's a vendor/OS package Android
+            // happens to flag third-party (updated Google IMEs, etc.).
+            system: !third.contains(&package) || is_first_party_package(&package),
+            enabled: !disabled.contains(&package),
+            package,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.system
+            .cmp(&b.system)
+            .then_with(|| a.package.cmp(&b.package))
+    });
+    Ok(out)
+}
+
+#[derive(Serialize)]
 pub struct ActionResult {
     pub ok: bool,
     /// `pm` stdout/stderr — surfaced to the UI so the user can see the actual
@@ -286,6 +363,23 @@ async fn run(state: &AppState, serial: &str, cmd: &str) -> Result<ActionResult, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_party_packages_classified_as_system() {
+        // Vendor/OS packages — system even when Android flags them third-party.
+        assert!(is_first_party_package(
+            "com.google.android.apps.inputmethod.hindi"
+        ));
+        assert!(is_first_party_package("com.android.vending"));
+        assert!(is_first_party_package("com.nvidia.ota"));
+        assert!(is_first_party_package("android"));
+        // Genuinely-sideloaded apps stay third-party.
+        assert!(!is_first_party_package("com.teamsmart.videomanager.tv"));
+        assert!(!is_first_party_package("ca.devmesh.overseerrtv"));
+        assert!(!is_first_party_package("air.com.shirogames.evoland12"));
+        // Not fooled by a prefix appearing mid-string.
+        assert!(!is_first_party_package("org.evil.com.google.fake"));
+    }
 
     #[test]
     fn decodes_protected_system_app() {

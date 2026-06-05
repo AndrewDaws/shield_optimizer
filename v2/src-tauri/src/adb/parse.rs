@@ -62,6 +62,53 @@ pub fn parse_device_list(adb_devices_output: &str) -> Vec<DeviceListEntry> {
     entries
 }
 
+/// One entry from `ls -lA` on the device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub size_bytes: u64,
+    /// `YYYY-MM-DD HH:MM`, as toybox prints it.
+    pub modified: String,
+}
+
+/// Parse toybox `ls -lA` output into entries. Skips the `total N` header and
+/// any line that doesn't match the 8-column shape (column counts are stable
+/// across Android's toybox builds; names may contain spaces, so the name is
+/// the regex tail rather than a whitespace split). Symlinks keep the link
+/// name and drop the `-> target` part.
+pub fn parse_ls_output(output: &str) -> Vec<FileEntry> {
+    static ROW: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"^([a-zA-Z?-])[rwxsStT?-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s+(.+)$",
+        )
+        .unwrap()
+    });
+    let mut entries = Vec::new();
+    for line in output.lines() {
+        let Some(c) = ROW.captures(line.trim_end()) else {
+            continue;
+        };
+        let kind = &c[1];
+        let is_symlink = kind == "l";
+        let raw_name = &c[5];
+        let name = if is_symlink {
+            raw_name.split(" -> ").next().unwrap_or(raw_name)
+        } else {
+            raw_name
+        };
+        entries.push(FileEntry {
+            name: name.to_string(),
+            is_dir: kind == "d",
+            is_symlink,
+            size_bytes: c[2].parse().unwrap_or(0),
+            modified: format!("{} {}", &c[3], &c[4]),
+        });
+    }
+    entries
+}
+
 /// Parse the `package:<name>` lines that `pm list packages [-d|-e|-u]` emits.
 pub fn parse_installed_packages_output(output: &str) -> Vec<String> {
     output
@@ -179,6 +226,35 @@ pub fn parse_thermal_max_celsius(dumpsys_thermalservice: &str) -> Option<f64> {
             continue;
         }
         max = Some(max.map_or(t, |m| m.max(t)));
+    }
+    max
+}
+
+/// Fallback temperature from `dumpsys hardware_properties`, used when
+/// `thermalservice` reports nothing (older Shield firmware, e.g. 8.2.3,
+/// formats it differently or restricts it). Reads the `CPU temperatures:`
+/// and `GPU temperatures:` lines — `CPU temperatures: [32.0, 32.0, ...]` —
+/// and returns the hottest in-range reading. Ignores the *throttling* /
+/// *shutdown* / *vr* lines (those are limits, not the current temp).
+pub fn parse_hardware_properties_temp(dumpsys_hardware_properties: &str) -> Option<f64> {
+    static FLOAT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-?\d+\.?\d*").unwrap());
+    let mut max: Option<f64> = None;
+    for line in dumpsys_hardware_properties.lines() {
+        let l = line.trim();
+        let is_current = (l.starts_with("CPU temperatures:") || l.starts_with("GPU temperatures:"))
+            && !l.contains("throttling")
+            && !l.contains("shutdown");
+        if !is_current {
+            continue;
+        }
+        for m in FLOAT.find_iter(l) {
+            let Ok(t) = m.as_str().parse::<f64>() else {
+                continue;
+            };
+            if (10.0..120.0).contains(&t) {
+                max = Some(max.map_or(t, |cur: f64| cur.max(t)));
+            }
+        }
     }
     max
 }
@@ -305,6 +381,31 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
+    fn parses_ls_rows_including_spaced_names_and_symlinks() {
+        let input = "total 64\n\
+            drwxrwx--x 2 u0_a123 sdcard_rw 4096 2026-05-01 10:30 Download\n\
+            -rw-rw---- 1 u0_a123 sdcard_rw 1048576 2026-05-02 11:00 movie trailer.mp4\n\
+            lrwxrwxrwx 1 root root 11 2026-01-01 00:00 shortcut -> /sdcard/Download\n\
+            ls: /sdcard/secret: Permission denied\n";
+        let entries = parse_ls_output(input);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "Download");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].name, "movie trailer.mp4");
+        assert!(!entries[1].is_dir);
+        assert_eq!(entries[1].size_bytes, 1_048_576);
+        assert_eq!(entries[1].modified, "2026-05-02 11:00");
+        assert_eq!(entries[2].name, "shortcut");
+        assert!(entries[2].is_symlink);
+    }
+
+    #[test]
+    fn ls_parse_returns_empty_on_error_output() {
+        assert!(parse_ls_output("ls: /sdcard/nope: No such file or directory\n").is_empty());
+        assert!(parse_ls_output("").is_empty());
+    }
+
+    #[test]
     fn parses_device_list_with_mixed_states() {
         let input = "List of devices attached\n\
             192.168.42.71:5555\tdevice\n\
@@ -410,6 +511,28 @@ DisplayDeviceInfo{"Built-in Screen": uniqueId="local:0", 3840 x 2160, modeId 20,
     fn parses_thermal_rejects_garbage_values() {
         let input = "mValue=999.0\nmValue=42.0";
         assert_eq!(parse_thermal_max_celsius(input), Some(42.0));
+    }
+
+    #[test]
+    fn parses_hardware_properties_temp_from_cpu_and_gpu() {
+        // Real Shield 2019 dumpsys hardware_properties shape — current temps,
+        // ignoring throttling/shutdown limit lines.
+        let input = "CPU temperatures: [32.0, 40.5, 32.0, 32.0]\n\
+                     CPU throttling temperatures: [89.0, 89.0, 89.0, 89.0]\n\
+                     CPU shutdown temperatures: [102.5, 102.5, 102.5, 102.5]\n\
+                     GPU temperatures: [33.0]\n\
+                     GPU throttling temperatures: [90.5]\n";
+        // Max current reading is the 40.5 CPU core; limits are excluded.
+        assert_eq!(parse_hardware_properties_temp(input), Some(40.5));
+    }
+
+    #[test]
+    fn hardware_properties_temp_none_when_empty() {
+        assert_eq!(
+            parse_hardware_properties_temp("Battery temperatures: []"),
+            None
+        );
+        assert_eq!(parse_hardware_properties_temp(""), None);
     }
 
     #[test]

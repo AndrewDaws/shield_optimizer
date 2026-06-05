@@ -6,6 +6,7 @@
 pub mod apps;
 pub mod backup;
 pub mod devices;
+pub mod files;
 pub mod health;
 pub mod home_tracking;
 pub mod input;
@@ -21,5 +22,6 @@ pub mod sideload;
 pub mod snapshot;
 pub mod state;
 pub mod tuning;
+pub mod update;
 
 pub use state::AppState;

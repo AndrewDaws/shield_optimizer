@@ -13,7 +13,9 @@ use super::detection::DeviceType;
 
 /// Current snapshot schema version. Bump when the structure changes; the
 /// reader will refuse future versions explicitly.
-pub const SCHEMA_VERSION: u32 = 1;
+// v2 added the optional `label` field. v1 snapshots still load (label
+// defaults to None via serde) — that's the migration; no transform needed.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Setting keys we track in a snapshot — matches v1's `$Script:SnapshotSettingKeys`.
 pub fn tracked_setting_keys() -> &'static [(&'static str, &'static str)] {
@@ -36,6 +38,10 @@ pub struct Snapshot {
     pub schema_version: u32,
     /// ISO-8601 UTC timestamp.
     pub saved_at: String,
+    /// Optional user-given name for the snapshot (e.g. "before debloat").
+    /// Added in schema v2 — `serde(default)` loads v1 snapshots with `None`.
+    #[serde(default)]
+    pub label: Option<String>,
     pub device_name: String,
     pub device_serial: String,
     pub device_type: DeviceType,
@@ -96,8 +102,12 @@ pub struct SnapshotApplyPlan {
     pub packages_not_installed: Vec<String>,
     /// The launcher to set as default (None = no launcher change).
     pub launcher_to_set: Option<String>,
-    /// Settings to write — same key format as `Snapshot::settings`.
+    /// Settings whose current device value differs from the snapshot —
+    /// these will be written. Same key format as `Snapshot::settings`.
     pub settings_to_write: BTreeMap<String, String>,
+    /// Settings already at the snapshot's value on the device — no-op, counted
+    /// so the preview doesn't overstate the work.
+    pub settings_already_set: Vec<String>,
     /// Set when the snapshot's device type doesn't match the target's.
     pub cross_device_warning: Option<String>,
 }
@@ -109,6 +119,10 @@ pub struct ApplyPlanInputs<'a> {
     pub target_device_type: DeviceType,
     pub currently_disabled: &'a [String],
     pub currently_installed: &'a [String],
+    /// Current device values for the snapshot's setting keys, so the plan can
+    /// skip settings already at the target value. Empty map = treat all as
+    /// needing a write (back-compat).
+    pub current_settings: &'a BTreeMap<String, String>,
 }
 
 /// Compute the plan for applying `snap` to a device in `inputs`' state.
@@ -150,12 +164,24 @@ pub fn compute_apply_plan(snap: &Snapshot, inputs: &ApplyPlanInputs<'_>) -> Snap
         None
     };
 
+    // Only write settings whose current value differs from the snapshot.
+    let mut settings_to_write = BTreeMap::new();
+    let mut settings_already_set = Vec::new();
+    for (key, value) in &snap.settings {
+        if inputs.current_settings.get(key) == Some(value) {
+            settings_already_set.push(key.clone());
+        } else {
+            settings_to_write.insert(key.clone(), value.clone());
+        }
+    }
+
     SnapshotApplyPlan {
         packages_to_disable: to_disable,
         packages_already_disabled: already_disabled,
         packages_not_installed: not_installed,
         launcher_to_set: snap.current_launcher.clone(),
-        settings_to_write: snap.settings.clone(),
+        settings_to_write,
+        settings_already_set,
         cross_device_warning,
     }
 }
@@ -172,8 +198,9 @@ mod tests {
             "0.5".to_string(),
         );
         Snapshot {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             saved_at: "2026-05-27T12:00:00Z".to_string(),
+            label: None,
             device_name: "Living Room TV".to_string(),
             device_serial: "192.168.42.71:5555".to_string(),
             device_type: DeviceType::Shield,
@@ -194,6 +221,33 @@ mod tests {
     }
 
     #[test]
+    fn v1_snapshot_loads_with_no_label() {
+        // A pre-label (schema v1) file must still parse — label defaults to None.
+        let payload = r#"{
+            "schema_version": 1,
+            "saved_at": "2026-05-27T12:00:00Z",
+            "device_name": "Old Shield",
+            "device_serial": "x",
+            "device_type": "shield",
+            "android_version": "11",
+            "disabled_packages": [],
+            "current_launcher": null,
+            "settings": {}
+        }"#;
+        let snap = Snapshot::from_json(payload).unwrap();
+        assert_eq!(snap.label, None);
+        assert_eq!(snap.device_name, "Old Shield");
+    }
+
+    #[test]
+    fn label_roundtrips() {
+        let mut snap = sample_snapshot();
+        snap.label = Some("before debloat".to_string());
+        let parsed = Snapshot::from_json(&snap.to_json().unwrap()).unwrap();
+        assert_eq!(parsed.label.as_deref(), Some("before debloat"));
+    }
+
+    #[test]
     fn rejects_zero_schema_version() {
         let payload = r#"{
             "schema_version": 0,
@@ -211,7 +265,7 @@ mod tests {
             err,
             SnapshotError::UnsupportedSchema {
                 found: 0,
-                supported: 1
+                supported: 2
             }
         ));
     }
@@ -233,7 +287,7 @@ mod tests {
         match err {
             SnapshotError::UnsupportedSchema {
                 found: 999,
-                supported: 1,
+                supported: 2,
             } => {}
             other => panic!("wrong error: {other:?}"),
         }
@@ -261,16 +315,63 @@ mod tests {
         let snap = sample_snapshot();
         let installed = vec!["com.foo".into(), "com.bar".into()];
         let disabled = vec!["com.bar".into()];
+        let no_settings = BTreeMap::new();
         let inputs = ApplyPlanInputs {
             target_device_type: DeviceType::Shield,
             currently_disabled: &disabled,
             currently_installed: &installed,
+            current_settings: &no_settings,
         };
         let plan = compute_apply_plan(&snap, &inputs);
         assert_eq!(plan.packages_to_disable, vec!["com.foo"]);
         assert_eq!(plan.packages_already_disabled, vec!["com.bar"]);
         assert_eq!(plan.packages_not_installed, vec!["com.missing"]);
         assert!(plan.cross_device_warning.is_none());
+        // No current settings known → everything is a write.
+        assert_eq!(plan.settings_to_write.len(), 1);
+        assert!(plan.settings_already_set.is_empty());
+    }
+
+    #[test]
+    fn apply_plan_skips_settings_already_at_target() {
+        let snap = sample_snapshot(); // has global.window_animation_scale = "0.5"
+        let installed: Vec<String> = vec![];
+        let disabled: Vec<String> = vec![];
+        let mk = |val: &str| {
+            let mut m = BTreeMap::new();
+            m.insert("global.window_animation_scale".to_string(), val.to_string());
+            m
+        };
+
+        let matched = mk("0.5");
+        let plan = compute_apply_plan(
+            &snap,
+            &ApplyPlanInputs {
+                target_device_type: DeviceType::Shield,
+                currently_disabled: &disabled,
+                currently_installed: &installed,
+                current_settings: &matched,
+            },
+        );
+        assert!(plan.settings_to_write.is_empty());
+        assert_eq!(
+            plan.settings_already_set,
+            vec!["global.window_animation_scale"]
+        );
+
+        // A different current value → it IS written.
+        let differs = mk("1.0");
+        let plan = compute_apply_plan(
+            &snap,
+            &ApplyPlanInputs {
+                target_device_type: DeviceType::Shield,
+                currently_disabled: &disabled,
+                currently_installed: &installed,
+                current_settings: &differs,
+            },
+        );
+        assert_eq!(plan.settings_to_write.len(), 1);
+        assert!(plan.settings_already_set.is_empty());
     }
 
     #[test]
@@ -278,10 +379,12 @@ mod tests {
         let snap = sample_snapshot();
         let installed: Vec<String> = vec![];
         let disabled: Vec<String> = vec![];
+        let no_settings = BTreeMap::new();
         let inputs = ApplyPlanInputs {
             target_device_type: DeviceType::GoogleTv,
             currently_disabled: &disabled,
             currently_installed: &installed,
+            current_settings: &no_settings,
         };
         let plan = compute_apply_plan(&snap, &inputs);
         assert!(plan.cross_device_warning.is_some());

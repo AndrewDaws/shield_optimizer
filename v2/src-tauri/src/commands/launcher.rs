@@ -131,13 +131,21 @@ pub async fn current_launcher(
 pub struct SetLauncherResult {
     pub ok: bool,
     /// Identifier of the strategy that worked (or the last one tried on failure).
-    /// One of: "role_api", "set_home_activity", "home_intent_kick".
+    /// One of: "role_api", "set_home_activity", "home_intent_kick",
+    /// "disable_stock_takeover" (stock launcher disabled to hand HOME over —
+    /// the only method that works on builds whose role/set-home-activity
+    /// commands accept-but-ignore).
     pub strategy: Option<String>,
     /// Active launcher after the attempt — useful for the UI to render
     /// the post-action state.
     pub current_launcher: Option<String>,
     /// Verbatim ADB error from the last failed attempt, if relevant.
     pub last_error: Option<String>,
+    /// True when the polite strategies failed but disabling the active
+    /// *stock* launcher would hand HOME to the target (the only working
+    /// method on accept-but-ignore builds). The UI asks the user and retries
+    /// with `allow_stock_disable` — it is never done silently.
+    pub stock_takeover_available: bool,
 }
 
 /// `set_default_launcher` — port of v1's multi-strategy promotion (PR #17/#18).
@@ -157,16 +165,26 @@ pub async fn set_default_launcher(
     state: State<'_, AppState>,
     serial: String,
     package: String,
+    allow_stock_disable: Option<bool>,
 ) -> Result<SetLauncherResult, String> {
-    set_default_launcher_impl(state.inner(), &serial, &package).await
+    set_default_launcher_impl(
+        state.inner(),
+        &serial,
+        &package,
+        allow_stock_disable.unwrap_or(false),
+    )
+    .await
 }
 
 /// Reusable implementation — callable from inside other commands without
 /// the `State<'_, T>` lifetime constraint getting in the way.
+/// `allow_stock_disable` opts into the disable-stock-takeover last resort;
+/// without it the caller gets `stock_takeover_available` back and decides.
 pub async fn set_default_launcher_impl(
     state: &AppState,
     serial: &str,
     package: &str,
+    allow_stock_disable: bool,
 ) -> Result<SetLauncherResult, String> {
     // `package` can come from a custom-launcher entry the user typed, so it's
     // interpolated into shell commands below — validate it first.
@@ -176,6 +194,7 @@ pub async fn set_default_launcher_impl(
             strategy: None,
             current_launcher: None,
             last_error: Some(format!("Invalid package name: {package:?}")),
+            stock_takeover_available: false,
         });
     }
 
@@ -205,6 +224,7 @@ pub async fn set_default_launcher_impl(
                     strategy: Some("role_api".into()),
                     current_launcher: Some(package.to_string()),
                     last_error: None,
+                    stock_takeover_available: false,
                 });
             }
             let msg = if out.stdout.trim().is_empty() {
@@ -259,6 +279,7 @@ pub async fn set_default_launcher_impl(
                             strategy: Some("set_home_activity".into()),
                             current_launcher: Some(package.to_string()),
                             last_error: None,
+                            stock_takeover_available: false,
                         });
                     }
                     // Accepted but the resolver didn't confirm: the preference
@@ -290,7 +311,65 @@ pub async fn set_default_launcher_impl(
             strategy: Some("home_intent_kick".into()),
             current_launcher: now_active,
             last_error: None,
+            stock_takeover_available: false,
         });
+    }
+
+    // 5. The strategy that actually works on Android 11 TV builds where the
+    // role API silently no-ops and set-home-activity answers "Success"
+    // without effect (verified live on a Shield 2019 / Android 11): when the
+    // app holding HOME is a *stock* launcher, disable it — Android then
+    // resolves HOME to the remaining launcher. This is v1's proven
+    // Setup-Launcher mechanism — but it is NEVER applied without the
+    // caller's explicit opt-in (`allow_stock_disable`); otherwise we report
+    // that the option exists and let the user decide. Never touches a custom
+    // launcher; the NEVER_DISABLE gate still applies; and if the takeover
+    // doesn't verify, the stock launcher is re-enabled.
+    if let Some(active) = now_active.clone() {
+        let active_is_stock = stock_launcher_catalog().iter().any(|e| e.package == active);
+        let blocked = matches!(
+            crate::engine::classify_safety(&active),
+            crate::engine::Safety::NeverDisable { .. }
+        );
+        if active != package && active_is_stock && !blocked {
+            if !allow_stock_disable {
+                return Ok(SetLauncherResult {
+                    ok: false,
+                    strategy: None,
+                    current_launcher: Some(active.clone()),
+                    last_error: Some(format!(
+                        "This device ignores the standard launcher-switch commands. The only \
+                         way to hand HOME to {package} is to disable the stock launcher \
+                         ({active}) — it can be re-enabled from the list at any time."
+                    )),
+                    stock_takeover_available: true,
+                });
+            }
+            let disabled_ok = matches!(
+                adb.shell(serial, &format!("pm disable-user --user 0 {active}")).await,
+                Ok(ref o) if !o.shell_reported_failure()
+            );
+            if disabled_ok {
+                let _ = adb
+                    .shell(
+                        serial,
+                        "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME",
+                    )
+                    .await;
+                if verify_active(&*adb, serial, package).await {
+                    return Ok(SetLauncherResult {
+                        ok: true,
+                        strategy: Some("disable_stock_takeover".into()),
+                        current_launcher: Some(package.to_string()),
+                        last_error: None,
+                        stock_takeover_available: false,
+                    });
+                }
+                // Takeover didn't verify — put the stock launcher back the
+                // way we found it rather than leaving a half-applied state.
+                let _ = adb.shell(serial, &format!("pm enable {active}")).await;
+            }
+        }
     }
 
     // The device acknowledged the change but the resolver never confirmed it.
@@ -310,6 +389,7 @@ pub async fn set_default_launcher_impl(
         strategy: None,
         current_launcher: now_active,
         last_error,
+        stock_takeover_available: false,
     })
 }
 

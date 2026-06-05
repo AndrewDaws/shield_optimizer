@@ -12,8 +12,8 @@ pub mod engine;
 use std::path::PathBuf;
 
 use commands::{
-    apps, backup, devices, health, input, install, launcher, loader, optimize, reboot, recovery,
-    scan, screenshot, sideload, snapshot, tuning, AppState,
+    apps, backup, devices, files, health, input, install, launcher, loader, optimize, reboot,
+    recovery, scan, screenshot, sideload, snapshot, tuning, update, AppState,
 };
 
 /// Resolve the OS-appropriate app data root (snapshots live in a `snapshots`
@@ -84,13 +84,21 @@ pub fn run() {
             apps::reinstall_existing,
             apps::open_play_store,
             apps::package_states,
+            apps::list_other_packages,
             apps::safety_info,
             apps::trim_caches,
             input::send_text,
+            input::send_key,
             sideload::install_apk,
             sideload::list_apks_in_folder,
             backup::backup_apk,
             backup::clone_app,
+            files::list_dir,
+            files::pull_file,
+            files::push_file,
+            files::delete_path,
+            files::find_files,
+            files::copy_file_to_device,
             snapshot::list_snapshots,
             snapshot::save_snapshot,
             snapshot::preview_apply,
@@ -105,6 +113,7 @@ pub fn run() {
             tuning::get_display_scaling,
             optimize::prepare_optimize,
             optimize::apply_performance_settings,
+            update::check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

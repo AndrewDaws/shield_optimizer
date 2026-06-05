@@ -18,12 +18,15 @@ import type {
   DiscoveredApk,
   DisplayScalePreset,
   DisplayScaleResult,
+  FileEntry,
+  FileTransferResult,
   HealthReport,
   InstallApkResult,
   InstallResult,
   LauncherStatus,
   OptimizeMode,
   OptimizePlan,
+  OtherPackage,
   PerformanceProfile,
   PerformanceResult,
   RebootMode,
@@ -39,11 +42,13 @@ import type {
   SnapshotApplyPlan,
   SnapshotFile,
   TweaksState,
+  UpdateInfo,
   WriteResult,
 } from "./types";
 
 export const api = {
   adbStatus: () => invoke<AdbStatus>("adb_status"),
+  checkForUpdate: () => invoke<UpdateInfo>("check_for_update"),
   installAdb: () => invoke<InstallResult>("install_adb"),
   restartAdb: () => invoke<RestartResult>("restart_adb"),
   scanNetwork: () => invoke<ScanResult>("scan_network"),
@@ -73,8 +78,8 @@ export const api = {
     invoke<CurrentLauncher>("current_launcher", { serial }),
   channelProviderDisabled: (serial: string) =>
     invoke<boolean>("channel_provider_disabled", { serial }),
-  setDefaultLauncher: (serial: string, pkg: string) =>
-    invoke<SetLauncherResult>("set_default_launcher", { serial, package: pkg }),
+  setDefaultLauncher: (serial: string, pkg: string, allowStockDisable = false) =>
+    invoke<SetLauncherResult>("set_default_launcher", { serial, package: pkg, allowStockDisable }),
   disableLauncher: (serial: string, pkg: string) =>
     invoke<ActionResult>("disable_launcher", { serial, package: pkg }),
 
@@ -98,10 +103,14 @@ export const api = {
       "package_states",
       { serial, packages },
     ),
+  listOtherPackages: (serial: string) =>
+    invoke<OtherPackage[]>("list_other_packages", { serial }),
   safetyInfo: (pkg: string) => invoke<Safety>("safety_info", { package: pkg }),
   trimCaches: (serial: string) => invoke<ActionResult>("trim_caches", { serial }),
   sendText: (serial: string, text: string) =>
     invoke<SendTextResult>("send_text", { serial, text }),
+  sendKey: (serial: string, key: string) =>
+    invoke<SendTextResult>("send_key", { serial, key }),
 
   installApk: (serial: string, apkPath: string, reinstall = true) =>
     invoke<InstallApkResult>("install_apk", { serial, apkPath, reinstall }),
@@ -109,12 +118,25 @@ export const api = {
     invoke<BackupApkResult>("backup_apk", { serial, package: pkg, destDir }),
   cloneApp: (sourceSerial: string, targetSerial: string, pkg: string) =>
     invoke<CloneAppResult>("clone_app", { sourceSerial, targetSerial, package: pkg }),
+
+  listDir: (serial: string, path: string) =>
+    invoke<FileEntry[]>("list_dir", { serial, path }),
+  pullFile: (serial: string, remotePath: string, localDir: string) =>
+    invoke<FileTransferResult>("pull_file", { serial, remotePath, localDir }),
+  pushFile: (serial: string, localPath: string, remoteDir: string) =>
+    invoke<FileTransferResult>("push_file", { serial, localPath, remoteDir }),
+  deletePath: (serial: string, path: string) =>
+    invoke<FileTransferResult>("delete_path", { serial, path }),
+  findFiles: (serial: string, dirs: string[], pattern: string) =>
+    invoke<string[]>("find_files", { serial, dirs, pattern }),
+  copyFileToDevice: (sourceSerial: string, remotePath: string, targetSerial: string, targetDir: string) =>
+    invoke<FileTransferResult>("copy_file_to_device", { sourceSerial, remotePath, targetSerial, targetDir }),
   listApksInFolder: (folder: string) =>
     invoke<DiscoveredApk[]>("list_apks_in_folder", { folder }),
 
   listSnapshots: () => invoke<SnapshotFile[]>("list_snapshots"),
-  saveSnapshot: (serial: string, deviceName: string) =>
-    invoke<SnapshotFile>("save_snapshot", { serial, deviceName }),
+  saveSnapshot: (serial: string, deviceName: string, label: string | null = null) =>
+    invoke<SnapshotFile>("save_snapshot", { serial, deviceName, label }),
   previewApply: (serial: string, snapshotPath: string) =>
     invoke<SnapshotApplyPlan>("preview_apply", { serial, snapshotPath }),
   applySnapshot: (serial: string, snapshotPath: string) =>

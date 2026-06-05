@@ -52,8 +52,11 @@ async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 
-# ZIP extraction for platform-tools-latest-<os>.zip
+# ZIP extraction for platform-tools-latest-<os>.zip (and reading APK manifests)
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Decode an APK's binary AndroidManifest.xml to read its package id
+axmldecoder = "0.5"
 
 [dev-dependencies]
 pretty_assertions = "1"
