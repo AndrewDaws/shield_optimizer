@@ -92,6 +92,22 @@ pub struct OtherPackage {
     pub enabled: bool,
 }
 
+/// Package-name prefixes that belong to the device vendor / OS, not the user.
+/// Android flags some of these as third-party (a preinstalled Google language
+/// IME updated into `/data` shows up in `pm list packages -3`), which would
+/// otherwise mislabel them and bury genuinely-sideloaded apps. Treating these
+/// as system keeps the default view focused on what the user actually added.
+fn is_first_party_package(pkg: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "com.google.",
+        "com.android.",
+        "com.nvidia.",
+        "com.amazon.",
+        "org.chromium.",
+    ];
+    pkg == "android" || PREFIXES.iter().any(|p| pkg.starts_with(p))
+}
+
 /// `list_other_packages` — every installed package that is NOT in the curated
 /// catalog, so the App List can act on the long tail (sideloaded apps like
 /// SmartTube most of all — they get the same Backup / Copy / Disable tools).
@@ -130,7 +146,9 @@ pub async fn list_other_packages(
         .into_iter()
         .filter(|p| !catalog.contains(p.as_str()))
         .map(|package| OtherPackage {
-            system: !third.contains(&package),
+            // System if Android says so OR it's a vendor/OS package Android
+            // happens to flag third-party (updated Google IMEs, etc.).
+            system: !third.contains(&package) || is_first_party_package(&package),
             enabled: !disabled.contains(&package),
             package,
         })
@@ -345,6 +363,23 @@ async fn run(state: &AppState, serial: &str, cmd: &str) -> Result<ActionResult, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_party_packages_classified_as_system() {
+        // Vendor/OS packages — system even when Android flags them third-party.
+        assert!(is_first_party_package(
+            "com.google.android.apps.inputmethod.hindi"
+        ));
+        assert!(is_first_party_package("com.android.vending"));
+        assert!(is_first_party_package("com.nvidia.ota"));
+        assert!(is_first_party_package("android"));
+        // Genuinely-sideloaded apps stay third-party.
+        assert!(!is_first_party_package("com.teamsmart.videomanager.tv"));
+        assert!(!is_first_party_package("ca.devmesh.overseerrtv"));
+        assert!(!is_first_party_package("air.com.shirogames.evoland12"));
+        // Not fooled by a prefix appearing mid-string.
+        assert!(!is_first_party_package("org.evil.com.google.fake"));
+    }
 
     #[test]
     fn decodes_protected_system_app() {

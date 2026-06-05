@@ -2057,8 +2057,8 @@
                 {#each visibleOthers as o (o.package)}
                   <tr>
                     <td class="app-cell"><div class="mono small">{o.package}</div></td>
-                    <td class="center">
-                      <span class={`tag ${o.system ? "missing" : "installed"}`}>{o.system ? "SYSTEM" : "3RD PARTY"}</span>
+                    <td class="center type-cell">
+                      <span class={`tag ${o.system ? "missing" : "installed"}`}>{o.system ? "SYSTEM" : "3RD-PARTY"}</span>
                     </td>
                     <td class="center">
                       <span class={`state-badge state-${o.enabled ? "enabled" : "disabled"}`}>
@@ -3429,6 +3429,8 @@
     padding-top: 1.2rem;
     border-top: 1px solid var(--border);
   }
+  .type-cell { white-space: nowrap; }
+  .type-cell .tag { white-space: nowrap; }
   .plan-summary {
     margin: 0.4rem 0;
     padding: 0.5rem 0.8rem;
