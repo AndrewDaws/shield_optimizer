@@ -17,6 +17,44 @@ When you add a new section, put it at the top; older releases go below.
 
 ---
 
+## v2-2.0.0-beta.11
+
+A big App List / Optimize update centered on smarter, safer recommendations.
+
+### Added
+
+- **"Remove if unused" review tier.** Preinstalled streaming apps (Netflix,
+  Disney+, Showtime, …) are surfaced as candidates to remove *if you don't use
+  them* — never auto-selected — with a **last-used cue** ("used 3d ago", "no
+  recent use") from usage stats so you can decide.
+- **Per-app RAM badges.** The App List now shows live RAM (e.g. `RAM 243 MB`) on
+  apps that are running right now — the cue for which unused app is quietly
+  eating memory.
+- **Friendly names + search for sideloads.** "Everything else" recognizes
+  popular sideloads (Artemis/Moonlight, Overseerr, SmartTube, Jellyfin, …) by
+  name, and search matches the name you actually see, not just the package id.
+- **Files: optional system paths (power user).** A toggle lets you browse the
+  whole filesystem beyond `/sdcard`; deletes outside `/sdcard` are
+  double-confirmed and critical mounts are refused.
+- **Tweaks: Background Process Limit.** Cap background apps to free RAM (with a
+  clear note that Android resets it on reboot).
+
+### Changed
+
+- **Uninstall safety.** The wizard never recommends uninstalling an app you
+  can't easily get back — non–Play-Store, non-defunct apps are disabled instead.
+- **Recommendations reflect real benefit.** Dropped no-op suggestions (idle
+  language keyboards), and RAM figures now only show for running, reclaimable
+  apps.
+- **App List defaults to installed apps** ("Hide not installed" on).
+- The App List and Optimize tabs now stay in sync after an action.
+
+### Fixed
+
+- App List / Optimize tables no longer blank out, long system package names no
+  longer overflow, and the Optimize plan loads faster (no redundant device
+  re-detection).
+
 ## v2-2.0.0-beta.10
 
 The version now reads as **2.0.0** so the app no longer looks like a v0 build —
