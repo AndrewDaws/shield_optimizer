@@ -210,7 +210,7 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         current: "0.1.0-beta.9",
         latest: "0.1.0-beta.9",
         update_available: false,
-        url: "https://github.com/bryanroscoe/shield_optimizer/releases/latest",
+        url: "https://github.com/bryanroscoe/shield_optimizer/releases",
       };
     case "list_devices":
       return [device];

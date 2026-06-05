@@ -5,7 +5,10 @@ use serde::Serialize;
 
 const RELEASES_API: &str =
     "https://api.github.com/repos/bryanroscoe/shield_optimizer/releases?per_page=20";
-const RELEASES_PAGE: &str = "https://github.com/bryanroscoe/shield_optimizer/releases/latest";
+// Full releases list, not `/releases/latest` — `latest` redirects to the most
+// recent non-prerelease, which is a v1 PowerShell tag (v0.x), so v2 betas never
+// show. The list page surfaces every release including v2 pre-releases.
+const RELEASES_PAGE: &str = "https://github.com/bryanroscoe/shield_optimizer/releases";
 
 #[derive(Serialize)]
 pub struct UpdateInfo {
