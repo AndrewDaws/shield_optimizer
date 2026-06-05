@@ -669,5 +669,126 @@
     "default_optimize": false,
     "default_restore": false,
     "play_store": true
+  },
+  {
+    "package": "org.jellyfin.androidtv",
+    "name": "Jellyfin",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Client for a self-hosted Jellyfin media server.",
+    "restore_description": "Re-enables Jellyfin.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "com.esaba.downloader",
+    "name": "Downloader by AFTVnews",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Download APKs and files by URL — the standard sideload helper.",
+    "restore_description": "Re-enables Downloader.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "com.retroarch",
+    "name": "RetroArch",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Multi-system retro game emulator frontend.",
+    "restore_description": "Re-enables RetroArch.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "com.tubitv",
+    "name": "Tubi",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Free ad-supported movies and TV.",
+    "restore_description": "Re-enables Tubi.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "tv.pluto.android",
+    "name": "Pluto TV",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Free live TV and on-demand channels.",
+    "restore_description": "Re-enables Pluto TV.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "com.mxtech.videoplayer.ad",
+    "name": "MX Player",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Versatile video player with broad codec support.",
+    "restore_description": "Re-enables MX Player.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "com.tailscale.ipn",
+    "name": "Tailscale",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "WireGuard-based mesh VPN for reaching your devices remotely.",
+    "restore_description": "Re-enables Tailscale.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "com.wireguard.android",
+    "name": "WireGuard",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Fast, modern VPN client.",
+    "restore_description": "Re-enables WireGuard.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "pl.solidexplorer2",
+    "name": "Solid Explorer",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Dual-pane file manager with network / cloud support.",
+    "restore_description": "Re-enables Solid Explorer.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "com.phlox.tvwebbrowser",
+    "name": "TV Bro",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Web browser built for Android TV with remote-friendly controls.",
+    "restore_description": "Re-enables TV Bro.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
+  },
+  {
+    "package": "com.stremio.one",
+    "name": "Stremio",
+    "method": "disable",
+    "risk": "safe",
+    "optimize_description": "Aggregated streaming via add-ons (sideloaded build varies — verify the package on your device).",
+    "restore_description": "Re-enables Stremio.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": false
   }
 ]
