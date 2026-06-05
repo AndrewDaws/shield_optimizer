@@ -18,7 +18,10 @@
 
   function label(u: AppUsage): string {
     const days = daysSince(u);
-    if (days === null) return "never opened";
+    // No record ≠ literally never: usagestats keeps only ~1 year of rolling
+    // buckets and resets on a factory wipe, so old usage ages out. Say "no
+    // recent use" rather than overclaiming "never".
+    if (days === null) return "no recent use";
     if (days <= 0) return "used today";
     if (days === 1) return "used yesterday";
     if (days < 30) return `${days}d ago`;
@@ -34,7 +37,11 @@
 </script>
 
 {#if usage}
-  <span class="usage-tag" class:stale={isStale(usage)} title="Last opened (dumpsys usagestats)">
+  <span
+    class="usage-tag"
+    class:stale={isStale(usage)}
+    title="Last foreground use from usagestats. History is limited (~1 year of rolling buckets) and resets on a factory wipe, so 'no recent use' may just mean it aged out."
+  >
     {label(usage)}
   </span>
 {/if}

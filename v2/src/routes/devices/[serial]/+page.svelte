@@ -536,13 +536,21 @@
     await disableApp(pkg);
   }
 
+  /// Record a curated app's new on-device state and keep the two tabs in
+  /// parity: the Optimize plan baked in the old installed/disabled sets, so drop
+  /// it — it reloads fresh next time the Optimize tab is opened.
+  function setCatalogState(pkg: string, state: "enabled" | "disabled" | "missing") {
+    appStates[pkg] = state;
+    optimizePlan = null;
+  }
+
   async function disableApp(pkg: string) {
     appActionBusy = pkg;
     appActionMessage = "";
     try {
       const r = await api.disablePackage(serial, pkg);
       appActionMessage = `${pkg}: ${r.message.trim()}`;
-      if (r.ok) appStates[pkg] = "disabled";
+      if (r.ok) setCatalogState(pkg, "disabled");
     } catch (e) {
       appActionMessage = `${pkg}: ${e}`;
     } finally {
@@ -556,7 +564,7 @@
     try {
       const r = await api.enablePackage(serial, pkg);
       appActionMessage = `${pkg}: ${r.message.trim()}`;
-      if (r.ok) appStates[pkg] = "enabled";
+      if (r.ok) setCatalogState(pkg, "enabled");
     } catch (e) {
       appActionMessage = `${pkg}: ${e}`;
     } finally {
@@ -571,7 +579,7 @@
     try {
       const r = await api.uninstallPackage(serial, pkg);
       appActionMessage = `${pkg}: ${r.message.trim()}`;
-      if (r.ok) appStates[pkg] = "missing";
+      if (r.ok) setCatalogState(pkg, "missing");
     } catch (e) {
       appActionMessage = `${pkg}: ${e}`;
     } finally {
@@ -588,7 +596,7 @@
     try {
       const r = await api.reinstallExisting(serial, pkg);
       appActionMessage = `${pkg}: ${r.message.trim()}`;
-      if (r.ok) appStates[pkg] = "enabled";
+      if (r.ok) setCatalogState(pkg, "enabled");
     } catch (e) {
       appActionMessage = `${pkg}: ${e}`;
     } finally {
@@ -1438,6 +1446,10 @@
     optimizeSummary = optimizeAbort
       ? `Aborted. ${done} applied, ${failed} failed, ${skipped} skipped.`
       : `${label} complete: ${done} applied, ${failed} failed, ${skipped} skipped.`;
+    // Keep the App List in parity — it cached states before this run.
+    if (apps.length > 0) {
+      appStates = await fetchAppStates(apps.map((a) => a.package));
+    }
   }
 
   async function applyPerformanceSettings() {
