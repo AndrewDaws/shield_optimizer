@@ -102,8 +102,12 @@ pub struct SnapshotApplyPlan {
     pub packages_not_installed: Vec<String>,
     /// The launcher to set as default (None = no launcher change).
     pub launcher_to_set: Option<String>,
-    /// Settings to write — same key format as `Snapshot::settings`.
+    /// Settings whose current device value differs from the snapshot —
+    /// these will be written. Same key format as `Snapshot::settings`.
     pub settings_to_write: BTreeMap<String, String>,
+    /// Settings already at the snapshot's value on the device — no-op, counted
+    /// so the preview doesn't overstate the work.
+    pub settings_already_set: Vec<String>,
     /// Set when the snapshot's device type doesn't match the target's.
     pub cross_device_warning: Option<String>,
 }
@@ -115,6 +119,10 @@ pub struct ApplyPlanInputs<'a> {
     pub target_device_type: DeviceType,
     pub currently_disabled: &'a [String],
     pub currently_installed: &'a [String],
+    /// Current device values for the snapshot's setting keys, so the plan can
+    /// skip settings already at the target value. Empty map = treat all as
+    /// needing a write (back-compat).
+    pub current_settings: &'a BTreeMap<String, String>,
 }
 
 /// Compute the plan for applying `snap` to a device in `inputs`' state.
@@ -156,12 +164,24 @@ pub fn compute_apply_plan(snap: &Snapshot, inputs: &ApplyPlanInputs<'_>) -> Snap
         None
     };
 
+    // Only write settings whose current value differs from the snapshot.
+    let mut settings_to_write = BTreeMap::new();
+    let mut settings_already_set = Vec::new();
+    for (key, value) in &snap.settings {
+        if inputs.current_settings.get(key) == Some(value) {
+            settings_already_set.push(key.clone());
+        } else {
+            settings_to_write.insert(key.clone(), value.clone());
+        }
+    }
+
     SnapshotApplyPlan {
         packages_to_disable: to_disable,
         packages_already_disabled: already_disabled,
         packages_not_installed: not_installed,
         launcher_to_set: snap.current_launcher.clone(),
-        settings_to_write: snap.settings.clone(),
+        settings_to_write,
+        settings_already_set,
         cross_device_warning,
     }
 }
@@ -295,16 +315,63 @@ mod tests {
         let snap = sample_snapshot();
         let installed = vec!["com.foo".into(), "com.bar".into()];
         let disabled = vec!["com.bar".into()];
+        let no_settings = BTreeMap::new();
         let inputs = ApplyPlanInputs {
             target_device_type: DeviceType::Shield,
             currently_disabled: &disabled,
             currently_installed: &installed,
+            current_settings: &no_settings,
         };
         let plan = compute_apply_plan(&snap, &inputs);
         assert_eq!(plan.packages_to_disable, vec!["com.foo"]);
         assert_eq!(plan.packages_already_disabled, vec!["com.bar"]);
         assert_eq!(plan.packages_not_installed, vec!["com.missing"]);
         assert!(plan.cross_device_warning.is_none());
+        // No current settings known → everything is a write.
+        assert_eq!(plan.settings_to_write.len(), 1);
+        assert!(plan.settings_already_set.is_empty());
+    }
+
+    #[test]
+    fn apply_plan_skips_settings_already_at_target() {
+        let snap = sample_snapshot(); // has global.window_animation_scale = "0.5"
+        let installed: Vec<String> = vec![];
+        let disabled: Vec<String> = vec![];
+        let mk = |val: &str| {
+            let mut m = BTreeMap::new();
+            m.insert("global.window_animation_scale".to_string(), val.to_string());
+            m
+        };
+
+        let matched = mk("0.5");
+        let plan = compute_apply_plan(
+            &snap,
+            &ApplyPlanInputs {
+                target_device_type: DeviceType::Shield,
+                currently_disabled: &disabled,
+                currently_installed: &installed,
+                current_settings: &matched,
+            },
+        );
+        assert!(plan.settings_to_write.is_empty());
+        assert_eq!(
+            plan.settings_already_set,
+            vec!["global.window_animation_scale"]
+        );
+
+        // A different current value → it IS written.
+        let differs = mk("1.0");
+        let plan = compute_apply_plan(
+            &snap,
+            &ApplyPlanInputs {
+                target_device_type: DeviceType::Shield,
+                currently_disabled: &disabled,
+                currently_installed: &installed,
+                current_settings: &differs,
+            },
+        );
+        assert_eq!(plan.settings_to_write.len(), 1);
+        assert!(plan.settings_already_set.is_empty());
     }
 
     #[test]
@@ -312,10 +379,12 @@ mod tests {
         let snap = sample_snapshot();
         let installed: Vec<String> = vec![];
         let disabled: Vec<String> = vec![];
+        let no_settings = BTreeMap::new();
         let inputs = ApplyPlanInputs {
             target_device_type: DeviceType::GoogleTv,
             currently_disabled: &disabled,
             currently_installed: &installed,
+            current_settings: &no_settings,
         };
         let plan = compute_apply_plan(&snap, &inputs);
         assert!(plan.cross_device_warning.is_some());

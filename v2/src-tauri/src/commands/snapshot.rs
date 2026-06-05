@@ -13,6 +13,32 @@ use crate::engine::snapshot::{
 
 use super::AppState;
 
+/// Read the device's current values for the tracked setting keys, keyed the
+/// same way snapshots store them (`"<ns>.<key>"`). Used so apply-plans can
+/// skip settings already at the target value. Best-effort — a failed read
+/// yields an empty map (everything treated as needing a write).
+async fn current_settings_map(
+    adb: &dyn crate::adb::AdbDriver,
+    serial: &str,
+) -> std::collections::BTreeMap<String, String> {
+    let keys = tracked_setting_keys();
+    let cmd = keys
+        .iter()
+        .map(|(ns, key)| format!("settings get {ns} {key}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let mut map = std::collections::BTreeMap::new();
+    if let Ok(out) = adb.shell(serial, &cmd).await {
+        for ((ns, key), raw) in keys.iter().zip(out.stdout.lines()) {
+            let v = raw.trim();
+            if !v.is_empty() && v != "null" {
+                map.insert(format!("{ns}.{key}"), v.to_string());
+            }
+        }
+    }
+    map
+}
+
 #[derive(Serialize)]
 pub struct SnapshotFile {
     pub path: String,
@@ -279,6 +305,7 @@ pub async fn preview_apply(
     let disabled_pkgs = parse_disabled_packages_output(&disabled.stdout);
 
     let device = crate::commands::devices::device_profile_impl(state.inner(), &serial).await?;
+    let current_settings = current_settings_map(adb.as_ref(), &serial).await;
 
     let plan = compute_apply_plan(
         &snap,
@@ -286,6 +313,7 @@ pub async fn preview_apply(
             target_device_type: device.device_type,
             currently_installed: &installed_pkgs,
             currently_disabled: &disabled_pkgs,
+            current_settings: &current_settings,
         },
     );
     Ok(plan)
@@ -341,12 +369,14 @@ pub async fn apply_snapshot(
     let disabled_pkgs = parse_disabled_packages_output(&disabled.stdout);
 
     let device = crate::commands::devices::device_profile_impl(state.inner(), &serial).await?;
+    let current_settings = current_settings_map(adb.as_ref(), &serial).await;
     let plan = compute_apply_plan(
         &snap,
         &ApplyPlanInputs {
             target_device_type: device.device_type,
             currently_installed: &installed_pkgs,
             currently_disabled: &disabled_pkgs,
+            current_settings: &current_settings,
         },
     );
 

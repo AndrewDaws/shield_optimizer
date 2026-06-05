@@ -228,6 +228,7 @@ export interface SnapshotApplyPlan {
   packages_not_installed: string[];
   launcher_to_set: string | null;
   settings_to_write: Record<string, string>;
+  settings_already_set: string[];
   cross_device_warning: string | null;
 }
 

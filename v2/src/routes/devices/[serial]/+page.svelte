@@ -2850,7 +2850,11 @@
             <li><strong>{preview.packages_already_disabled.length}</strong> already disabled (no-op)</li>
             <li><strong>{preview.packages_not_installed.length}</strong> not present on device</li>
             <li>Launcher: <code>{preview.launcher_to_set ?? "(unchanged)"}</code></li>
-            <li><strong>{Object.keys(preview.settings_to_write).length}</strong> settings will be written</li>
+            <li><strong>{Object.keys(preview.settings_to_write).length}</strong> settings will be written
+              {#if preview.settings_already_set.length > 0}
+                <span class="muted">({preview.settings_already_set.length} already set, no-op)</span>
+              {/if}
+            </li>
           </ul>
           <div class="apply-row">
             <button

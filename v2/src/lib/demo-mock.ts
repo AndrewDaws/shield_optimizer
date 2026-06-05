@@ -259,6 +259,7 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
           "secure.match_content_frame_rate": "2",
           "global.window_animation_scale": "0.5",
         },
+        settings_already_set: ["global.transition_animation_scale", "global.animator_duration_scale"],
         cross_device_warning: null,
       };
     case "apply_snapshot":
