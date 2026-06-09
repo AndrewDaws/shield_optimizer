@@ -1336,7 +1336,10 @@
             </tbody>
           </table>
           {#if appActionMessage}
-            <p class="muted small mono">{appActionMessage}</p>
+            <p class="muted small mono">
+              {appActionMessage}
+              <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss">✕</button>
+            </p>
           {/if}
         {/if}
       {/if}
@@ -1487,7 +1490,10 @@
           plus APK backup and copy-to-another-device.
         </p>
         {#if appActionMessage}
-          <p class="muted small mono action-message">{appActionMessage}</p>
+          <p class="muted small mono action-message">
+            {appActionMessage}
+            <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss">✕</button>
+          </p>
         {/if}
         {#if clonePkg}
           <div class="clone-panel">
@@ -2164,6 +2170,18 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     word-break: break-word;
+  }
+  .dismiss {
+    margin-left: 0.5rem;
+    padding: 0 0.3rem;
+    background: none;
+    border: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 0.75rem;
+  }
+  .dismiss:hover {
+    color: var(--fg-primary);
   }
   .device-title-row {
     display: flex;
