@@ -24,6 +24,7 @@
   import RamBadge from "$lib/components/RamBadge.svelte";
   import UsageBadge from "$lib/components/UsageBadge.svelte";
   import StateBadge from "$lib/components/StateBadge.svelte";
+  import AppRow from "$lib/components/AppRow.svelte";
   import FilesTab from "$lib/components/FilesTab.svelte";
   import TweaksTab from "$lib/components/TweaksTab.svelte";
   import SideloadTab from "$lib/components/SideloadTab.svelte";
@@ -1515,24 +1516,18 @@
             {#each visibleApps as a (a.package)}
               {@const state = appStates[a.package] ?? "enabled"}
               {@const rec = recommendation(a, state)}
-              <tr>
-                <td class="app-cell">
-                  <div class="app-name-row">{a.name}</div>
-                  {#if a.optimize_description}
-                    <div class="muted small app-desc">{a.optimize_description}</div>
-                  {/if}
-                  <div class="muted small mono pkg-id">{a.package}</div>
-                </td>
-                <td class="center">
-                  <StateBadge {state} />
-                  {#if appMemory[a.package]}
-                    <div class="cell-cue"><RamBadge mb={appMemory[a.package]} /></div>
-                  {/if}
-                  {#if appUsage[a.package] && state !== "missing"}
-                    <div class="cell-cue"><UsageBadge usage={appUsage[a.package]} /></div>
-                  {/if}
-                </td>
-                <td class={`risk center risk-${a.risk}`}>{a.risk.toUpperCase()}</td>
+              <AppRow
+                name={a.name}
+                description={a.optimize_description}
+                package={a.package}
+                review={a.review}
+                {state}
+                mb={appMemory[a.package]}
+                usage={appUsage[a.package]}
+                showUsage={state !== "missing"}
+                risk={a.risk}
+              >
+                {#snippet actions()}
                 <td class="rec-cell">
                   {#if rec.kind === "act"}
                     <button
@@ -1618,7 +1613,8 @@
                     <span class="muted small">—</span>
                   {/if}
                 </td>
-              </tr>
+                {/snippet}
+              </AppRow>
             {/each}
             {#if visibleApps.length === 0}
               <tr><td colspan="5" class="muted">No curated apps match your filters.</td></tr>
