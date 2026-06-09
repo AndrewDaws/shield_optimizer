@@ -288,7 +288,7 @@
     "name": "Virtual Remote Keyboard",
     "method": "disable",
     "risk": "medium",
-    "optimize_description": "Background phone-as-keyboard service. Disable if you don't use the Google TV mobile remote.",
+    "optimize_description": "Background keyboard/remote service. Powers the Google TV mobile remote and the Android TV Remote integration used by smart-home apps like Home Assistant. Disable only if you use none of those.",
     "restore_description": "Restores virtual remote keyboard.",
     "default_optimize": false,
     "default_restore": true,
@@ -347,7 +347,7 @@
     "restore_description": "Restores Discovery+.",
     "default_optimize": false,
     "default_restore": false,
-    "play_store": false,
+    "play_store": true,
     "review": true
   },
   {
@@ -367,11 +367,12 @@
     "name": "YouTube Kids",
     "method": "uninstall",
     "risk": "safe",
-    "optimize_description": "Streaming App.",
-    "restore_description": "Restores YouTube Kids.",
+    "optimize_description": "Dedicated TV app discontinued July 2024 — kids profiles now in the main YouTube app.",
+    "restore_description": "Restores defunct app.",
     "default_optimize": false,
     "default_restore": false,
     "play_store": false,
+    "defunct": true,
     "review": true
   },
   {
@@ -460,11 +461,11 @@
   },
   {
     "package": "com.starz.starzplay.android",
-    "name": "STARZ",
+    "name": "LIONSGATE+",
     "method": "uninstall",
     "risk": "safe",
     "optimize_description": "Streaming App.",
-    "restore_description": "Restores STARZ.",
+    "restore_description": "Restores LIONSGATE+.",
     "default_optimize": false,
     "default_restore": false,
     "play_store": false,
@@ -475,11 +476,12 @@
     "name": "Showtime",
     "method": "uninstall",
     "risk": "safe",
-    "optimize_description": "Streaming App.",
-    "restore_description": "Restores Showtime.",
+    "optimize_description": "Service shut down April 2024 (merged into Paramount+).",
+    "restore_description": "Restores defunct app.",
     "default_optimize": false,
     "default_restore": false,
     "play_store": false,
+    "defunct": true,
     "review": true
   },
   {
@@ -511,11 +513,12 @@
     "name": "MGM+",
     "method": "uninstall",
     "risk": "safe",
-    "optimize_description": "Streaming App.",
-    "restore_description": "Restores MGM+.",
+    "optimize_description": "Old Epix Now Android TV package — replaced by MGM+ (com.epix.epix.now).",
+    "restore_description": "Restores defunct app.",
     "default_optimize": false,
     "default_restore": false,
     "play_store": false,
+    "defunct": true,
     "review": true
   },
   {
