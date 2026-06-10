@@ -114,8 +114,7 @@
     // read as "keep this", which is exactly backwards. The dropdown carries
     // the decision rule instead.
     if (item.entry.review && naturalAction(item) !== "enable") {
-      if (action === "skip") return "Keep (I use it)";
-      if (action === "uninstall") return "Uninstall (I don't)";
+      if (action === "skip") return "Keep (if you use it)";
       return base;
     }
     return action === defaultAction(item) ? `${base} (recommended)` : base;
@@ -380,6 +379,9 @@
                     <option value={opt}>{actionLabel(item, opt)}</option>
                   {/each}
                 </select>
+                {#if item.entry.review && naturalAction(item) !== "enable"}
+                  <div class="muted small review-hint">Uninstall if unused</div>
+                {/if}
               {/if}
             </td>
             <td>
@@ -515,6 +517,10 @@
     display: block;
     margin-top: 0.2rem;
     color: var(--warn);
+  }
+  .review-hint {
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
   }
   .action-select {
     font-size: 0.85rem;
