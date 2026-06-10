@@ -110,6 +110,14 @@
 
   function actionLabel(item: OptimizePlanItem, action: RowAction): string {
     const base = { disable: "Disable", uninstall: "Uninstall", enable: "Enable", skip: "Skip" }[action];
+    // Review rows have no machine recommendation — "Skip (recommended)" would
+    // read as "keep this", which is exactly backwards. The dropdown carries
+    // the decision rule instead.
+    if (item.entry.review && naturalAction(item) !== "enable") {
+      if (action === "skip") return "Keep (I use it)";
+      if (action === "uninstall") return "Uninstall (I don't)";
+      return base;
+    }
     return action === defaultAction(item) ? `${base} (recommended)` : base;
   }
 
