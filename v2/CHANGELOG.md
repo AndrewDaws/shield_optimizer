@@ -17,6 +17,65 @@ When you add a new section, put it at the top; older releases go below.
 
 ---
 
+## v2-2.0.0-beta.12
+
+The audit release: a full codebase review, every finding fixed, plus a big
+Optimize-wizard usability pass.
+
+### Fixed
+
+- **Runaway memory / CPU in long sessions.** Opening the Snapshot tab with no
+  saved snapshots (or the Install APK tab with an empty remembered folder)
+  silently re-fetched in a tight loop forever. This is the likely cause of
+  multi-GB memory reports.
+- **Large file transfers no longer time out.** APK backups, app cloning, and
+  file-manager uploads/downloads previously died at exactly 30 seconds —
+  guaranteed failure for big apps and media files. Transfers now get a
+  15-minute ceiling.
+- **"Connect IP" honesty.** `adb connect` reports success even when it fails;
+  the app now reads the actual result, and an unauthorized connection tells
+  you to approve this computer on the TV.
+- **Snapshot apply / panic recovery** now refresh the App List, Optimize, and
+  Launcher views immediately instead of showing stale states.
+- **Linux: blank window on some Wayland setups** (EGL_BAD_PARAMETER crash) —
+  fixed by disabling WebKit's DMABUF renderer at startup; no more LD_PRELOAD
+  workaround.
+- Action-result messages (e.g. after an APK backup) are now dismissible
+  instead of sticking around for the whole session.
+
+### Optimize wizard
+
+- **Review apps are spotlighted, not buried.** Streaming apps that need your
+  judgment keep full opacity with an orange accent bar, the summary calls out
+  how many — and which ones show **no recent use** ("3 show no recent use:
+  Apple TV, …") — and each row's control now carries the rule itself:
+  *Keep (if you use it)* / *Uninstall*, with an "Uninstall / disable if
+  unused" hint.
+- **Same look as the App List.** One shared row component drives both tabs:
+  state badge, labeled RAM, "last used" cue, and REVIEW pill all match, and
+  the wizard gains the same default-on **Hide not installed** filter.
+- Usage cues now read "last used 5d ago" instead of a bare "5d ago".
+
+### Changed
+
+- **Overview's "Send text to TV" box is gone** — the Remote tab's live typing
+  replaced it.
+- The footer now links to [Ko-fi](https://ko-fi.com/bryanroscoe) if you want
+  to support development.
+- **App catalog accuracy pass**: Discovery+ is correctly reinstallable;
+  YouTube Kids (TV), Showtime, and Epix Now are marked defunct (services
+  discontinued); the STARZPLAY entry is renamed LIONSGATE+.
+
+### Hardening & internals
+
+- Device-shell input validation closed its last gaps (snapshot package names,
+  settings keys/values are now validated or quoted everywhere).
+- The launcher-takeover logic — the most safety-critical code path — gained
+  its first full test suite (149 tests total), including the revert path.
+- The 3,900-line device page was decomposed into per-tab components; CI now
+  runs the full lint/test surface; docs were brought back in line with
+  reality.
+
 ## v2-2.0.0-beta.11
 
 A big App List / Optimize update centered on smarter, safer recommendations.
