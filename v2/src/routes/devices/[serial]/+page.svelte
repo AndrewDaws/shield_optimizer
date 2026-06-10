@@ -24,6 +24,7 @@
   import RamBadge from "$lib/components/RamBadge.svelte";
   import UsageBadge from "$lib/components/UsageBadge.svelte";
   import StateBadge from "$lib/components/StateBadge.svelte";
+  import AppRow from "$lib/components/AppRow.svelte";
   import FilesTab from "$lib/components/FilesTab.svelte";
   import TweaksTab from "$lib/components/TweaksTab.svelte";
   import SideloadTab from "$lib/components/SideloadTab.svelte";
@@ -57,9 +58,6 @@
   let screenshotBusy = $state(false);
   let screenshot = $state<ScreenshotResult | null>(null);
 
-  let sendTextValue = $state("");
-  let sendTextBusy = $state(false);
-  let sendTextMessage = $state("");
   let trimBusy = $state(false);
   let trimMessage = $state("");
 
@@ -160,21 +158,6 @@
       device = await api.deviceProfile(serial);
     } catch (e) {
       deviceErr = String(e);
-    }
-  }
-
-  async function sendTextToTv() {
-    if (!sendTextValue) return;
-    sendTextBusy = true;
-    sendTextMessage = "";
-    try {
-      const r = await api.sendText(serial, sendTextValue);
-      sendTextMessage = r.message;
-      if (r.ok) sendTextValue = "";
-    } catch (e) {
-      sendTextMessage = String(e);
-    } finally {
-      sendTextBusy = false;
     }
   }
 
@@ -980,7 +963,7 @@
     snapshots = []; snapshotsLoaded = false; snapshotsErr = null; preview = null; previewPath = null; previewErr = null; saveResult = "";
     headerActionMsg = ""; recoveryResult = null; recoveryErr = null; screenshot = null;
     renaming = false; renameValue = "";
-    sendTextValue = ""; sendTextMessage = ""; trimMessage = "";
+    trimMessage = "";
     applyResult = null; applyErr = null;
   }
 
@@ -1141,32 +1124,6 @@
           <dt>Board platform</dt><dd>{device.properties.board_platform}</dd>
         </dl>
       {/if}
-
-      <div class="send-text-section">
-        <h3>Send text to TV</h3>
-        <p class="muted small">
-          Types into whatever field has focus on the TV — put the cursor in the
-          Wi-Fi password or search box first, then send from a real keyboard.
-        </p>
-        <div class="send-text-row">
-          <input
-            placeholder="Text to type on the TV"
-            bind:value={sendTextValue}
-            onkeydown={(e) => e.key === "Enter" && sendTextToTv()}
-          />
-          <button
-            class="primary"
-            onclick={sendTextToTv}
-            disabled={sendTextBusy || !sendTextValue}
-            title="adb shell input text — printable ASCII only"
-          >
-            {sendTextBusy ? "Sending…" : "Send"}
-          </button>
-        </div>
-        {#if sendTextMessage}
-          <p class="muted small mono">{sendTextMessage}</p>
-        {/if}
-      </div>
 
       <div class="recovery-section">
         <h3>Emergency Recovery</h3>
@@ -1335,7 +1292,10 @@
             </tbody>
           </table>
           {#if appActionMessage}
-            <p class="muted small mono">{appActionMessage}</p>
+            <p class="muted small mono">
+              {appActionMessage}
+              <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss">✕</button>
+            </p>
           {/if}
         {/if}
       {/if}
@@ -1486,7 +1446,10 @@
           plus APK backup and copy-to-another-device.
         </p>
         {#if appActionMessage}
-          <p class="muted small mono action-message">{appActionMessage}</p>
+          <p class="muted small mono action-message">
+            {appActionMessage}
+            <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss">✕</button>
+          </p>
         {/if}
         {#if clonePkg}
           <div class="clone-panel">
@@ -1515,24 +1478,18 @@
             {#each visibleApps as a (a.package)}
               {@const state = appStates[a.package] ?? "enabled"}
               {@const rec = recommendation(a, state)}
-              <tr>
-                <td class="app-cell">
-                  <div class="app-name-row">{a.name}</div>
-                  {#if a.optimize_description}
-                    <div class="muted small app-desc">{a.optimize_description}</div>
-                  {/if}
-                  <div class="muted small mono pkg-id">{a.package}</div>
-                </td>
-                <td class="center">
-                  <StateBadge {state} />
-                  {#if appMemory[a.package]}
-                    <div class="cell-cue"><RamBadge mb={appMemory[a.package]} /></div>
-                  {/if}
-                  {#if appUsage[a.package] && state !== "missing"}
-                    <div class="cell-cue"><UsageBadge usage={appUsage[a.package]} /></div>
-                  {/if}
-                </td>
-                <td class={`risk center risk-${a.risk}`}>{a.risk.toUpperCase()}</td>
+              <AppRow
+                name={a.name}
+                description={a.optimize_description}
+                package={a.package}
+                review={a.review}
+                {state}
+                mb={appMemory[a.package]}
+                usage={appUsage[a.package]}
+                showUsage={state !== "missing"}
+                risk={a.risk}
+              >
+                {#snippet actions()}
                 <td class="rec-cell">
                   {#if rec.kind === "act"}
                     <button
@@ -1618,7 +1575,8 @@
                     <span class="muted small">—</span>
                   {/if}
                 </td>
-              </tr>
+                {/snippet}
+              </AppRow>
             {/each}
             {#if visibleApps.length === 0}
               <tr><td colspan="5" class="muted">No curated apps match your filters.</td></tr>
@@ -2169,6 +2127,18 @@
     border-radius: 4px;
     word-break: break-word;
   }
+  .dismiss {
+    margin-left: 0.5rem;
+    padding: 0 0.3rem;
+    background: none;
+    border: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 0.75rem;
+  }
+  .dismiss:hover {
+    color: var(--fg-primary);
+  }
   .device-title-row {
     display: flex;
     align-items: flex-start;
@@ -2268,19 +2238,6 @@
     align-items: center;
     gap: 0.6rem;
     flex-wrap: wrap;
-  }
-  .send-text-section {
-    margin-top: 1.5rem;
-    padding-top: 1.2rem;
-    border-top: 1px solid var(--border);
-  }
-  .send-text-row {
-    display: flex;
-    gap: 0.5rem;
-    max-width: 480px;
-  }
-  .send-text-row input {
-    flex: 1;
   }
   .clone-panel {
     display: flex;

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { api } from "$lib/api";
   import type { DeviceType, OptimizeMode, OptimizePlan, OptimizePlanItem, AppUsage } from "$lib/types";
-  import RamBadge from "$lib/components/RamBadge.svelte";
-  import UsageBadge from "$lib/components/UsageBadge.svelte";
+  import AppRow from "$lib/components/AppRow.svelte";
+  import { isStaleUsage, usageLabel } from "$lib/usage";
 
   let {
     serial,
@@ -110,6 +110,13 @@
 
   function actionLabel(item: OptimizePlanItem, action: RowAction): string {
     const base = { disable: "Disable", uninstall: "Uninstall", enable: "Enable", skip: "Skip" }[action];
+    // Review rows have no machine recommendation — "Skip (recommended)" would
+    // read as "keep this", which is exactly backwards. The dropdown carries
+    // the decision rule instead.
+    if (item.entry.review && naturalAction(item) !== "enable") {
+      if (action === "skip") return "Keep (if you use it)";
+      return base;
+    }
     return action === defaultAction(item) ? `${base} (recommended)` : base;
   }
 
@@ -188,6 +195,29 @@
     }
   }
 
+  /// On-device state for an Optimize row, read off the plan's skip reason so
+  /// StateBadge renders meaningfully here: a not-installed skip ⇒ missing, an
+  /// already-disabled skip ⇒ disabled, everything else ⇒ enabled.
+  function rowState(item: OptimizePlanItem): "enabled" | "disabled" | "missing" {
+    if (item.action.kind === "skip") {
+      if (item.action.reason === "not_installed") return "missing";
+      if (item.action.reason === "already_disabled") return "disabled";
+    }
+    return "enabled";
+  }
+
+  // Mirror the App List's default-on filter: most catalog apps aren't on any
+  // given device, so an unfiltered plan is mostly un-actionable "Missing" rows.
+  // Filters only the rendered rows — the plan, summary, and counts are untouched.
+  let optimizeHideNotInstalled = $state(true);
+  let visibleOptimizeItems = $derived(
+    optimizePlan
+      ? optimizePlan.items.filter(
+          (i) => !(optimizeHideNotInstalled && rowState(i) === "missing"),
+        )
+      : [],
+  );
+
   function skipReasonLabel(item: OptimizePlanItem): string | null {
     if (item.action.kind !== "skip") return null;
     switch (item.action.reason) {
@@ -240,6 +270,28 @@
         <span class="muted">≈ {totalRunning.toFixed(0)} MB of RAM in play.</span>
       {/if}
     </div>
+    {#if optimizeMode === "optimize"}
+      {@const reviewItems = optimizePlan.items.filter((i) => i.entry.review && rowState(i) === "enabled")}
+      {@const usageLoaded = Object.keys(appUsage).length > 0}
+      {@const staleReview = usageLoaded ? reviewItems.filter((i) => isStaleUsage(appUsage[i.entry.package])) : []}
+      {#if reviewItems.length > 0}
+        <!-- The wizard's real value-add: the catalog can't know which streaming
+             apps YOU use, so these rows need a human call — and the usage data
+             says where to look first. -->
+        <div class="review-callout">
+          <strong>{reviewItems.length}</strong> app{reviewItems.length === 1 ? "" : "s"} flagged for review (orange bar) — remove the ones you don't use.
+          {#if staleReview.length > 0}
+            <span class="stale-line">
+              <strong>{staleReview.length}</strong> show no recent use:
+              {staleReview
+                .slice(0, 5)
+                .map((i) => `${i.entry.name} (${usageLabel(appUsage[i.entry.package])})`)
+                .join(", ")}{staleReview.length > 5 ? `, +${staleReview.length - 5} more` : ""}.
+            </span>
+          {/if}
+        </div>
+      {/if}
+    {/if}
     <div class="apply-row">
       <button
         class="primary"
@@ -265,50 +317,47 @@
       <p class="muted small mono action-message">{optimizeSummary}</p>
     {/if}
 
+    <div class="app-toolbar">
+      <label class="inline-check">
+        <input type="checkbox" bind:checked={optimizeHideNotInstalled} />
+        Hide not installed
+      </label>
+    </div>
+
     <table class="optimize-table">
       <thead>
         <tr>
           <th>App</th>
-          <th>RAM</th>
-          <th>Risk</th>
+          <th class="center">State</th>
+          <th class="center">Risk</th>
           <th>Action</th>
           <th>Result</th>
         </tr>
       </thead>
       <tbody>
-        {#each optimizePlan.items as item (item.entry.package)}
+        {#each visibleOptimizeItems as item (item.entry.package)}
           {@const skip = skipReasonLabel(item)}
           {@const progress = optimizeProgress[item.entry.package]}
           {@const eff = effectiveAction(item)}
-          <tr class:dim={eff === "skip"} class:acting={!skip && eff !== "skip"}>
-            <td>
-              <div class="app-name">
-                {item.entry.name}
-                {#if item.entry.default_optimize}
-                  <span class="tag installed">DEFAULT</span>
-                {:else if item.entry.review}
-                  <span class="tag review" title="Remove if you don't use it">REVIEW</span>
-                {/if}
-              </div>
-              {#if item.entry.optimize_description}
-                <div class="muted small app-desc">{item.entry.optimize_description}</div>
-              {/if}
-              <div class="muted small mono">{item.entry.package}</div>
-              {#if appUsage[item.entry.package] && naturalAction(item) !== null}
-                <div class="cell-cue"><UsageBadge usage={appUsage[item.entry.package]} /></div>
-              {/if}
-            </td>
-            <td class="num">
-              <!-- Live RAM for installed + enabled rows only (naturalAction
-                   null ⇒ not-installed / already-disabled, where a residual
-                   process isn't reclaimable). -->
-              {#if item.memory_mb && naturalAction(item) !== null}
-                <RamBadge mb={item.memory_mb} label={false} />
-              {:else}
-                <span class="muted">—</span>
-              {/if}
-            </td>
-            <td class={`risk risk-${item.entry.risk}`}>{item.entry.risk.toUpperCase()}</td>
+          <AppRow
+            name={item.entry.name}
+            description={item.entry.optimize_description}
+            package={item.entry.package}
+            review={item.entry.review}
+            state={rowState(item)}
+            mb={item.memory_mb ?? undefined}
+            usage={appUsage[item.entry.package]}
+            showUsage={naturalAction(item) !== null}
+            risk={item.entry.risk}
+            rowClass={eff === "skip"
+              ? item.entry.review && !skip
+                ? "review-flag"
+                : "dim"
+              : !skip
+                ? "acting"
+                : undefined}
+          >
+            {#snippet actions()}
             <td>
               {#if skip}
                 <span class="terminal-reason">{skip}</span>
@@ -330,6 +379,9 @@
                     <option value={opt}>{actionLabel(item, opt)}</option>
                   {/each}
                 </select>
+                {#if item.entry.review && naturalAction(item) !== "enable"}
+                  <div class="muted small review-hint">Uninstall / disable if unused</div>
+                {/if}
               {/if}
             </td>
             <td>
@@ -343,7 +395,8 @@
                 <span class="tag" style="background:var(--danger-surface); color:var(--danger-text)" title={optimizeFailureMessages[item.entry.package] ?? ""}>FAILED</span>
               {/if}
             </td>
-          </tr>
+            {/snippet}
+          </AppRow>
         {/each}
       </tbody>
     </table>
@@ -406,16 +459,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  td.num {
-    font-family: ui-monospace, monospace;
-    text-align: right;
-    width: 100px;
-  }
-  td.risk {
-    font-family: ui-monospace, monospace;
-    font-size: 0.78rem;
-    letter-spacing: 0.04em;
-  }
   .tag {
     font-size: 0.7rem;
     padding: 0.15rem 0.5rem;
@@ -423,11 +466,6 @@
     letter-spacing: 0.04em;
   }
   .tag.installed { background: var(--ok-surface); color: var(--ok); }
-  .tag.review { background: var(--warn-surface-2); color: var(--warn); }
-  /* Small stacked cue (RAM / last-used badge) under a row's state badge. */
-  .cell-cue {
-    margin-top: 0.2rem;
-  }
   .action-message {
     margin-top: 0.4rem;
     padding: 0.4rem 0.6rem;
@@ -443,6 +481,20 @@
     margin: 0.8rem 0 0.4rem;
     flex-wrap: wrap;
   }
+  .app-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 0.6rem 0;
+  }
+  .inline-check {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
 
   /* Optimize-specific styles. */
   .plan-summary {
@@ -453,17 +505,26 @@
     border-radius: 4px;
     font-size: 0.9rem;
   }
-  /* Skipped rows recede; rows that WILL be acted on stand out with a left
-     accent bar and a faint tint so the consequential rows are obvious at a
-     glance (the dim-everything approach was too subtle to read). */
-  .optimize-table tr.dim {
-    opacity: 0.78;
+  .review-callout {
+    margin: 0.4rem 0;
+    padding: 0.5rem 0.8rem;
+    background: var(--bg-inset);
+    border: 1px solid var(--warn);
+    border-radius: 4px;
+    font-size: 0.85rem;
   }
-  .optimize-table tr.acting td {
-    background: color-mix(in srgb, var(--accent-strong) 8%, transparent);
+  .review-callout .stale-line {
+    display: block;
+    margin-top: 0.2rem;
+    color: var(--warn);
   }
-  .optimize-table tr.acting td:first-child {
-    box-shadow: inset 3px 0 0 var(--accent-strong);
+  /* Width-capped to the dropdown's footprint so the text centers under the
+     control rather than the (wider) table cell. */
+  .review-hint {
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    max-width: 11rem;
+    text-align: center;
   }
   .action-select {
     font-size: 0.85rem;
