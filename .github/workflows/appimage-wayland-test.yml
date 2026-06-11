@@ -49,7 +49,7 @@ jobs:
       - name: Start headless weston + XWayland (detached)
         run: |
           docker exec wayland-box bash -c \
-            'mkdir -p /tmp/xdg && chmod 700 /tmp/xdg'
+            'mkdir -p /tmp/xdg && chmod 700 /tmp/xdg && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix'
           docker exec -d wayland-box bash -c \
             'XDG_RUNTIME_DIR=/tmp/xdg weston --backend=headless --socket=wayland-1 --xwayland >/tmp/weston.log 2>&1'
           sleep 5
