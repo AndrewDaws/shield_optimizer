@@ -3673,6 +3673,45 @@ function Set-BoolSetting ($Target, $Namespace, $Key, $Label) {
     if ($sel -ne -1 -and $sel -ne 3) { Pause }
 }
 
+# Private DNS (DNS-over-TLS). No root needed — three `global` settings keys.
+function Set-PrivateDns ($Target) {
+    $cur = (& $Script:AdbPath -s $Target shell "settings get global private_dns_mode" 2>&1 | Out-String).Trim()
+    $curHost = (& $Script:AdbPath -s $Target shell "settings get global private_dns_specifier" 2>&1 | Out-String).Trim()
+    $shown = if ($cur -eq "hostname" -and $curHost -and $curHost -ne "null") { "$cur ($curHost)" } else { $cur }
+    Write-Header "Private DNS (current: $shown)"
+    $opts = @("Off", "Automatic", "Custom hostname", "Cancel")
+    $descs = @("Disable Private DNS.", "Opportunistic DoT (provider's default).", "DNS-over-TLS to a host you pick (AdGuard, NextDNS, Cloudflare...).", "No change.")
+    $sel = Read-Menu -Title "Private DNS" -Options $opts -Descriptions $descs -Shortcuts @("O", "A", "C", "X")
+    switch ($sel) {
+        0 { & $Script:AdbPath -s $Target shell "settings put global private_dns_mode off" | Out-Null; Write-Success "Private DNS off." }
+        1 { & $Script:AdbPath -s $Target shell "settings put global private_dns_mode opportunistic" | Out-Null; Write-Success "Private DNS automatic." }
+        2 {
+            $dnsHost = Read-Host "Hostname (e.g. dns.adguard.com)"
+            if (-not [string]::IsNullOrWhiteSpace($dnsHost)) {
+                & $Script:AdbPath -s $Target shell "settings put global private_dns_specifier $($dnsHost.Trim())" | Out-Null
+                & $Script:AdbPath -s $Target shell "settings put global private_dns_mode hostname" | Out-Null
+                # A bad/unreachable DoT host leaves the device with NO working DNS (Android won't fall back).
+                # Probe by resolving+pinging a name; revert to automatic if it's dead so we never strand the device.
+                # ponytail: "bytes from" means resolution worked. DoT validation can lag a few seconds, so retry
+                # before giving up — a single probe false-negatives a good host. Swap for a real DoT handshake check if that's not enough.
+                $resolved = $false
+                foreach ($attempt in 1..3) {
+                    Start-Sleep -Seconds 2
+                    $probe = & $Script:AdbPath -s $Target shell "ping -c1 -W3 connectivitycheck.gstatic.com" 2>&1 | Out-String
+                    if ($probe -match "bytes from") { $resolved = $true; break }
+                }
+                if ($resolved) {
+                    Write-Success "Private DNS set to $($dnsHost.Trim()); resolution verified."
+                } else {
+                    & $Script:AdbPath -s $Target shell "settings put global private_dns_mode opportunistic" | Out-Null
+                    Write-Warn "No DNS resolution via $($dnsHost.Trim()) — reverted to automatic to keep the device online. Check the hostname."
+                }
+            } else { Write-Warn "No hostname entered; unchanged." }
+        }
+    }
+    if ($sel -ne -1 -and $sel -ne 3) { Pause }
+}
+
 # --- SNAPSHOT / RESTORE ---
 # Snapshots capture the disabled-package set, current launcher, and the
 # settings keys this tool can modify. Apply re-disables packages from the
@@ -4019,7 +4058,7 @@ while ($true) {
         # Inner loop: stay on this device's action menu until Back/Reboot/Disconnect/ESC
         while ($true) {
             # Action menu with device type info
-            $aOpts = @("Optimize", "Restore", "Report", "Launcher Setup", "Install APK", "Profile", "Recovery", "Display Scaling", "Tweaks", "Snapshot", "Reboot", "Disconnect", "Back", "Quit")
+            $aOpts = @("Optimize", "Restore", "Report", "Launcher Setup", "Install APK", "Profile", "Recovery", "Display Scaling", "Tweaks", "Private DNS", "Snapshot", "Reboot", "Disconnect", "Back", "Quit")
             $aDescs = @(
                 "Debloat apps and tune performance for $deviceTypeName.",
                 "Undo optimizations and fix missing apps.",
@@ -4030,6 +4069,7 @@ while ($true) {
                 "Emergency: Re-enable ALL disabled packages.",
                 "Change resolution and density (wm size/density).",
                 "HDMI-CEC, frame-rate matching, long-press timeout.",
+                "Set DNS-over-TLS (off / automatic / custom hostname).",
                 "Save / apply a snapshot of disabled apps + tunables.",
                 "Restart device (normal, recovery, or bootloader).",
                 "Disconnect this device from ADB.",
@@ -4037,7 +4077,7 @@ while ($true) {
                 "Exit Optimizer."
             )
             # Shortcuts: O=Optimize, R=Restore, E=rEport, L=Launcher, I=Install APK, P=Profile, C=reCovery, S=Scaling, K=tweaKs, N=sNapshot, T=reboot, D=Disconnect, B=Back, Q=Quit
-            $actionShortcuts = @("O", "R", "E", "L", "I", "P", "C", "S", "K", "N", "T", "D", "B", "Q")
+            $actionShortcuts = @("O", "R", "E", "L", "I", "P", "C", "S", "K", "Y", "N", "T", "D", "B", "Q")
             $aSel = Read-Menu -Title "Action Menu: $($target.Name) ($deviceTypeName)" -Options $aOpts -Descriptions $aDescs -Shortcuts $actionShortcuts
 
             # Handle ESC - return to main menu
@@ -4069,6 +4109,7 @@ while ($true) {
             if ($act -eq "Recovery") { Run-PanicRecovery -Target $target.Serial; Pause }
             if ($act -eq "Display Scaling") { Set-DisplayScaling -Target $target.Serial; Pause }
             if ($act -eq "Tweaks") { Set-DisplayInputTuning -Target $target.Serial }
+            if ($act -eq "Private DNS") { Set-PrivateDns -Target $target.Serial }
             if ($act -eq "Snapshot") { Show-SnapshotMenu -Target $target.Serial -DeviceName $target.Name -DeviceType $target.Type }
         }
     }
