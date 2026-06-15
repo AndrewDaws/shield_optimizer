@@ -17,6 +17,28 @@ When you add a new section, put it at the top; older releases go below.
 
 ---
 
+## v2-2.0.0-beta.14
+
+### Added
+
+- **Auto-updater** — the app now checks for updates on launch using Tauri's
+  signed updater. An "Auto-update" checkbox in the header controls whether
+  updates download automatically; an "Update now" button appears when one is
+  available. Builds are signed with an Ed25519 key.
+- **Network scan after ADB install** — installing platform-tools now
+  automatically scans the local network for devices, matching boot behavior.
+- **Dev tooling** — `Makefile` (`make dev`, `make brew`, `make setup`) and
+  `.nvmrc` for consistent Node versions.
+- **`appops` commands** — new `set_app_op` / `get_app_op` Tauri commands for
+  future use (AppOps-level permission control).
+
+### Fixed
+
+- **Tweaks: Nvidia System Hooks description** — corrected from "disables
+  Netflix button" to its actual function (Xbox controller Guide → Home
+  remapping). The Shield remote's Netflix button is firmware-level and cannot
+  be disabled via ADB.
+
 ## v2-2.0.0-beta.13
 
 ### Fixed
