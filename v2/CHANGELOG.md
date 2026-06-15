@@ -17,6 +17,27 @@ When you add a new section, put it at the top; older releases go below.
 
 ---
 
+## v2-2.0.0-beta.15
+
+### Added
+
+- **Instant Remote control.** The Remote tab now drives the TV over a persistent
+  scrcpy control channel instead of a fresh ADB call per press — key presses go
+  from ~0.7s to near-instant, typing supports full UTF-8, and holding a D-pad
+  direction repeats. A live **● instant / ○ compatible** cue shows which transport
+  is active, with a **Force compatible mode** toggle as a fallback.
+- **Recents and Settings buttons** on the Remote. Settings opens via an intent
+  (the Shield's gear/hamburger button), so it works where a raw keycode doesn't.
+- **Private DNS (DNS-over-TLS)** in Tweaks — Off / Automatic / Custom hostname,
+  with a safety net that reverts a dead custom host back to automatic so the
+  device never loses DNS.
+
+### Fixed
+
+- **Wireless-debugging devices** (Android 11+) are now labeled **Network**, not USB.
+- **Google Pixel phones are no longer mislabeled as Google TV** — device type is
+  detected from the actual TV build characteristic, not brand alone.
+
 ## v2-2.0.0-beta.14
 
 ### Added
