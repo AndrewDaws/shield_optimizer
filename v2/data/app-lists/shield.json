@@ -59,8 +59,8 @@
     "name": "Nvidia System Hooks",
     "method": "disable",
     "risk": "medium",
-    "optimize_description": "Shield-specific system integration hooks.",
-    "restore_description": "Restores Shield hooks.",
+    "optimize_description": "Shield system hooks — remaps the Xbox controller Guide button to Home. Disabling fixes Guide button conflicts in Steam Link and Moonlight.",
+    "restore_description": "Restores Shield system hooks (Xbox Guide → Home remapping).",
     "default_optimize": false,
     "default_restore": false,
     "play_store": false

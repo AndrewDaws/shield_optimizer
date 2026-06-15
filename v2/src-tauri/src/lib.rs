@@ -66,6 +66,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             devices::list_devices,
@@ -99,6 +100,10 @@ pub fn run() {
             apps::app_usage_map,
             apps::safety_info,
             apps::trim_caches,
+            apps::app_permission_state,
+            apps::set_app_permission,
+            apps::set_app_op,
+            apps::get_app_op,
             input::send_text,
             input::send_key,
             sideload::install_apk,

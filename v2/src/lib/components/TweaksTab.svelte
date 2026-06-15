@@ -19,21 +19,95 @@
   let displayScaleMessage = $state<string>("");
   let currentDisplayScaling = $state<CurrentDisplayScaling | null>(null);
 
+  // Disabling Nvidia's system hooks package. This controls Xbox controller
+  // button remapping (Guide → Home). On the 2019+ remote the dedicated
+  // Netflix button is handled at the firmware/keylayout level and cannot be
+  // disabled via ADB — a button remapper app is needed for that.
+  const NETFLIX_HOOKS_PKG = "com.nvidia.shieldtech.hooks";
+  let netflixHooksState = $state<"enabled" | "disabled" | "missing" | null>(null);
+  let netflixBusy = $state(false);
+
+  // Revoking RECORD_AUDIO from Google's search app disables the remote's
+  // Assistant/mic button (#77). "missing" => the app/permission isn't here.
+  const ASSISTANT_PKG = "com.google.android.katniss";
+  const ASSISTANT_PERM = "android.permission.RECORD_AUDIO";
+  let assistantState = $state<"granted" | "revoked" | "missing" | null>(null);
+  let assistantBusy = $state(false);
+
   async function loadTweaks() {
     tweaksLoading = true;
     tweaksErr = null;
     try {
-      const [t, s] = await Promise.all([
+      const [t, s, states, perm] = await Promise.all([
         api.getTweaks(serial),
         api.getDisplayScaling(serial).catch(() => null),
+        api.packageStates(serial, [NETFLIX_HOOKS_PKG]).catch(() => null),
+        api.appPermissionState(serial, ASSISTANT_PKG, ASSISTANT_PERM).catch(() => null),
       ]);
       tweaks = t;
       currentDisplayScaling = s;
+      netflixHooksState = states ? (states[NETFLIX_HOOKS_PKG] ?? null) : null;
+      assistantState = perm ?? null;
     } catch (e) {
       tweaksErr = String(e);
     } finally {
       tweaksLoading = false;
     }
+  }
+
+  // On = enable the hooks (Xbox Guide → Home works); Off = disable them.
+  async function setNetflixButton(enabled: boolean) {
+    netflixBusy = true;
+    tweaksActionMessage = "";
+    try {
+      const r = enabled
+        ? await api.enablePackage(serial, NETFLIX_HOOKS_PKG)
+        : await api.disablePackage(serial, NETFLIX_HOOKS_PKG);
+      tweaksActionMessage = `System hooks ${enabled ? "on" : "off"}: ${r.message.trim()}`;
+      const states = await api.packageStates(serial, [NETFLIX_HOOKS_PKG]);
+      netflixHooksState = states[NETFLIX_HOOKS_PKG] ?? netflixHooksState;
+    } catch (e) {
+      tweaksActionMessage = `System hooks: ${e}`;
+    } finally {
+      netflixBusy = false;
+    }
+  }
+
+  // On = grant RECORD_AUDIO (Assistant button works); Off = revoke it.
+  async function setAssistantButton(enabled: boolean) {
+    assistantBusy = true;
+    tweaksActionMessage = "";
+    try {
+      const r = await api.setAppPermission(serial, ASSISTANT_PKG, ASSISTANT_PERM, enabled);
+      tweaksActionMessage = `Assistant button ${enabled ? "on" : "off"}: ${r.message.trim()}`;
+      assistantState = await api.appPermissionState(serial, ASSISTANT_PKG, ASSISTANT_PERM);
+    } catch (e) {
+      tweaksActionMessage = `Assistant button: ${e}`;
+    } finally {
+      assistantBusy = false;
+    }
+  }
+
+  // Human-readable "current value" for each tweak — raw setting values like
+  // "2" or "400" aren't self-explanatory.
+  function hdmiLabel(v: string | null): string {
+    return v === "1" ? "On" : v === "0" ? "Off" : "Unset";
+  }
+  function matchContentLabel(v: string | null): string {
+    return v === "0" ? "Never" : v === "1" ? "Seamless only" : v === "2" ? "Always" : "Unset (default)";
+  }
+  function bgLimitLabel(v: string | null): string {
+    if (!v) return "Standard";
+    return v === "0" ? "None" : `At most ${v}`;
+  }
+  function longPressLabel(v: string | null): string {
+    return v ? `${v} ms` : "Unset (default 400 ms)";
+  }
+  function animationsLabel(t: TweaksState): string {
+    const w = t.window_animation_scale;
+    const same = w === t.transition_animation_scale && w === t.animator_duration_scale;
+    if (!same) return `mixed (${w ?? "?"} / ${t.transition_animation_scale ?? "?"} / ${t.animator_duration_scale ?? "?"})`;
+    return w === "0" ? "Off" : w === "0.5" ? "Fast (0.5×)" : w === "1" ? "Default (1×)" : w ? `${w}×` : "Unset (default)";
   }
 
   // Write a setting, then refresh the on-screen state for that key by
@@ -109,8 +183,8 @@
     </button>
   </div>
   <p class="muted small">
-    Flip the same settings v1's Display/Input Tuning menu wrote. Each click runs
-    <code>settings put</code>. Empty value resets to device default.
+    Flip device behaviors from v1's Display/Input Tuning menu. Most run
+    <code>settings put</code> (empty value resets to default).
   </p>
   {#if tweaksErr}
     <div class="error">{tweaksErr}</div>
@@ -119,6 +193,70 @@
   {:else}
     {#if tweaksActionMessage}
       <p class="muted small mono action-message">{tweaksActionMessage}</p>
+    {/if}
+
+    {#if netflixHooksState && netflixHooksState !== "missing"}
+      <h3>Nvidia System Hooks</h3>
+      <p class="muted small">
+        Controls Nvidia's system hooks (<code>{NETFLIX_HOOKS_PKG}</code>) which
+        remap the Xbox controller's Guide button to Home. Disabling fixes Guide
+        button conflicts in Steam Link and Moonlight. <strong>Note:</strong> the
+        Shield remote's dedicated Netflix button is hardwired at the firmware level
+        and cannot be disabled via ADB — use a button remapper app for that.
+        Reversible any time.
+      </p>
+      <div class="tweak-row">
+        <div>
+          <div class="current">Current: <strong>{netflixHooksState === "disabled" ? "hooks disabled" : "hooks active"}</strong></div>
+          <div class="muted small mono">{NETFLIX_HOOKS_PKG} = {netflixHooksState}</div>
+        </div>
+        <div class="row-actions">
+          <button
+            class="small-action"
+            class:active={netflixHooksState === "enabled"}
+            disabled={netflixBusy}
+            onclick={() => setNetflixButton(true)}
+          >On</button>
+          <button
+            class="small-action"
+            class:active={netflixHooksState === "disabled"}
+            disabled={netflixBusy}
+            onclick={() => setNetflixButton(false)}
+          >Off</button>
+        </div>
+      </div>
+    {/if}
+
+    {#if assistantState && assistantState !== "missing"}
+      <h3>Remote Assistant Button</h3>
+      <p class="muted small">
+        Turning this off revokes the microphone permission from Google's search
+        app (<code>{ASSISTANT_PKG}</code>), so the remote's dedicated
+        Assistant/mic button stops listening. The button may still open the
+        assistant UI briefly, but it won't be able to hear you.
+        <strong>Trade-off:</strong> this also disables voice search in the
+        Play Store. Reversible any time.
+      </p>
+      <div class="tweak-row">
+        <div>
+          <div class="current">Current: <strong>{assistantState === "revoked" ? "mic revoked" : "mic active"}</strong></div>
+          <div class="muted small mono">{ASSISTANT_PKG} mic = {assistantState}</div>
+        </div>
+        <div class="row-actions">
+          <button
+            class="small-action"
+            class:active={assistantState === "granted"}
+            disabled={assistantBusy}
+            onclick={() => setAssistantButton(true)}
+          >On</button>
+          <button
+            class="small-action"
+            class:active={assistantState === "revoked"}
+            disabled={assistantBusy}
+            onclick={() => setAssistantButton(false)}
+          >Off</button>
+        </div>
+      </div>
     {/if}
 
     <h3>HDMI-CEC</h3>
@@ -136,6 +274,7 @@
         <div class="tweak-row">
           <div>
             <div>{row.label}</div>
+            <div class="current">Current: <strong>{hdmiLabel(row.value)}</strong></div>
             <div class="muted small mono">global.{row.key} = {row.value ?? "(unset)"}</div>
           </div>
           <div class="row-actions">
@@ -168,6 +307,7 @@
     </p>
     <div class="tweak-row">
       <div>
+        <div class="current">Current: <strong>{matchContentLabel(tweaks.match_content_frame_rate)}</strong></div>
         <div class="muted small mono">secure.match_content_frame_rate = {tweaks.match_content_frame_rate ?? "(unset)"}</div>
       </div>
       <div class="row-actions">
@@ -200,6 +340,7 @@
     </p>
     <div class="tweak-row">
       <div>
+        <div class="current">Current: <strong>{bgLimitLabel(tweaks.background_process_limit)}</strong></div>
         <div class="muted small mono">global.background_process_limit = {tweaks.background_process_limit ?? "(Standard)"}</div>
       </div>
       <div class="row-actions">
@@ -233,6 +374,7 @@
     </p>
     <div class="tweak-row">
       <div>
+        <div class="current">Current: <strong>{longPressLabel(tweaks.long_press_timeout)}</strong></div>
         <div class="muted small mono">secure.long_press_timeout = {tweaks.long_press_timeout ?? "(unset)"}</div>
       </div>
       <div class="row-actions">
@@ -259,6 +401,7 @@
     </p>
     <div class="tweak-row">
       <div>
+        <div class="current">Current: <strong>{animationsLabel(tweaks)}</strong></div>
         <div class="muted small mono">
           window = {tweaks.window_animation_scale ?? "(unset)"} /
           transition = {tweaks.transition_animation_scale ?? "(unset)"} /
@@ -382,6 +525,13 @@
     background: var(--accent-strong);
     color: #fff;
     border-color: var(--accent);
+  }
+  .current {
+    font-size: 0.85rem;
+    color: var(--fg-secondary);
+  }
+  .current strong {
+    color: var(--fg-primary);
   }
   .action-message {
     margin-top: 0.4rem;
