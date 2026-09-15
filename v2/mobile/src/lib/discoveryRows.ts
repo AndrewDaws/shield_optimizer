@@ -193,5 +193,27 @@ export function buildDiscoveryRows(
     });
   }
 
+  // mDNS answers arrive in whatever order the network produced, so without an
+  // explicit order the list reshuffles between scans. Rank by how directly the
+  // row is usable, then by recency, then by address so it is fully determinate.
+  const statusRank: Record<DiscoveryRowStatus, number> = {
+    connected: 0,
+    "saved-verified": 1,
+    "saved-address": 2,
+    "saved-other-port": 3,
+    // A TV that answered this scan outranks one that did not, even a saved one.
+    found: 4,
+    "saved-missing": 5,
+  };
+  rows.sort((a, b) => {
+    const byStatus = statusRank[a.status] - statusRank[b.status];
+    if (byStatus !== 0) return byStatus;
+    const aUsed = a.savedTarget?.lastUsed ?? "";
+    const bUsed = b.savedTarget?.lastUsed ?? "";
+    if (aUsed !== bUsed) return aUsed < bUsed ? 1 : -1;
+    // Numeric-aware so 192.168.42.71 sorts before 192.168.42.196.
+    return a.host.localeCompare(b.host, undefined, { numeric: true });
+  });
+
   return rows;
 }

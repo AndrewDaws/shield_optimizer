@@ -349,3 +349,31 @@ test("two TVs advertising only adb ids are each named from their own serial", ()
     ],
   );
 });
+
+test("rows are ordered by usability then recency, not by mDNS answer order", () => {
+  const rows = buildDiscoveryRows(
+    [
+      advert("192.168.42.143", 5555, LEGACY, "adb-old-b"),
+      advert("192.168.42.25", 5555, LEGACY, "adb-recent"),
+      advert("192.168.42.99", 5555, LEGACY, "adb-stranger"),
+      advert("192.168.42.71", 5555, LEGACY, "adb-old-a"),
+    ],
+    [
+      saved({ host: "192.168.42.143", hardwareId: "old-b", name: "Media Room", lastUsed: "2026-09-07T00:00:00.000Z" }),
+      saved({ host: "192.168.42.25", hardwareId: "recent", name: "Guest room", lastUsed: "2026-09-14T00:00:00.000Z" }),
+      saved({ host: "192.168.42.71", hardwareId: "old-a", name: "Living Room", lastUsed: "2026-09-07T00:00:00.000Z" }),
+    ],
+    offline,
+  );
+
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.status]),
+    [
+      ["Guest room", "saved-verified"],
+      // Same timestamp, so the address breaks the tie rather than the network.
+      ["Living Room", "saved-verified"],
+      ["Media Room", "saved-verified"],
+      ["Android TV", "found"],
+    ],
+  );
+});
