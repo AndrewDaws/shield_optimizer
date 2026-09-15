@@ -721,7 +721,7 @@
     {#if safetyFailed}
       <div class="stale-warning" role="alert">
         <span class="msr">warning</span>
-        <span>Safety tiers couldn't be loaded, so nothing will be applied.</span>
+        <span>Couldn't check what's safe to change, so nothing will be applied.</span>
         <button class="retry-link" onclick={() => plan && loadSafety(plan)}>Retry</button>
       </div>
     {/if}

@@ -311,7 +311,7 @@
         {#if safetyFailed}
           <div class="stale-warning" role="alert">
             <span class="msr">warning</span>
-            <span>Safety unavailable for the reported names.</span>
+            <span>Couldn't check these names against the safety list.</span>
             <button class="retry-link" onclick={() => ++safetyRetry}>Retry</button>
           </div>
         {/if}

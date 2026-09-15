@@ -237,7 +237,7 @@
               {#if connectErrorKey === savedDeviceKey(d)}
                 <span class="o-note error">Couldn't connect to this saved entry</span>
               {:else if savedHostHasMultipleIdentities(saved, d.host)}
-                <span class="o-note">Shared saved address · identities kept separate</span>
+                <span class="o-note">Another saved TV shares this address</span>
               {/if}
             </div>
             <button class="o-forget" onclick={() => (forgetTarget = d)} aria-label="Forget {d.name}">

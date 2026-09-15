@@ -1,22 +1,14 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { createServer } from "vite";
+import { startViteServer } from "./helpers/vite-harness.mjs";
 
 let server;
 let browser;
 let origin;
 
 before(async () => {
-  const testPort = 14000 + (process.pid % 20000);
-  server = await createServer({
-    root: fileURLToPath(new URL("../", import.meta.url)),
-    logLevel: "silent",
-    server: { host: "127.0.0.1", port: testPort },
-  });
-  await server.listen();
-  origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+  ({ server, origin } = await startViteServer());
   browser = await chromium.launch({ headless: true });
 });
 
@@ -236,7 +228,10 @@ test("protected defaults stay visible and blocked in Optional", async (t) => {
     "true",
   );
   assert.equal(await choices.getByRole("button", { name: "Disable", exact: true }).isDisabled(), true);
-  assert.match(await page.locator(".optimize-list").innerText(), /Required for the TV system interface/);
+  // The reason only lands once the async safety lookup resolves, and every
+  // assertion above it passes on the fail-closed defaults, so nothing here
+  // waits for that. Snapshotting innerText raced it and read an empty list.
+  await page.getByText("Required for the TV system interface.", { exact: false }).waitFor();
 });
 
 test("a plan containing only Unknown defaults opens Optional after safety resolves", async (t) => {

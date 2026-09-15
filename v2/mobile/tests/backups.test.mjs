@@ -1,22 +1,14 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { createServer } from "vite";
+import { startViteServer } from "./helpers/vite-harness.mjs";
 
 let server;
 let browser;
 let origin;
 
 before(async () => {
-  const port = 20_000 + (process.pid % 20_000);
-  server = await createServer({
-    root: fileURLToPath(new URL("../", import.meta.url)),
-    logLevel: "silent",
-    server: { host: "127.0.0.1", port, strictPort: true },
-  });
-  await server.listen();
-  origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+  ({ server, origin } = await startViteServer());
   browser = await chromium.launch({ headless: true });
 });
 

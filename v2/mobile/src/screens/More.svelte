@@ -416,7 +416,7 @@
         an app. Nothing is sent automatically.
       </p>
       {#if diagnosticsCount === 0}
-        <p class="diagnostics-empty">No unknown apps or unmatched processes have been recorded.</p>
+        <p class="diagnostics-empty">Nothing recorded yet.</p>
       {:else}
         <p class="diagnostics-count">
           <strong>{diagnosticsCount}</strong> distinct {diagnosticsCount === 1 ? "record" : "records"}.

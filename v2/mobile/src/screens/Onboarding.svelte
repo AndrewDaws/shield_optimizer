@@ -348,7 +348,7 @@
             {:else if reconnectError && reconnectErrorKey === savedDeviceKey(d)}
               <span class="device-tag">Couldn't reconnect</span>
             {:else if savedHostHasMultipleIdentities(savedDevices, d.host)}
-              <span class="device-tag">Shared saved address · identities kept separate</span>
+              <span class="device-tag">Another saved TV shares this address</span>
             {:else if i === 0 && savedDevices.length > 1}
               <span class="device-tag">Last used</span>
             {/if}
@@ -420,9 +420,9 @@
           {:else if row.status === "saved-address"}
             <span class="device-tag">You have used this address before</span>
           {:else if row.status === "saved-other-port"}
-            <span class="device-tag">Saved · This address answered on another port</span>
+            <span class="device-tag">Answered on a different port</span>
           {:else if row.status === "saved-missing"}
-            <span class="device-tag">Saved · Not found in this scan</span>
+            <span class="device-tag">Didn't answer this scan</span>
           {/if}
         </span>
       {/snippet}
