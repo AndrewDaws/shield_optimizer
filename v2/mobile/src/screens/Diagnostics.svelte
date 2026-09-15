@@ -306,7 +306,7 @@
       <div class="top-memory-section">
         <span class="section-label">Top memory consumers</span>
         <p class="consumers-note">
-          App identity is unverified. These reported memory entries are for inspection only.
+          These are process names, so the app behind each one isn't confirmed. Inspection only.
         </p>
         {#if safetyFailed}
           <div class="stale-warning" role="alert">
@@ -325,12 +325,12 @@
                 <div class="consumer-details">
                   <span class="mono consumer-name">{consumer.package}</span>
                   {#if catalogNames[consumer.package]}
-                    <span class="consumer-pkg">Catalog hint: {catalogNames[consumer.package]}</span>
+                    <span class="consumer-pkg">Looks like {catalogNames[consumer.package]}</span>
                   {/if}
                 </div>
                 {#if tier}
                   <span class="risk-badge {tier.cls}" title="Rule lookup for the reported name only">
-                    Reported-name rule: {tier.label}
+                    {tier.label}
                   </span>
                 {:else if safetyLoading}
                   <span class="risk-badge pending">Checking safety…</span>

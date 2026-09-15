@@ -313,7 +313,7 @@
 
     <div class="callout teal bottom-callout">
       <span class="msr">verified_user</span>
-      <span class="callout-text">Every disable is checked against the audited safety list. Disabled apps can be re-enabled from Apps, or all at once with Emergency recovery in More.</span>
+      <span class="callout-text">Apps your TV needs can't be disabled. Undo anything from Apps, or restore everything from More.</span>
     </div>
   {/if}
 
