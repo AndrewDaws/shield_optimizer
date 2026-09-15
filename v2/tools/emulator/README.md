@@ -89,6 +89,13 @@ export ANDROID_HOME=~/Android/sdk
 ./phone-emulator.sh logs      # follows the RustStdoutStderr tracing output
 ```
 
+Verified end to end on this setup: `deploy` builds the aarch64 debug APK, installs
+it, and launches `MainActivity`; the app runs, renders the Onboarding screen
+correctly, and offers "Enter IP address manually" -- which is the path to use,
+since the scan will find nothing. Unlike the Playwright browser loop, the
+emulator renders real safe-area insets, so layout at the top and bottom edges is
+trustworthy here.
+
 What this does **not** cover, and still needs the Pixel:
 
 - **mDNS discovery.** QEMU user-mode networking does not carry multicast, so the
