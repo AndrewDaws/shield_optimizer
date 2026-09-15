@@ -81,7 +81,12 @@ exactly the way the Pixel does. There is no host validation on the connect path 
 `wireless_connect` passes `host`/`port` straight through.
 
 ```
-npx tauri android dev      # or: build --apk --debug --target aarch64, then adb install
+export ANDROID_HOME=~/Android/sdk
+./phone-emulator.sh install   # system image (only google_apis_playstore is
+./phone-emulator.sh create    #   published for arm64; root is not needed here)
+./phone-emulator.sh start     # boots on emulator-5584, so a TV AVD can share
+./phone-emulator.sh deploy    #   the default 5554 at the same time
+./phone-emulator.sh logs      # follows the RustStdoutStderr tracing output
 ```
 
 What this does **not** cover, and still needs the Pixel:
