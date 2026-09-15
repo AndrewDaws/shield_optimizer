@@ -427,6 +427,18 @@ input:focus-visible {
   gap: 10px;
 }
 
+/* A device row that offers a choice (connect vs pair, or several ports) puts
+   its buttons on their own line -- two of them never fit beside the name and
+   address at 384px, and squeezing them in wraps the name mid-word. */
+.device.choices {
+  flex-wrap: wrap;
+}
+.device.choices .manual-actions {
+  width: 100%;
+  flex-wrap: wrap;
+  padding-left: 58px;
+}
+
 /* Pair header */
 .pairhead {
   display: flex;

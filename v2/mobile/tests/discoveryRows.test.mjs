@@ -278,3 +278,74 @@ test("legacy connect ports are the only ones flagged as needing no pairing code"
     ],
   );
 });
+
+test("an advertised serial verifies a saved TV and names it", () => {
+  const rows = buildDiscoveryRows(
+    [advert("192.168.1.10", 5555, LEGACY, "adb-shield-a")],
+    [saved()],
+    offline,
+  );
+
+  assert.deepEqual(
+    rows.map((row) => [row.key, row.name, row.status]),
+    [["discovery:192.168.1.10", "Living room", "saved-verified"]],
+  );
+  assert.equal(rows[0].savedTarget?.hardwareId, "shield-a");
+});
+
+test("a verified serial recognizes a saved TV that moved to a new address", () => {
+  const rows = buildDiscoveryRows(
+    [advert("192.168.1.99", 5555, LEGACY, "adb-shield-a-jBeCEe")],
+    [saved()],
+    offline,
+  );
+
+  // The serial is identity evidence, so the name travels with the TV and the
+  // stale saved endpoint does not also appear as a second row.
+  assert.deepEqual(
+    rows.map((row) => [row.key, row.name, row.status]),
+    [["discovery:192.168.1.99", "Living room", "saved-verified"]],
+  );
+});
+
+test("a serial that matches no saved TV leaves the row unclaimed", () => {
+  const rows = buildDiscoveryRows(
+    [advert("192.168.1.42", 5555, LEGACY, "adb-1324619053514")],
+    [saved()],
+    offline,
+  );
+
+  assert.deepEqual(
+    rows.map((row) => [row.key, row.name, row.status]),
+    [
+      ["discovery:192.168.1.42", "Android TV", "found"],
+      ["saved:192.168.1.10:5555", "Living room", "saved-missing"],
+    ],
+  );
+});
+
+test("two TVs advertising only adb ids are each named from their own serial", () => {
+  const rows = buildDiscoveryRows(
+    [
+      advert("192.168.42.71", 5555, LEGACY, "adb-0323716101827"),
+      advert("192.168.42.196", 5555, LEGACY, "adb-1324619053514"),
+    ],
+    [
+      saved({ host: "192.168.42.71", hardwareId: "0323716101827", name: "Den" }),
+      saved({
+        host: "192.168.42.196",
+        hardwareId: "1324619053514",
+        name: "Bedroom",
+      }),
+    ],
+    offline,
+  );
+
+  assert.deepEqual(
+    rows.map((row) => [row.name, row.status]),
+    [
+      ["Den", "saved-verified"],
+      ["Bedroom", "saved-verified"],
+    ],
+  );
+});

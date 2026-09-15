@@ -127,7 +127,19 @@
     connectPort: session.connectPort,
   }));
 
-  const foundLabel = "Connection options";
+  const foundLabel = $derived(
+    found.length === 1 ? "1 TV found" : `${found.length} TVs found`,
+  );
+
+  /// The single connect port a row offers when there is no choice to make.
+  /// Those rows become one tap target with a forward arrow; rows that offer a
+  /// connect/pair choice or several ports keep explicit buttons.
+  function soloConnectPort(row: DiscoveryRow): number | null {
+    if (row.source !== "discovery") return null;
+    if (row.status === "connected") return null;
+    if (row.pairingPorts.length > 0) return null;
+    return row.connectPorts.length === 1 ? row.connectPorts[0] : null;
+  }
 
   async function scan() {
     const generation = ++scanGeneration;
@@ -392,27 +404,40 @@
     {#if scanned && found.length}
       <p class="section-label">{foundLabel}</p>
       <div class="devices">
+        {#snippet deviceBody(row: DiscoveryRow)}
+          <span class="device-icon"><span class="msr">cast</span></span>
+          <span class="device-body">
+            <span class="device-name">{row.name}</span>
+            <span class="mono device-addr">{endpointLabel(row)}</span>
+            {#if row.status === "connected"}
+              <span class="device-tag">Connected on :{session.connectPort}</span>
+            {:else if row.status === "saved-verified"}
+              <span class="device-tag">
+                Used before{row.savedTarget ? ` · ${lastUsedLabel(row.savedTarget.lastUsed)}` : ""}
+              </span>
+            {:else if row.status === "saved-address"}
+              <span class="device-tag">You have used this address before</span>
+            {:else if row.status === "saved-other-port"}
+              <span class="device-tag">Saved · This address answered on another port</span>
+            {:else if row.status === "saved-missing"}
+              <span class="device-tag">Saved · Not found in this scan</span>
+            {/if}
+            {#if row.legacyConnectPorts.length > 0 && row.pairingPorts.length === 0}
+              <span class="device-tag">No code needed</span>
+            {/if}
+          </span>
+        {/snippet}
+
         {#each found as row (row.key)}
-          <div class="device">
-            <span class="device-icon"><span class="msr">cast</span></span>
-            <span class="device-body">
-              <span class="device-name">{row.name}</span>
-              <span class="mono device-addr">{endpointLabel(row)}</span>
-              {#if row.status === "connected"}
-                <span class="device-tag">Connected on :{session.connectPort}</span>
-              {:else if row.status === "saved-address"}
-                <span class="device-tag">Saved address (unverified)</span>
-              {:else if row.status === "saved-other-port"}
-                <span class="device-tag">Saved · This address answered on another port</span>
-              {:else if row.status === "saved-missing"}
-                <span class="device-tag">Saved · Not found in this scan</span>
-              {:else}
-                <span class="device-tag">Found on network</span>
-              {/if}
-              {#if row.legacyConnectPorts.length > 0 && row.pairingPorts.length === 0}
-                <span class="device-tag">No code needed</span>
-              {/if}
-            </span>
+          {@const solo = soloConnectPort(row)}
+          {#if solo !== null}
+            <button class="device" onclick={() => connectFound(row, solo)}>
+              {@render deviceBody(row)}
+              <span class="msr device-go">arrow_forward</span>
+            </button>
+          {:else}
+          <div class="device choices">
+            {@render deviceBody(row)}
             <div class="manual-actions">
               {#if row.status === "connected"}
                 <button class="primary small" onclick={openDashboard}>Open dashboard</button>
@@ -435,6 +460,7 @@
               {/if}
             </div>
           </div>
+          {/if}
         {/each}
       </div>
     {:else if scanned}
