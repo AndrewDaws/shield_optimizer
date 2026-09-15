@@ -11,7 +11,7 @@ use crate::license::Feature;
 
 use super::{home_tracking, AppState};
 
-const HOME_HANDLER_QUERY: &str =
+pub(crate) const HOME_HANDLER_QUERY: &str =
     "cmd package query-activities -a android.intent.action.MAIN -c android.intent.category.HOME";
 
 /// Per-step progress sink for `set_default_launcher`. The multi-strategy
@@ -672,7 +672,7 @@ async fn discover_home_activity(
 /// Each Activity block exposes one packageName line. Strict regex (real
 /// package names start with a letter and only contain `[a-zA-Z0-9_.]`)
 /// avoids matching anything that happens to contain the string.
-fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
+pub(crate) fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"^\s*packageName=([a-zA-Z][a-zA-Z0-9_.]+)\s*$").unwrap()
     });

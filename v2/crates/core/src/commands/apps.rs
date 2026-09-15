@@ -15,7 +15,7 @@ use crate::adb::{
     parse_installed_packages_output, parse_permission_granted, parse_total_pss_by_process,
     parse_usage_stats, AppUsage,
 };
-use crate::engine::{classify_safety, is_valid_package_name, Safety};
+use crate::engine::{classify_safety, is_last_enabled_home_handler, is_valid_package_name, Safety};
 use crate::license::Feature;
 
 use super::AppState;
@@ -307,22 +307,64 @@ pub async fn disable_package(
     serial: String,
     package: String,
 ) -> Result<ActionResult, String> {
-    if let Some(rejection) = reject_invalid_package(&package) {
+    disable_package_impl(&state, &serial, &package).await
+}
+
+/// Shared implementation so tests can drive it without Tauri's `State`.
+pub(crate) async fn disable_package_impl(
+    state: &AppState,
+    serial: &str,
+    package: &str,
+) -> Result<ActionResult, String> {
+    if let Some(rejection) = reject_invalid_package(package) {
         return Ok(rejection);
     }
-    if let Safety::NeverDisable { reason } = classify_safety(&package) {
+    if let Safety::NeverDisable { reason } = classify_safety(package) {
         return Ok(ActionResult {
             ok: false,
             message: format!("Refusing to disable {package}: {reason}"),
         });
     }
+    // The launcher screen has always refused to disable the last enabled HOME
+    // handler, but this is the path the app list and the optimize wizard use,
+    // so the same action was unguarded depending on where it was started from.
+    // A third-party launcher is Unknown to the safety rules, so nothing else
+    // stops it. Best-effort: if the handler query fails we proceed as before
+    // rather than blocking every disable on a transient read.
+    if let Some(refusal) = refuse_last_home_handler(state, serial, package).await {
+        return Ok(refusal);
+    }
     state.require_pro(Feature::CuratedDebloat)?;
     run(
-        &state,
-        &serial,
+        state,
+        serial,
         &format!("pm disable-user --user 0 {package}"),
     )
     .await
+}
+
+/// `Some(refusal)` when disabling `package` would leave the device without an
+/// enabled launcher. `None` when it is safe, or when the device could not be
+/// asked — this guards against a foot-gun, it is not the brick-prevention
+/// list, which `classify_safety` already applied above.
+async fn refuse_last_home_handler(
+    state: &AppState,
+    serial: &str,
+    package: &str,
+) -> Option<ActionResult> {
+    let adb = state.adb_snapshot().await;
+    let handlers = adb
+        .shell(serial, super::launcher::HOME_HANDLER_QUERY)
+        .await
+        .ok()
+        .map(|out| super::launcher::parse_home_handler_packages(&out.stdout))?;
+    is_last_enabled_home_handler(package, &handlers).then(|| ActionResult {
+        ok: false,
+        message: format!(
+            "Refusing to disable {package}: it's the only enabled launcher left on this \
+             device. Enable another launcher first."
+        ),
+    })
 }
 
 /// `enable_package` — `pm enable <pkg>`. Reverses a previous disable.
@@ -660,6 +702,68 @@ async fn run(state: &AppState, serial: &str, cmd: &str) -> Result<ActionResult, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shaped after a real Shield: Projectivy is HOME and the stock launcher
+    /// has been disabled, so the only other handler is the settings fallback.
+    fn home_handlers(pkgs: &[&str]) -> String {
+        pkgs.iter()
+            .map(|p| format!("  packageName={p}\n"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn disabling_the_only_launcher_is_refused_from_the_app_list() {
+        use crate::commands::test_support::{state_with, MockAdb};
+        let mock = MockAdb::default().on_shell(
+            "category.HOME",
+            &home_handlers(&["com.spocky.projengmenu", "com.android.tv.settings"]),
+        );
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let result = disable_package_impl(&state, "serial", "com.spocky.projengmenu")
+            .await
+            .unwrap();
+
+        assert!(!result.ok, "{}", result.message);
+        assert!(result.message.contains("only enabled launcher"));
+        let issued = log.lock().unwrap().clone();
+        assert!(
+            !issued.iter().any(|c| c.contains("pm disable-user")),
+            "the disable must not reach the device: {issued:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabling_a_launcher_is_allowed_while_another_remains() {
+        use crate::commands::test_support::{state_with, MockAdb};
+        let state = state_with(MockAdb::default().on_shell(
+            "category.HOME",
+            &home_handlers(&[
+                "com.spocky.projengmenu",
+                "com.google.android.tvlauncher",
+                "com.android.tv.settings",
+            ]),
+        ));
+
+        let result = disable_package_impl(&state, "serial", "com.spocky.projengmenu")
+            .await
+            .unwrap();
+
+        assert!(result.ok, "{}", result.message);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_handler_list_does_not_block_disabling() {
+        use crate::commands::test_support::{state_with, MockAdb};
+        let state = state_with(MockAdb::default().on_shell_err("category.HOME", "device offline"));
+
+        let result = disable_package_impl(&state, "serial", "com.example.app")
+            .await
+            .unwrap();
+
+        assert!(result.ok, "{}", result.message);
+    }
 
     #[tokio::test]
     async fn disabled_read_failure_never_becomes_enabled_state() {
