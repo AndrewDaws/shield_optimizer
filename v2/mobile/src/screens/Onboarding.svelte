@@ -127,8 +127,12 @@
     connectPort: session.connectPort,
   }));
 
-  const foundLabel = $derived(
-    found.length === 1 ? "1 TV found" : `${found.length} TVs found`,
+  // This screen is reached to find a TV the phone has not used yet, so the
+  // unrecognized ones lead and the familiar ones sit underneath.
+  const newRows = $derived(found.filter((row) => row.status === "found"));
+  const knownRows = $derived(found.filter((row) => row.status !== "found"));
+  const newLabel = $derived(
+    newRows.length === 1 ? "1 new TV" : `${newRows.length} new TVs`,
   );
 
   /// The single connect port a row offers when there is no choice to make.
@@ -402,37 +406,35 @@
     </div>
 
     {#if scanned && found.length}
-      <p class="section-label">{foundLabel}</p>
-      <div class="devices">
-        {#snippet deviceBody(row: DiscoveryRow)}
-          <span class="device-icon"><span class="msr">cast</span></span>
-          <span class="device-body">
-            <span class="device-name">{row.name}</span>
-            <span class="mono device-addr">{endpointLabel(row)}</span>
-            {#if row.status === "connected"}
-              <span class="device-tag">Connected on :{session.connectPort}</span>
-            {:else if row.status === "saved-verified"}
-              <span class="device-tag">
-                Used before{row.savedTarget ? ` · ${lastUsedLabel(row.savedTarget.lastUsed)}` : ""}
-              </span>
-            {:else if row.status === "saved-address"}
-              <span class="device-tag">You have used this address before</span>
-            {:else if row.status === "saved-other-port"}
-              <span class="device-tag">Saved · This address answered on another port</span>
-            {:else if row.status === "saved-missing"}
-              <span class="device-tag">Saved · Not found in this scan</span>
-            {/if}
-          </span>
-        {/snippet}
+      {#snippet deviceBody(row: DiscoveryRow)}
+        <span class="device-icon"><span class="msr">cast</span></span>
+        <span class="device-body">
+          <span class="device-name">{row.name}</span>
+          <span class="mono device-addr">{endpointLabel(row)}</span>
+          {#if row.status === "connected"}
+            <span class="device-tag">Connected on :{session.connectPort}</span>
+          {:else if row.status === "saved-verified"}
+            <span class="device-tag">
+              {row.savedTarget ? `Last used ${lastUsedLabel(row.savedTarget.lastUsed)}` : "Used before"}
+            </span>
+          {:else if row.status === "saved-address"}
+            <span class="device-tag">You have used this address before</span>
+          {:else if row.status === "saved-other-port"}
+            <span class="device-tag">Saved · This address answered on another port</span>
+          {:else if row.status === "saved-missing"}
+            <span class="device-tag">Saved · Not found in this scan</span>
+          {/if}
+        </span>
+      {/snippet}
 
-        {#each found as row (row.key)}
-          {@const solo = soloConnectPort(row)}
-          {#if solo !== null}
-            <button class="device" onclick={() => connectFound(row, solo)}>
-              {@render deviceBody(row)}
-              <span class="msr device-go">arrow_forward</span>
-            </button>
-          {:else}
+      {#snippet deviceRow(row: DiscoveryRow)}
+        {@const solo = soloConnectPort(row)}
+        {#if solo !== null}
+          <button class="device" onclick={() => connectFound(row, solo)}>
+            {@render deviceBody(row)}
+            <span class="msr device-go">arrow_forward</span>
+          </button>
+        {:else}
           <div class="device choices">
             {@render deviceBody(row)}
             <div class="manual-actions">
@@ -457,9 +459,22 @@
               {/if}
             </div>
           </div>
-          {/if}
-        {/each}
-      </div>
+        {/if}
+      {/snippet}
+
+      {#if newRows.length}
+        <p class="section-label">{newLabel}</p>
+        <div class="devices">
+          {#each newRows as row (row.key)}{@render deviceRow(row)}{/each}
+        </div>
+      {/if}
+      {#if knownRows.length}
+        <p class="section-label">Already saved</p>
+        <div class="devices">
+          {#each knownRows as row (row.key)}{@render deviceRow(row)}{/each}
+        </div>
+      {/if}
+
     {:else if scanned}
       <p class="section-label">No devices found</p>
       <p class="lede empty">Confirm Wireless debugging is on, then scan again.</p>
