@@ -395,7 +395,7 @@
         debugging</span>.
     </p>
 
-    <div class="radar" aria-hidden="true">
+    <div class="radar" class:compact={scanned && found.length > 0} aria-hidden="true">
       <span class="ring"></span>
       <span class="ring ring2"></span>
       <span class="radar-core"><span class="msr">tv_gen</span></span>
@@ -421,9 +421,6 @@
               <span class="device-tag">Saved · This address answered on another port</span>
             {:else if row.status === "saved-missing"}
               <span class="device-tag">Saved · Not found in this scan</span>
-            {/if}
-            {#if row.legacyConnectPorts.length > 0 && row.pairingPorts.length === 0}
-              <span class="device-tag">No code needed</span>
             {/if}
           </span>
         {/snippet}
