@@ -302,6 +302,16 @@
         : actionable,
   );
 
+  // Every Unknown verdict carries the same canonical sentence from core, so it
+  // is stated once above the list rather than repeated on every row. Still
+  // core's wording, not the screen's -- reasons have one source.
+  const unknownReason = $derived(
+    visibleItems
+      .filter((it) => it.action.kind !== "enable")
+      .map((it) => safetyMap[it.entry.package])
+      .find((verdict) => verdict?.kind === "unknown")?.reason ?? "",
+  );
+
   // Enabling is never destructive, so the never-disable guard only applies to
   // the disable / uninstall directions.
   function isHardBlocked(it: OptimizePlanItem): boolean {
@@ -663,8 +673,8 @@
       <span class="locked-icon msr">lock</span>
       <h2>Debloat is a Pro feature</h2>
       <p class="locked-desc">
-        Pro unlocks the curated debloat plan for this TV, with every disable
-        and uninstall checked by the shared safety engine.
+        Pro unlocks the full debloat plan for this TV. Every disable and uninstall
+        is still checked against the safety list first.
       </p>
       <button class="primary" onclick={() => (showPaywall = true)}>
         <span class="msr">star</span>Unlock Pro
@@ -698,6 +708,9 @@
         ? "Do you use these apps? Keep anything you use. Nothing changes until you confirm."
         : "These are curated choices for this TV. Everything else installed on the device lives in the Apps tab."}
     </p>
+    {#if unknownReason}
+      <p class="tab-hint">Apps marked Unknown: {unknownReason}</p>
+    {/if}
 
     <div class="optimize-summary-card">
       <span class="summary-text">
@@ -768,7 +781,7 @@
                     : ""}
                 </span>
               </div>
-              {#if item.action.kind !== "enable" && tier}
+              {#if item.action.kind !== "enable" && tier && tier.kind !== "unknown"}
                 <span class="row-reason {tier.cls}">{reasonOf(safetyMap[item.entry.package])}</span>
               {:else if item.action.kind !== "enable" && safetyFailed}
                 <span class="row-reason">Safety guidance could not be loaded. Retry before selecting this action.</span>

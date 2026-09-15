@@ -329,8 +329,12 @@ test("protected and unresolved optional actions remain blocked while Unknown is 
   assert.equal(await unknownAction.getAttribute("aria-pressed"), "false");
   await unknownAction.click();
   assert.equal(await unknownAction.getAttribute("aria-pressed"), "true");
+  // A Caution/Protected reason is specific to its package, so it stays on the
+  // row. Every Unknown verdict carries the same sentence, so it is stated once
+  // above the list instead of repeated on each row.
   assert.match(await page.locator(".optimize-list").innerText(), /Required for the system UI/);
-  assert.match(await page.locator(".optimize-list").innerText(), /No audited rule matched/);
+  assert.doesNotMatch(await page.locator(".optimize-list").innerText(), /No audited rule matched/);
+  await page.getByText(/No audited rule matched/).first().waitFor();
 });
 
 test("Restore keeps Recommended and All curated tabs with its prior defaults", async (t) => {

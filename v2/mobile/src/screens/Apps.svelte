@@ -515,8 +515,8 @@
   </div>
 
   <p class="search-hint">
-    Every package on the TV outside the curated catalog. Curated bloat (Live Channels Provider,
-    Google feedback, …) is handled in Optimize — searching for it here comes up empty.
+    Everything else installed on the TV. The bloat this app recognizes lives on the
+    Optimize tab, so searching for it here finds nothing.
   </p>
 
   <div class="filters-row">

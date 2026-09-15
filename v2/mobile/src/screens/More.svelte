@@ -314,7 +314,7 @@
       </div>
 
       {#if !session.isPro}
-        <p class="license-desc">Activate Pro to unlock Curated Debloat, Snapshots, and Launcher takeover.</p>
+        <p class="license-desc">Activate Pro to unlock the debloat plan, snapshots, and custom launchers.</p>
         <div class="license-input-row">
           <input
             type="text"
