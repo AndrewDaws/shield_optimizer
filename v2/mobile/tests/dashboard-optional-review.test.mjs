@@ -358,3 +358,22 @@ test("Restore keeps Recommended and All curated tabs with its prior defaults", a
   assert.equal(await page.getByText("Other Restore", { exact: true }).count(), 1);
   assert.match(await page.locator(".optimize-summary-card").innerText(), /1 selected/);
 });
+
+test("differing Unknown reasons stay on their own rows", async (t) => {
+  const first = item("First Unknown");
+  const second = item("Second Unknown");
+  const page = await createPage(t, {
+    plans: { optimize: { mode: "optimize", items: [first, second] } },
+    safety: {
+      [first.entry.package]: { kind: "unknown", reason: "Not in the reviewed registry." },
+      [second.entry.package]: { kind: "unknown", reason: "Reviewed registry was unreachable." },
+    },
+  });
+  await openScreen(page, "optimize");
+  await page.getByText("First Unknown", { exact: true }).waitFor();
+
+  // Nothing is hoisted when the reasons differ, so neither row loses its own.
+  const list = page.locator(".optimize-list");
+  assert.match(await list.innerText(), /Not in the reviewed registry\./);
+  assert.match(await list.innerText(), /Reviewed registry was unreachable\./);
+});
