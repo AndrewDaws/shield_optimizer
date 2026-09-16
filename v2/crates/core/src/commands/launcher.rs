@@ -296,7 +296,9 @@ pub async fn set_default_launcher_impl(
                 )
                 .await;
             diagnostics.push(match command_failure(&role_result) {
-                Some(ref failure) => format!("cmd role add-role-holder HOME {package} -> {failure}"),
+                Some(ref failure) => {
+                    format!("cmd role add-role-holder HOME {package} -> {failure}")
+                }
                 None => format!("cmd role add-role-holder HOME {package} -> ok"),
             });
             progress.step("Registering it as the Home app");
@@ -1004,8 +1006,8 @@ mod tests {
             &Progress::Silent,
             &mut Vec::new(),
         )
-            .await
-            .expect("stock takeover result");
+        .await
+        .expect("stock takeover result");
 
         assert!(!result.ok);
         assert_eq!(result.current_launcher, None);
@@ -1085,16 +1087,16 @@ mod tests {
             ]);
 
             let result = stock_takeover(
-            &script,
-            "serial",
-            target,
-            stock,
-            true,
-            &Progress::Silent,
-            &mut Vec::new(),
-        )
-                .await
-                .unwrap_or_else(|| panic!("{name}: stock takeover result"));
+                &script,
+                "serial",
+                target,
+                stock,
+                true,
+                &Progress::Silent,
+                &mut Vec::new(),
+            )
+            .await
+            .unwrap_or_else(|| panic!("{name}: stock takeover result"));
 
             assert!(!result.ok, "{name}");
             assert_eq!(result.current_launcher.as_deref(), Some(other), "{name}");
@@ -1541,7 +1543,10 @@ mod tests {
         .unwrap();
 
         let report = res.diagnostics.join("\n");
-        assert!(report.contains("pm enable com.spocky.projengmenu"), "{report}");
+        assert!(
+            report.contains("pm enable com.spocky.projengmenu"),
+            "{report}"
+        );
         assert!(
             report.contains("resolve-activity HOME -> com.google.android.tvlauncher"),
             "{report}"
