@@ -10,30 +10,56 @@ const catalog = JSON.parse(
   readFileSync(join(v2Root, "src/lib/app-files-catalog.json"), "utf8"),
 );
 
+const ids = new Set();
 for (const entry of catalog) {
+  const label = entry.id ?? entry.package ?? "Catalog entry";
+  // `id` keys the UI rows and the results map. It is deliberately separate
+  // from `package`: the SmartTube entry was once keyed by the string in its
+  // backup *filename* (org.smarttube.stable), which is not the installed
+  // package id, so anything that later filtered this catalog by installed
+  // packages would have silently dropped it.
+  assert.ok(
+    typeof entry.id === "string" && entry.id.trim() !== "",
+    `${label} must have an id`,
+  );
+  assert.ok(!ids.has(entry.id), `duplicate catalog id: ${entry.id}`);
+  ids.add(entry.id);
+  assert.ok(
+    typeof entry.package === "string" && /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/i.test(entry.package),
+    `${label} must carry a real installed package id, got ${entry.package}`,
+  );
   assert.ok(
     Array.isArray(entry.search_dirs) && entry.search_dirs.length > 0,
-    `${entry.package ?? "Catalog entry"} must have at least one search directory`,
+    `${label} must have at least one search directory`,
   );
   assert.ok(
     entry.search_dirs.every(
-      (directory) => typeof directory === "string" && directory.trim() !== "",
+      (directory) => typeof directory === "string" && directory.startsWith("/sdcard"),
     ),
-    `${entry.package ?? "Catalog entry"} has an empty search directory`,
+    // find_files refuses anything outside /sdcard, so a dir elsewhere is a
+    // silent no-op rather than a search.
+    `${label} has a search directory outside /sdcard`,
   );
   assert.ok(
     typeof entry.pattern === "string" && entry.pattern.trim() !== "",
-    `${entry.package ?? "Catalog entry"} must have a search pattern`,
+    `${label} must have a search pattern`,
   );
 }
 
-const smartTube = catalog.find(
-  (entry) => entry.package === "org.smarttube.stable",
+const smartTube = catalog.find((entry) => entry.id === "smarttube");
+assert.ok(smartTube, "SmartTube entry is present");
+assert.equal(
+  smartTube.package,
+  "com.teamsmart.videomanager.tv",
+  "SmartTube Stable's installed package id",
 );
-assert.ok(smartTube, "Current SmartTube package is present");
 
+// The reporter's path in #86 was /storage/emulated/0/Documents/SmartTubeBackup,
+// which is /sdcard/Documents/SmartTubeBackup. The legacy app-data location
+// stays so older builds keep working.
 const expectedDirs = [
   "/sdcard/Documents/SmartTubeBackup",
+  "/sdcard/SmartTubeBackup",
   "/sdcard/Android/data/com.teamsmart.videomanager.tv",
 ];
 assert.deepEqual(smartTube.search_dirs, expectedDirs);
@@ -66,7 +92,7 @@ const api = {
     assert.equal(args[0], "synthetic-tv");
     assert.deepEqual(args[1], expectedDirs);
     assert.equal(args[2], "*.zip");
-    return [resultPath];
+    return { hits: [resultPath], unsearched: [] };
   },
 };
 
@@ -78,17 +104,38 @@ const exercise = runInNewContext(
     const appFilesResults = {};
     ${handler}
     await findAppFiles(entry);
-    return { appFilesBusy, filesMessage, found: appFilesResults[entry.package] };
+    return { appFilesBusy, filesMessage, found: appFilesResults[entry.id] };
   })`,
   { api },
 );
 const result = await exercise(smartTube);
 
 assert.equal(calls.length, 1);
-assert.deepEqual(result.found, [resultPath]);
+assert.deepEqual(result.found, { hits: [resultPath], unsearched: [] });
 assert.equal(result.appFilesBusy, null);
 assert.equal(result.filesMessage, "");
 
+// A search that could not run must stay distinguishable from one that ran and
+// found nothing — the UI says different things about them.
+const failing = {
+  findFiles: async () => ({ hits: [], unsearched: expectedDirs.slice(0, 1) }),
+};
+const exerciseFailure = runInNewContext(
+  `(async entry => {
+    const serial = "synthetic-tv";
+    let appFilesBusy = null;
+    let filesMessage = "";
+    const appFilesResults = {};
+    ${handler}
+    await findAppFiles(entry);
+    return appFilesResults[entry.id];
+  })`,
+  { api: failing },
+);
+const failed = await exerciseFailure(smartTube);
+assert.deepEqual(failed.hits, []);
+assert.deepEqual(failed.unsearched, ["/sdcard/Documents/SmartTubeBackup"]);
+
 console.log(
-  "App-files catalog passed: every entry is searchable and SmartTube forwards both backup directories with *.zip.",
+  "App-files catalog passed: ids are unique, packages are real package ids, SmartTube forwards every backup directory with *.zip, and an unsearchable directory stays distinct from no matches.",
 );

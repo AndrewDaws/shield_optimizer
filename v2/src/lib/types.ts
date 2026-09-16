@@ -209,6 +209,13 @@ export interface ScanResult {
   message: string;
 }
 
+export interface FindResult {
+  hits: string[];
+  /// Directories whose search could not be run because the ADB call failed —
+  /// distinct from a directory that simply holds no matches.
+  unsearched: string[];
+}
+
 export interface ScreenshotResult {
   path: string;
   base64: string;

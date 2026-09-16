@@ -298,6 +298,8 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return snapshots;
     case "snapshot_dir_path":
       return "/Users/you/Library/Application Support/com.shieldoptimizer.app/snapshots";
+    case "find_files":
+      return { hits: [], unsearched: [] };
     case "list_apks_in_folder":
       return [];
     case "preview_apply":
