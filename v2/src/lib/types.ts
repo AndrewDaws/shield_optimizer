@@ -199,6 +199,9 @@ export interface ScanResult {
   connected: string[];
   unauthorized: string[];
   failed: string[];
+  /// Pairing `host:port` for devices advertising only an Android 11+ pairing
+  /// service. They need the 6-digit code from the TV before they can connect.
+  needs_pairing: string[];
   message: string;
 }
 

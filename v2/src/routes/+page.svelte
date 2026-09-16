@@ -111,6 +111,15 @@
     try {
       const r = await api.scanNetwork();
       scanMessage = r.message;
+      // A device advertising only a pairing service cannot be connected to
+      // until the user enters the code from its screen. Open the pairing form
+      // on its real advertised port rather than making them read two
+      // different IP:port pairs off the TV (#88).
+      const waiting = r.needs_pairing?.[0];
+      if (waiting && !pairAddress.trim()) {
+        pairAddress = waiting;
+        pairOpen = true;
+      }
       // Always refresh: even a "failed" connect can register the device with
       // the daemon (e.g. unauthorized — waiting for on-TV approval), and the
       // list is where that state is visible.

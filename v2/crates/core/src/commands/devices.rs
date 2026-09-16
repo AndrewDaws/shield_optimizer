@@ -244,29 +244,51 @@ fn normalize_pairing_address(address: &str) -> Result<String, String> {
     normalize_connect_address(address)
 }
 
-/// Validate and normalize an `IP[:port]` string. Rejects empty input, IPs
-/// with the wrong shape, and any port that's not a positive 16-bit number.
-/// Returns the canonical `IP:port` string ADB expects.
+/// Validate and normalize an endpoint for `adb connect` / `adb pair`.
+///
+/// Accepts the three shapes a device can actually be reached at:
+/// - `IPv4[:port]` — the common case; a bare IP defaults to 5555, which is
+///   right for legacy network debugging and wrong for Android 11+. Discovery
+///   supplies the real port, so this default is a last resort for hand-typed
+///   input rather than something the app relies on.
+/// - `[IPv6]:port` — bracketed, as adb and every URL parser expect.
+/// - `adb-XXXX-YYYY._adb-tls-connect._tcp[:port]` — an mDNS service name.
+///   The daemon resolves these itself; rejecting them meant a user could not
+///   paste what discovery had just shown them (GitHub #88).
+///
+/// Rejects empty input and any port that is not a positive 16-bit number.
 pub fn normalize_connect_address(address: &str) -> Result<String, String> {
     let address = address.trim();
     if address.is_empty() {
         return Err("address is empty".to_string());
     }
 
-    let (host, port) = match address.split_once(':') {
-        Some((h, p)) => (h, p),
-        None => (address, "5555"),
+    // A bracketed IPv6 literal carries colons of its own, so the port is what
+    // follows the closing bracket, not the first colon.
+    let (host, port) = if let Some(rest) = address.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((inner, "")) => (format!("[{inner}]"), "5555"),
+            Some((inner, tail)) => match tail.strip_prefix(':') {
+                Some(port) => (format!("[{inner}]"), port),
+                None => return Err(format!("expected [IPv6]:port, got {address}")),
+            },
+            None => return Err(format!("unterminated IPv6 address: {address}")),
+        }
+    } else {
+        match address.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), p),
+            None => (address.to_string(), "5555"),
+        }
     };
 
-    let octets: Vec<&str> = host.split('.').collect();
-    if octets.len() != 4 {
-        return Err(format!("not a valid IPv4 address: {host}"));
+    if host.is_empty() {
+        return Err("address is missing a host".to_string());
     }
-    for o in &octets {
-        match o.parse::<u8>() {
-            Ok(_) => {}
-            Err(_) => return Err(format!("invalid IP octet: {o}")),
-        }
+    if !is_ipv4(&host) && !is_bracketed_ipv6(&host) && !is_mdns_instance(&host) {
+        return Err(format!(
+            "not an IP address or mDNS service name: {host}. Enter the IP and port shown on \
+             the TV's Wireless debugging screen."
+        ));
     }
 
     match port.parse::<u16>() {
@@ -274,6 +296,25 @@ pub fn normalize_connect_address(address: &str) -> Result<String, String> {
         Ok(_) => Ok(format!("{host}:{port}")),
         Err(_) => Err(format!("invalid port: {port}")),
     }
+}
+
+fn is_ipv4(host: &str) -> bool {
+    let octets: Vec<&str> = host.split('.').collect();
+    octets.len() == 4 && octets.iter().all(|o| o.parse::<u8>().is_ok())
+}
+
+/// Only the bracketed form. Bare IPv6 is ambiguous with `host:port` and adb
+/// wants brackets anyway, so requiring them keeps the parse unambiguous.
+fn is_bracketed_ipv6(host: &str) -> bool {
+    host.strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(|inner| !inner.is_empty() && inner.parse::<std::net::Ipv6Addr>().is_ok())
+}
+
+/// An adb wireless-debugging mDNS instance, e.g.
+/// `adb-58040DLCH005YV-jBeCEe._adb-tls-connect._tcp`.
+fn is_mdns_instance(host: &str) -> bool {
+    host.contains("._tcp") && host.starts_with("adb-")
 }
 
 /// Batch-query device properties in a single shell call (matches v1's
@@ -512,8 +553,17 @@ mod tests {
             .on_shell(
                 "settings get global device_name",
                 &batched_props(&[
-                    "", "NVIDIA", "SHIELD Android TV", "mdarcy", "NVIDIA", "11", "30", "PPR1",
-                    "tegra", "tv", "0323220012345",
+                    "",
+                    "NVIDIA",
+                    "SHIELD Android TV",
+                    "mdarcy",
+                    "NVIDIA",
+                    "11",
+                    "30",
+                    "PPR1",
+                    "tegra",
+                    "tv",
+                    "0323220012345",
                 ]),
             );
         let state = state_with(mock);
@@ -609,6 +659,51 @@ mod tests {
             crate::engine::types::DeviceStatus::Unauthorized
         );
         assert!(devices[1].properties.is_none());
+    }
+
+    #[test]
+    fn normalize_accepts_an_mdns_service_name_from_discovery() {
+        // Discovery shows these; refusing to accept one back meant a user
+        // could not paste what the app had just told them (GitHub #88).
+        let instance = "adb-58040DLCH005YV-jBeCEe._adb-tls-connect._tcp";
+        assert_eq!(
+            normalize_connect_address(&format!("{instance}:41541")).unwrap(),
+            format!("{instance}:41541")
+        );
+        assert_eq!(
+            normalize_connect_address(instance).unwrap(),
+            format!("{instance}:5555")
+        );
+    }
+
+    #[test]
+    fn normalize_keeps_a_bracketed_ipv6_host_whole() {
+        // The port is what follows the bracket, not the first colon.
+        assert_eq!(
+            normalize_connect_address("[fe80::1c2d:3e4f]:41541").unwrap(),
+            "[fe80::1c2d:3e4f]:41541"
+        );
+        assert_eq!(normalize_connect_address("[::1]").unwrap(), "[::1]:5555");
+    }
+
+    #[test]
+    fn normalize_still_rejects_things_that_are_not_endpoints() {
+        for bad in [
+            "not-a-host:5555",
+            "192.168.1:5555",
+            "192.168.1.300:5555",
+            "[fe80::zz]:5555",
+            "[fe80::1",
+            "[fe80::1]5555",
+            ":5555",
+            "192.168.1.5:0",
+            "192.168.1.5:port",
+        ] {
+            assert!(
+                normalize_connect_address(bad).is_err(),
+                "{bad} should not be accepted"
+            );
+        }
     }
 
     #[tokio::test]
