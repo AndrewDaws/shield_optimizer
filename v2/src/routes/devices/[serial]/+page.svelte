@@ -112,6 +112,11 @@
   let launcherErr = $state<string | null>(null);
   let launcherActionBusy = $state<string | null>(null); // package id currently being acted on
   let launcherActionMessage = $state("");
+  /// Per-stage record from the last failed launcher switch, offered as a copy
+  /// button. Kept out of the message itself — it is for a bug report, not for
+  /// reading on screen.
+  let launcherDiagnostics = $state<string[]>([]);
+  let launcherDiagnosticsCopied = $state(false);
   let launcherProgress = $state(""); // live per-step status while a switch is in flight
 
   let apps = $state<AppEntry[]>([]);
@@ -958,10 +963,23 @@
     }
   }
 
+  async function copyLauncherDiagnostics() {
+    const report = launcherDiagnostics.join("\n");
+    try {
+      await navigator.clipboard.writeText(report);
+      launcherDiagnosticsCopied = true;
+    } catch {
+      // Clipboard can be refused; show the text so it can still be selected.
+      launcherActionMessage = report;
+    }
+  }
+
   async function setDefaultLauncher(pkg: string) {
     const name = launchers.find((l) => l.entry.package === pkg)?.entry.name ?? pkg;
     launcherActionBusy = pkg;
     launcherActionMessage = "";
+    launcherDiagnostics = [];
+    launcherDiagnosticsCopied = false;
     launcherProgress = "";
     // The backend works through several strategies (enable → role → set-home-
     // activity → verify) that can take a few seconds; narrate each step so the
@@ -992,6 +1010,10 @@
         // prefixing "Failed:", which once produced "Failed: Success".
         launcherActionMessage =
           r.last_error ?? "Could not set default launcher. Try disabling other launchers first.";
+        // Only on failure: this is the record a reporter can paste back, and
+        // it is the only thing that distinguishes "the device refused the
+        // command" from "the device accepted it and ignored it".
+        launcherDiagnostics = r.diagnostics ?? [];
       }
       // Always re-read state: the switch can land a beat after the backend's
       // own poll window, and the takeover path flips enabled/disabled badges —
@@ -1692,6 +1714,15 @@
           </ul>
           {#if launcherActionMessage}
             <p class="muted small mono action-message">{launcherActionMessage}</p>
+          {/if}
+          {#if launcherDiagnostics.length > 0}
+            <p class="muted small action-message">
+              <button class="link-button" onclick={copyLauncherDiagnostics}>
+                {launcherDiagnosticsCopied ? "Copied" : "Copy diagnostic details"}
+              </button>
+              — every command this attempt ran and what your TV replied. Paste it into a
+              GitHub issue; it is what makes a launcher report fixable.
+            </p>
           {/if}
         {/if}
       {/if}
@@ -2430,6 +2461,15 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     word-break: break-word;
+  }
+  .link-button {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
   }
   .launcher-progress {
     display: flex;

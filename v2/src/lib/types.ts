@@ -163,6 +163,10 @@ export interface SetLauncherResult {
   /// Polite strategies failed, but disabling the active stock launcher would
   /// work — the UI confirms with the user and retries with allowStockDisable.
   stock_takeover_available: boolean;
+  /// Every command the attempt issued and what the device replied, in order.
+  /// Offered as copyable detail on failure — launcher behavior varies enough
+  /// between builds that a report is only actionable with the per-stage record.
+  diagnostics: string[];
 }
 
 export interface InstallApkResult {

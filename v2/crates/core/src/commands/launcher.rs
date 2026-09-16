@@ -179,6 +179,12 @@ pub struct SetLauncherResult {
     /// method on accept-but-ignore builds). The UI asks the user and retries
     /// with `allow_stock_disable` — it is never done silently.
     pub stock_takeover_available: bool,
+    /// Every command this attempt issued and what the device said back, in
+    /// order. Launcher behavior varies enough between builds that a failure
+    /// report is only actionable with the per-stage record; the UI offers it
+    /// as copyable detail rather than showing it inline.
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
 }
 
 /// `set_default_launcher` — port of v1's multi-strategy promotion (PR #17/#18).
@@ -226,6 +232,12 @@ pub async fn set_default_launcher_impl(
     allow_stock_disable: bool,
     progress: &Progress,
 ) -> Result<SetLauncherResult, String> {
+    // Per-stage record of what was issued and what came back. A launcher
+    // failure is only diagnosable with this: the same sequence succeeds on one
+    // build and is silently ignored on another, and the difference is only
+    // visible in the individual command results (GitHub #87).
+    let mut diagnostics: Vec<String> = Vec::new();
+
     // `package` can come from a custom-launcher entry the user typed, so it's
     // interpolated into shell commands below — validate it first.
     if !is_valid_package_name(package) {
@@ -235,6 +247,7 @@ pub async fn set_default_launcher_impl(
             current_launcher: None,
             last_error: Some(format!("Invalid package name: {package:?}")),
             stock_takeover_available: false,
+            diagnostics,
         });
     }
 
@@ -243,6 +256,10 @@ pub async fn set_default_launcher_impl(
     // 1. Enable the package — no-op for already-enabled.
     progress.step("Enabling this launcher");
     let enable_result = adb.shell(serial, &format!("pm enable {package}")).await;
+    diagnostics.push(match command_failure(&enable_result) {
+        Some(ref failure) => format!("pm enable {package} -> {failure}"),
+        None => format!("pm enable {package} -> ok"),
+    });
     if let Some(failure) = command_failure(&enable_result) {
         return Ok(SetLauncherResult {
             ok: false,
@@ -250,6 +267,7 @@ pub async fn set_default_launcher_impl(
             current_launcher: None,
             last_error: Some(format!("Target enable failed for {package}: {failure}")),
             stock_takeover_available: false,
+            diagnostics,
         });
     }
 
@@ -262,25 +280,29 @@ pub async fn set_default_launcher_impl(
     // full strategy ladder with its multi-second verify back-offs. Switches
     // between non-stock launchers fall through to the normal ladder below,
     // which works for them.
-    if let Some(active) = active_launcher(&*adb, serial).await {
+    let active_before = active_launcher(&*adb, serial).await;
+    diagnostics.push(match active_before.as_deref() {
+        Some(active) => format!("resolve-activity HOME -> {active}"),
+        None => "resolve-activity HOME -> unavailable".to_string(),
+    });
+    if let Some(active) = active_before.clone() {
         let active_is_stock = stock_launcher_catalog().iter().any(|e| e.package == active);
         if active_is_stock && active != package {
             progress.step("Assigning the Home role to it");
-            let _ = adb
+            let role_result = adb
                 .shell(
                     serial,
                     &format!("cmd role add-role-holder android.app.role.HOME {package}"),
                 )
                 .await;
-            if let Some(comp) = discover_home_activity(&*adb, serial, package).await {
-                progress.step("Registering it as the Home app");
-                let _ = adb
-                    .shell(
-                        serial,
-                        &format!("cmd package set-home-activity --user 0 {comp}"),
-                    )
-                    .await;
-            }
+            diagnostics.push(match command_failure(&role_result) {
+                Some(ref failure) => format!("cmd role add-role-holder HOME {package} -> {failure}"),
+                None => format!("cmd role add-role-holder HOME {package} -> ok"),
+            });
+            progress.step("Registering it as the Home app");
+            let candidates = home_activity_candidates(&*adb, serial, package).await;
+            let setters = try_home_setters(&*adb, serial, &candidates).await;
+            diagnostics.extend(setters.attempts.iter().cloned());
             // When the setters work they take effect immediately; when stock
             // overrides them they never will — one quick check is enough.
             progress.step("Checking whether Home switched over");
@@ -293,6 +315,7 @@ pub async fn set_default_launcher_impl(
                     current_launcher: Some(package.to_string()),
                     last_error: None,
                     stock_takeover_available: false,
+                    diagnostics,
                 });
             }
             if let Some(result) = stock_takeover(
@@ -302,6 +325,7 @@ pub async fn set_default_launcher_impl(
                 &active,
                 allow_stock_disable,
                 progress,
+                &mut diagnostics,
             )
             .await
             {
@@ -336,6 +360,7 @@ pub async fn set_default_launcher_impl(
                     current_launcher: Some(package.to_string()),
                     last_error: None,
                     stock_takeover_available: false,
+                    diagnostics,
                 });
             }
             let msg = if out.stdout.trim().is_empty() {
@@ -353,59 +378,31 @@ pub async fn set_default_launcher_impl(
         Err(e) => last_error = Some(e.to_string()),
     }
 
-    // 3. Discover activity candidates.
+    // 3. Register the target as the HOME activity. Same candidate list and
+    // both command spellings as the stock fast path — one implementation.
     progress.step("Registering it as the Home app");
-    let mut candidates: Vec<String> = Vec::new();
-    if let Some(activity) = discover_home_activity(&*adb, serial, package).await {
-        candidates.push(activity);
+    let candidates = home_activity_candidates(&*adb, serial, package).await;
+    let setters = try_home_setters(&*adb, serial, &candidates).await;
+    diagnostics.extend(setters.attempts.iter().cloned());
+    if let Some(error) = setters.last_error {
+        last_error = Some(error);
     }
-    for guess in [
-        ".MainActivity",
-        ".Main",
-        ".LauncherActivity",
-        ".HomeActivity",
-    ] {
-        candidates.push(format!("{package}/{guess}"));
-    }
-
-    'attempts: for comp in &candidates {
-        for cmd in [
-            format!("cmd package set-home-activity --user 0 {comp}"),
-            format!("pm set-home-activity --user 0 {comp}"),
-        ] {
-            if let Ok(out) = adb.shell(serial, &cmd).await {
-                // set-home-activity prints a bare "Success" on many builds and
-                // nothing on others — both are acceptance, NOT diagnostics.
-                // Only real error text (e.g. "Error: …", usage spew) goes into
-                // last_error; recording the ack produced "Failed: Success".
-                let msg = if out.stderr.trim().is_empty() {
-                    out.stdout.trim()
-                } else {
-                    out.stderr.trim()
-                };
-                if is_success_ack(msg) || msg.is_empty() {
-                    device_accepted = true;
-                    if verify_active(&*adb, serial, package).await {
-                        focus_home(&*adb, serial, progress).await;
-                        return Ok(SetLauncherResult {
-                            ok: true,
-                            strategy: Some("set_home_activity".into()),
-                            current_launcher: Some(package.to_string()),
-                            last_error: None,
-                            stock_takeover_available: false,
-                        });
-                    }
-                    // Accepted but the resolver didn't confirm: the preference
-                    // is now set to a real component of `package`. Re-running
-                    // the remaining guesses can only overwrite it with a worse
-                    // one — stop here and let the HOME-intent kick finish it.
-                    break 'attempts;
-                }
-                // Real error — nothing changed on the device, no point polling
-                // the resolver. Try the next variant/candidate.
-                last_error = Some(msg.to_string());
-            }
+    if setters.accepted {
+        device_accepted = true;
+        if verify_active(&*adb, serial, package).await {
+            focus_home(&*adb, serial, progress).await;
+            return Ok(SetLauncherResult {
+                ok: true,
+                strategy: Some("set_home_activity".into()),
+                current_launcher: Some(package.to_string()),
+                last_error: None,
+                stock_takeover_available: false,
+                diagnostics,
+            });
         }
+        // Accepted but the resolver didn't confirm: the preference is now set
+        // to a real component of `package`, so the HOME-intent kick below is
+        // what finishes it.
     }
 
     // 4. HOME-intent kick — system will resolve to the only remaining HOME app
@@ -426,6 +423,7 @@ pub async fn set_default_launcher_impl(
             current_launcher: now_active,
             last_error: None,
             stock_takeover_available: false,
+            diagnostics,
         });
     }
 
@@ -441,6 +439,7 @@ pub async fn set_default_launcher_impl(
             &active,
             allow_stock_disable,
             progress,
+            &mut diagnostics,
         )
         .await
         {
@@ -466,6 +465,7 @@ pub async fn set_default_launcher_impl(
         current_launcher: now_active,
         last_error,
         stock_takeover_available: false,
+        diagnostics,
     })
 }
 
@@ -486,6 +486,7 @@ async fn stock_takeover(
     active: &str,
     allow_stock_disable: bool,
     progress: &Progress,
+    diagnostics: &mut Vec<String>,
 ) -> Option<SetLauncherResult> {
     let active_is_stock = stock_launcher_catalog().iter().any(|e| e.package == active);
     let blocked = matches!(
@@ -506,6 +507,7 @@ async fn stock_takeover(
                  alone, and stock can be re-enabled from this list at any time."
             )),
             stock_takeover_available: true,
+            diagnostics: std::mem::take(diagnostics),
         });
     }
     progress.step(&format!(
@@ -514,6 +516,10 @@ async fn stock_takeover(
     let disable_result = adb
         .shell(serial, &format!("pm disable-user --user 0 {active}"))
         .await;
+    diagnostics.push(match command_failure(&disable_result) {
+        Some(ref failure) => format!("pm disable-user {active} -> {failure}"),
+        None => format!("pm disable-user {active} -> ok"),
+    });
     let primary_failure = if let Some(failure) = command_failure(&disable_result) {
         format!("Stock-disable command failed for {active}: {failure}")
     } else {
@@ -531,6 +537,7 @@ async fn stock_takeover(
                 current_launcher: Some(package.to_string()),
                 last_error: None,
                 stock_takeover_available: false,
+                diagnostics: std::mem::take(diagnostics),
             });
         }
         format!(
@@ -542,6 +549,10 @@ async fn stock_takeover(
     // Once issued, every non-verified takeover attempts to restore this same stock package.
     progress.step("Restoring the stock launcher");
     let restore_result = adb.shell(serial, &format!("pm enable {active}")).await;
+    diagnostics.push(match command_failure(&restore_result) {
+        Some(ref failure) => format!("pm enable {active} (restore) -> {failure}"),
+        None => format!("pm enable {active} (restore) -> ok"),
+    });
     let restoration = match command_failure(&restore_result) {
         Some(failure) => format!("Stock-restore command failed for {active}: {failure}"),
         None => format!(
@@ -560,6 +571,7 @@ async fn stock_takeover(
         current_launcher: current,
         last_error: Some(format!("{primary_failure}. {restoration}. {observation}.")),
         stock_takeover_available: false,
+        diagnostics: std::mem::take(diagnostics),
     })
 }
 
@@ -648,6 +660,90 @@ async fn active_launcher(adb: &dyn crate::adb::AdbDriver, serial: &str) -> Optio
 
 /// Find a HOME activity for `package` via `cmd package query-activities`.
 /// Returns a `pkg/activity` component string ready for set-home-activity.
+/// Components to try registering as the HOME activity, best first.
+///
+/// The discovered component is authoritative when we can get one, but
+/// `discover_home_activity` depends on `cmd package query-activities`, which
+/// does not exist before Android 9. On older builds it returns nothing, so the
+/// conventional entry-point names are the only thing left to try — without
+/// them, such a device never gets a set-home-activity call at all.
+async fn home_activity_candidates(
+    adb: &dyn crate::adb::AdbDriver,
+    serial: &str,
+    package: &str,
+) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(activity) = discover_home_activity(adb, serial, package).await {
+        candidates.push(activity);
+    }
+    for guess in [
+        ".MainActivity",
+        ".Main",
+        ".LauncherActivity",
+        ".HomeActivity",
+    ] {
+        candidates.push(format!("{package}/{guess}"));
+    }
+    candidates
+}
+
+/// What a run of the set-home-activity ladder observed.
+#[derive(Default)]
+struct HomeSetterOutcome {
+    /// The device acknowledged one of the commands ("Success" or a clean
+    /// silent exit). That is acceptance, not proof that HOME moved.
+    accepted: bool,
+    /// Real error text from the last command that reported one.
+    last_error: Option<String>,
+    /// Each command issued and what it reported, for the diagnostic report.
+    attempts: Vec<String>,
+}
+
+/// Try `set-home-activity` over `candidates`, both the `cmd package` and the
+/// older `pm` spelling, stopping at the first acknowledgement.
+///
+/// Both spellings matter: `cmd package` is the modern one, `pm` is what older
+/// builds answer to, and which of the two works is exactly the kind of thing
+/// that differs between the devices in bug reports.
+async fn try_home_setters(
+    adb: &dyn crate::adb::AdbDriver,
+    serial: &str,
+    candidates: &[String],
+) -> HomeSetterOutcome {
+    let mut outcome = HomeSetterOutcome::default();
+    for comp in candidates {
+        for cmd in [
+            format!("cmd package set-home-activity --user 0 {comp}"),
+            format!("pm set-home-activity --user 0 {comp}"),
+        ] {
+            let Ok(out) = adb.shell(serial, &cmd).await else {
+                outcome.attempts.push(format!("{cmd} -> transport error"));
+                continue;
+            };
+            // set-home-activity prints a bare "Success" on many builds and
+            // nothing on others — both are acceptance, NOT diagnostics. Only
+            // real error text goes into last_error; recording the ack produced
+            // "Failed: Success".
+            let msg = if out.stderr.trim().is_empty() {
+                out.stdout.trim()
+            } else {
+                out.stderr.trim()
+            };
+            if is_success_ack(msg) || msg.is_empty() {
+                outcome.accepted = true;
+                outcome.attempts.push(format!("{cmd} -> accepted"));
+                // Accepted: the preference now points at a real component of
+                // this package. Running the remaining guesses could only
+                // overwrite it with a worse one.
+                return outcome;
+            }
+            outcome.attempts.push(format!("{cmd} -> {msg}"));
+            outcome.last_error = Some(msg.to_string());
+        }
+    }
+    outcome
+}
+
 async fn discover_home_activity(
     adb: &dyn crate::adb::AdbDriver,
     serial: &str,
@@ -899,7 +995,15 @@ mod tests {
             },
         ]);
 
-        let result = stock_takeover(&script, "serial", target, stock, true, &Progress::Silent)
+        let result = stock_takeover(
+            &script,
+            "serial",
+            target,
+            stock,
+            true,
+            &Progress::Silent,
+            &mut Vec::new(),
+        )
             .await
             .expect("stock takeover result");
 
@@ -980,7 +1084,15 @@ mod tests {
                 },
             ]);
 
-            let result = stock_takeover(&script, "serial", target, stock, true, &Progress::Silent)
+            let result = stock_takeover(
+            &script,
+            "serial",
+            target,
+            stock,
+            true,
+            &Progress::Silent,
+            &mut Vec::new(),
+        )
                 .await
                 .unwrap_or_else(|| panic!("{name}: stock takeover result"));
 
@@ -1300,6 +1412,146 @@ mod tests {
         assert!(
             !calls.iter().any(|c| c.contains("disable-user")),
             "must not disable stock without the opt-in"
+        );
+    }
+
+    /// GitHub #87 — Sony XBR-55X850D, Android 8.0, stock holding HOME.
+    ///
+    /// `cmd package query-activities` is Android 9+ and `cmd role` is Android
+    /// 10+, so on this device both come back "Unknown command". The stock fast
+    /// path used to call set-home-activity only for a component
+    /// `query-activities` had found, which meant no setter ran at all and the
+    /// first thing that actually happened was disabling the stock launcher —
+    /// handing HOME to a package nothing had registered. It has to try the
+    /// conventional component names before it touches stock.
+    #[tokio::test]
+    async fn android_8_registers_home_before_disabling_stock() {
+        let mock = MockAdb::default()
+            .on_shell("add-role-holder", "Unknown command: role")
+            .on_shell("query-activities", "Unknown command: package")
+            .on_shell("set-home-activity", "Success")
+            .on_shell("resolve-activity", "com.google.android.tvlauncher/.Home");
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let res = set_default_launcher_impl(
+            &state,
+            "serial",
+            "com.spocky.projengmenu",
+            false,
+            &Progress::Silent,
+        )
+        .await
+        .unwrap();
+
+        let calls = log.lock().unwrap().clone();
+        let setter_index = calls.iter().position(|c| c.contains("set-home-activity"));
+        assert!(
+            setter_index.is_some(),
+            "no set-home-activity ran at all — this is the #87 failure: {calls:?}"
+        );
+        // A guessed component is the only thing available when discovery is
+        // unsupported, and it must name the target package.
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.contains("set-home-activity") && c.contains("com.spocky.projengmenu")),
+            "the setter must target the requested launcher: {calls:?}"
+        );
+        // Ordering is the point: never disable stock before trying to register.
+        if let Some(disable_index) = calls.iter().position(|c| c.contains("disable-user")) {
+            assert!(
+                setter_index.unwrap() < disable_index,
+                "stock was disabled before anything registered HOME: {calls:?}"
+            );
+        }
+        assert!(!res.ok);
+        assert!(res.stock_takeover_available);
+    }
+
+    /// Both spellings matter: `cmd package` is modern, `pm` is what older
+    /// builds answer to. Trying only one is how a device ends up with no
+    /// registration at all.
+    #[tokio::test]
+    async fn a_rejected_cmd_package_setter_still_tries_the_pm_spelling() {
+        // Non-stock holds HOME, so this takes the general ladder. The modern
+        // `cmd package` spelling is refused; the older `pm` one works. Trying
+        // only the first is how a device ends up with nothing registered.
+        let mock = MockAdb::default()
+            .on_shell("add-role-holder", "Unknown command")
+            .on_shell("query-activities", "Unknown command")
+            .on_shell(
+                "cmd package set-home-activity",
+                "Error: Unknown command: package",
+            )
+            .on_shell("pm set-home-activity", "Success")
+            .on_shell_seq(
+                "resolve-activity",
+                &[
+                    "com.example.other/.Home",
+                    "com.example.launcher/.MainActivity",
+                ],
+            );
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let res = set_default_launcher_impl(
+            &state,
+            "serial",
+            "com.example.launcher",
+            false,
+            &Progress::Silent,
+        )
+        .await
+        .unwrap();
+
+        assert!(res.ok, "the pm spelling succeeded: {:?}", res.last_error);
+        let calls = log.lock().unwrap();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.starts_with("cmd package set-home-activity")),
+            "{calls:?}"
+        );
+        assert!(
+            calls.iter().any(|c| c.starts_with("pm set-home-activity")),
+            "{calls:?}"
+        );
+    }
+
+    /// The report a user can paste back. Without the per-stage record, the
+    /// error says a switch failed but not which command the device refused.
+    #[tokio::test]
+    async fn a_failed_switch_records_every_stage_it_went_through() {
+        let mock = MockAdb::default()
+            .on_shell("add-role-holder", "Unknown command: role")
+            .on_shell("query-activities", "Unknown command: package")
+            .on_shell("set-home-activity", "Success")
+            .on_shell("resolve-activity", "com.google.android.tvlauncher/.Home");
+        let state = state_with(mock);
+
+        let res = set_default_launcher_impl(
+            &state,
+            "serial",
+            "com.spocky.projengmenu",
+            false,
+            &Progress::Silent,
+        )
+        .await
+        .unwrap();
+
+        let report = res.diagnostics.join("\n");
+        assert!(report.contains("pm enable com.spocky.projengmenu"), "{report}");
+        assert!(
+            report.contains("resolve-activity HOME -> com.google.android.tvlauncher"),
+            "{report}"
+        );
+        assert!(report.contains("add-role-holder"), "{report}");
+        assert!(report.contains("set-home-activity"), "{report}");
+        // Every line says what came back, not just what was sent.
+        assert!(
+            res.diagnostics.iter().all(|line| line.contains("->")),
+            "{report}"
         );
     }
 
