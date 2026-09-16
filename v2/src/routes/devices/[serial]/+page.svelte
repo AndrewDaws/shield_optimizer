@@ -1277,6 +1277,14 @@
     loadedSerial = s;
   });
 
+  /// A property the device never answered arrives as an empty string. Show an
+  /// em dash rather than a blank cell, so "unreported" reads differently from
+  /// "reported as empty".
+  function shown(value: string | null | undefined): string {
+    const trimmed = value?.trim() ?? "";
+    return trimmed === "" || trimmed === "unknown" ? "—" : trimmed;
+  }
+
   onMount(loadDevice);
 </script>
 
@@ -1412,15 +1420,24 @@
       {#if device.properties}
         <dl class="kv">
           <dt>Friendly name</dt>
-          <dd>{device.properties.friendly_name ?? "—"}</dd>
-          <dt>Brand</dt><dd>{device.properties.brand}</dd>
-          <dt>Model</dt><dd>{device.properties.model}</dd>
-          <dt>Codename</dt><dd>{device.properties.device_codename}</dd>
-          <dt>Manufacturer</dt><dd>{device.properties.manufacturer}</dd>
-          <dt>Android version</dt><dd>{device.properties.android_release} (SDK {device.properties.sdk_level})</dd>
-          <dt>Build ID</dt><dd>{device.properties.build_id}</dd>
-          <dt>Board platform</dt><dd>{device.properties.board_platform}</dd>
+          <dd>{shown(device.properties.friendly_name)}</dd>
+          <dt>Brand</dt><dd>{shown(device.properties.brand)}</dd>
+          <dt>Model</dt><dd>{shown(device.properties.model)}</dd>
+          <dt>Codename</dt><dd>{shown(device.properties.device_codename)}</dd>
+          <dt>Manufacturer</dt><dd>{shown(device.properties.manufacturer)}</dd>
+          <dt>Android version</dt>
+          <dd>
+            {shown(device.properties.android_release)} (SDK {shown(device.properties.sdk_level)})
+          </dd>
+          <dt>Build ID</dt><dd>{shown(device.properties.build_id)}</dd>
+          <dt>Board platform</dt><dd>{shown(device.properties.board_platform)}</dd>
+          <dt>Hardware ID</dt><dd>{shown(device.properties.serial_number)}</dd>
         </dl>
+      {:else}
+        <p class="muted small">
+          This device hasn't reported its details. It's usually still waiting on
+          the "Allow USB debugging?" prompt on the TV.
+        </p>
       {/if}
 
       <div class="recovery-section">

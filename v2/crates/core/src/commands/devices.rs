@@ -3,7 +3,7 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::adb::{parse_device_list, AdbDriver};
+use crate::adb::{batch_command, parse_device_list, split_batch, AdbDriver};
 use crate::engine::{
     detect_device_type,
     types::{Device, DeviceProperties, DeviceStatus},
@@ -279,18 +279,19 @@ pub fn normalize_connect_address(address: &str) -> Result<String, String> {
 /// Batch-query device properties in a single shell call (matches v1's
 /// optimization). The exact prop set is the union of what v1 used in
 /// `Get-Devices` and `Show-DeviceProfile`.
+///
+/// Each read is its own sentinel-delimited section rather than one line of a
+/// combined stdout. Positional parsing looked equivalent but was not: the
+/// leading `settings get global device_name` can print nothing at all on some
+/// builds and a multi-line Exception on others, and either one shifts every
+/// later index — so a device would silently report its model as its Android
+/// version. Sections cannot drift, and a read that produces nothing degrades
+/// to an empty value instead of corrupting its neighbours.
 async fn harvest_properties(adb: &dyn AdbDriver, serial: &str) -> Result<DeviceProperties, String> {
-    // Use a sentinel string to delimit each prop output line — robust against
-    // empty values that would otherwise collapse adjacent lines.
-    let cmd = "settings get global device_name; getprop ro.product.brand; \
-               getprop ro.product.model; getprop ro.product.device; \
-               getprop ro.product.manufacturer; getprop ro.build.version.release; \
-               getprop ro.build.version.sdk; getprop ro.build.id; \
-               getprop ro.board.platform; getprop ro.build.characteristics; \
-               getprop ro.serialno";
+    let cmd = batch_command(&PROPERTY_READS);
 
     let out = adb
-        .shell(serial, cmd)
+        .shell(serial, &cmd)
         .await
         .map_err(|e| format!("device profile: {e}"))?;
     if out.stdout.trim().is_empty() || out.exit_code.is_some_and(|code| code != 0) {
@@ -300,9 +301,32 @@ async fn harvest_properties(adb: &dyn AdbDriver, serial: &str) -> Result<DeviceP
         ));
     }
 
-    let lines: Vec<&str> = out.stdout.lines().collect();
+    Ok(properties_from_sections(&split_batch(
+        &out.stdout,
+        PROPERTY_READS.len(),
+    )))
+}
+
+/// The property reads, in the order `properties_from_sections` consumes them.
+const PROPERTY_READS: [&str; 11] = [
+    "settings get global device_name",
+    "getprop ro.product.brand",
+    "getprop ro.product.model",
+    "getprop ro.product.device",
+    "getprop ro.product.manufacturer",
+    "getprop ro.build.version.release",
+    "getprop ro.build.version.sdk",
+    "getprop ro.build.id",
+    "getprop ro.board.platform",
+    "getprop ro.build.characteristics",
+    "getprop ro.serialno",
+];
+
+/// Pure: map batched sections onto `DeviceProperties`. Split out so the
+/// section-to-field mapping is testable without a driver.
+fn properties_from_sections(sections: &[String]) -> DeviceProperties {
     let get = |i: usize| -> String {
-        lines
+        sections
             .get(i)
             .map(|s| s.trim().to_string())
             .unwrap_or_default()
@@ -320,7 +344,7 @@ async fn harvest_properties(adb: &dyn AdbDriver, serial: &str) -> Result<DeviceP
         Some(raw_friendly)
     };
 
-    Ok(DeviceProperties {
+    DeviceProperties {
         friendly_name,
         brand: get(1),
         model: get(2),
@@ -332,7 +356,7 @@ async fn harvest_properties(adb: &dyn AdbDriver, serial: &str) -> Result<DeviceP
         board_platform: get(8),
         characteristics: get(9),
         serial_number: get(10),
-    })
+    }
 }
 
 const MAX_DEVICE_NAME_LEN: usize = 64;
@@ -443,6 +467,103 @@ mod tests {
     use super::*;
     use crate::commands::test_support::{state_with, MockAdb};
 
+    /// Build what a device's batched property read looks like on the wire:
+    /// one section per entry in `PROPERTY_READS`, sentinel-delimited. Short
+    /// inputs pad with empty sections, mirroring a device that has a prop unset.
+    fn batched_props(values: &[&str]) -> String {
+        let mut sections: Vec<String> = values.iter().map(|v| (*v).to_string()).collect();
+        sections.resize(PROPERTY_READS.len(), String::new());
+        sections.join(&format!("\n{}\n", crate::adb::BATCH_SEPARATOR))
+    }
+
+    #[test]
+    fn every_property_read_maps_to_a_field() {
+        // The section-to-field mapping in `properties_from_sections` is
+        // positional over PROPERTY_READS; a read added without a matching
+        // `get(N)` would silently go nowhere.
+        let sections: Vec<String> = (0..PROPERTY_READS.len())
+            .map(|i| format!("value{i}"))
+            .collect();
+        let props = properties_from_sections(&sections);
+        assert_eq!(props.friendly_name.as_deref(), Some("value0"));
+        assert_eq!(props.brand, "value1");
+        assert_eq!(props.model, "value2");
+        assert_eq!(props.device_codename, "value3");
+        assert_eq!(props.manufacturer, "value4");
+        assert_eq!(props.android_release, "value5");
+        assert_eq!(props.sdk_level, "value6");
+        assert_eq!(props.build_id, "value7");
+        assert_eq!(props.board_platform, "value8");
+        assert_eq!(props.characteristics, "value9");
+        assert_eq!(props.serial_number, "value10");
+    }
+
+    #[tokio::test]
+    async fn silent_device_name_read_does_not_shift_the_android_version() {
+        // `settings get global device_name` prints nothing on some builds.
+        // Under the old positional parse every later value slid up one, so the
+        // TV reported its brand as its friendly name and its model as its
+        // Android version. Sections keep each read in its own slot.
+        let mock = MockAdb::default()
+            .on_raw(
+                "devices",
+                "List of devices attached\n192.168.42.71:5555\tdevice\n",
+            )
+            .on_shell(
+                "settings get global device_name",
+                &batched_props(&[
+                    "", "NVIDIA", "SHIELD Android TV", "mdarcy", "NVIDIA", "11", "30", "PPR1",
+                    "tegra", "tv", "0323220012345",
+                ]),
+            );
+        let state = state_with(mock);
+        let devices = list_devices_impl(&state).await.unwrap();
+        let props = devices[0].properties.as_ref().unwrap();
+
+        assert_eq!(props.friendly_name, None);
+        assert_eq!(props.brand, "NVIDIA");
+        assert_eq!(props.android_release, "11");
+        assert_eq!(props.sdk_level, "30");
+        assert_eq!(props.serial_number, "0323220012345");
+    }
+
+    #[tokio::test]
+    async fn multiline_settings_exception_stays_inside_its_own_section() {
+        // The other failure shape: `settings get` throws and prints a
+        // multi-line stack trace, which under positional parsing pushed every
+        // real property down by however many lines the trace happened to be.
+        let mock = MockAdb::default()
+            .on_raw(
+                "devices",
+                "List of devices attached\n192.168.42.71:5555\tdevice\n",
+            )
+            .on_shell(
+                "settings get global device_name",
+                &batched_props(&[
+                    "Exception occurred while executing:\n  java.lang.SecurityException\n  at android.os.Parcel",
+                    "TCL",
+                    "QM7L Pro",
+                    "",
+                    "TCL",
+                    "14",
+                    "34",
+                ]),
+            );
+        let state = state_with(mock);
+        let devices = list_devices_impl(&state).await.unwrap();
+        let props = devices[0].properties.as_ref().unwrap();
+
+        assert_eq!(props.friendly_name, None);
+        assert_eq!(props.brand, "TCL");
+        assert_eq!(props.model, "QM7L Pro");
+        assert_eq!(props.android_release, "14");
+        assert_eq!(props.sdk_level, "34");
+        // Reads the device never answered stay empty rather than borrowing a
+        // neighbour's value.
+        assert_eq!(props.build_id, "");
+        assert_eq!(props.serial_number, "");
+    }
+
     #[tokio::test]
     async fn lost_socket_during_profiling_is_not_an_authorized_device() {
         let state = state_with(
@@ -468,9 +589,12 @@ mod tests {
                  192.168.42.71:5555\tdevice\n\
                  192.168.42.143:5555\tunauthorized\n",
             )
-            // harvest_properties' batched getprop — give a brand so the name
+            // harvest_properties' batched reads — give a brand so the name
             // resolves; other props default.
-            .on_shell("settings get global device_name", "Living Room\nNVIDIA\n");
+            .on_shell(
+                "settings get global device_name",
+                &batched_props(&["Living Room", "NVIDIA"]),
+            );
         let state = state_with(mock);
         let devices = list_devices_impl(&state).await.unwrap();
         assert_eq!(devices.len(), 2);

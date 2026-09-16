@@ -146,6 +146,11 @@
       busyAction = "";
     }
   }
+  // Surfaced next to the address so the TV's OS version is visible without
+  // opening Diagnostics. Empty when the TV hasn't reported it — never guessed.
+  const androidRelease = $derived(
+    session.connectedDevice?.properties?.android_release?.trim() || "",
+  );
 </script>
 
 <div class="screen">
@@ -155,7 +160,7 @@
         <span class="d-dot" class:lost={session.liveness === "lost"} class:pending={session.liveness === "reconnecting"}></span>
         <div class="device-details">
           <span class="device-name">{session.deviceLabel}</span>
-          <span class="mono device-ip">{session.host}</span>
+          <span class="mono device-ip">{session.host}{androidRelease ? ` · Android ${androidRelease}` : ""}</span>
         </div>
         <span class="msr">expand_more</span>
       </button>

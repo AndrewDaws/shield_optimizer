@@ -182,6 +182,40 @@
   const hdrText = $derived(hdrTypes.length ? hdrTypes.join(" · ") : "");
   const audioOutput = $derived(health?.audio_device ?? "Unavailable");
 
+  // --- About this TV ---
+  // Every value here comes from the shared core's one device-profile read.
+  // A property the TV didn't answer arrives as an empty string; show an em
+  // dash rather than guessing or hiding the row, so the reading is always
+  // traceable to something the device actually reported.
+  const deviceProps = $derived(session.connectedDevice?.properties ?? null);
+  const shown = (value: string | null | undefined): string => {
+    const trimmed = value?.trim() ?? "";
+    return trimmed === "" || trimmed === "unknown" ? "—" : trimmed;
+  };
+  const androidText = $derived.by(() => {
+    const release = shown(deviceProps?.android_release);
+    const sdk = shown(deviceProps?.sdk_level);
+    if (release === "—") return sdk === "—" ? "—" : `API ${sdk}`;
+    return sdk === "—" ? release : `${release} (API ${sdk})`;
+  });
+  const totalRamText = $derived(
+    totalRam != null ? `${Math.round(totalRam)} MB` : "—",
+  );
+  const totalStorageText = $derived(shown(health?.storage?.total));
+  const aboutRows = $derived([
+    { label: "Android version", value: androidText },
+    { label: "Manufacturer", value: shown(deviceProps?.manufacturer || deviceProps?.brand) },
+    { label: "Model", value: shown(deviceProps?.model) },
+    { label: "Codename", value: shown(deviceProps?.device_codename) },
+    { label: "Chipset", value: shown(deviceProps?.board_platform) },
+    { label: "Build ID", value: shown(deviceProps?.build_id) },
+    { label: "Total RAM", value: totalRamText },
+    { label: "Total storage", value: totalStorageText },
+    // The same id saved-TV matching trusts. Shown so a user can tell two
+    // identical TVs apart, and so a missing id is visible rather than silent.
+    { label: "Hardware ID", value: shown(deviceProps?.serial_number) },
+  ]);
+
 </script>
 
 <div class="screen">
@@ -300,6 +334,26 @@
           <span class="card-sub-label">Audio</span>
           <span class="grid-card-value">{audioOutput}</span>
         </div>
+      </div>
+
+      <!-- About this TV -->
+      <div class="diagnostic-card">
+        <div class="card-header">
+          <span class="card-title">About this TV</span>
+        </div>
+        {#if deviceProps}
+          <dl class="about-list">
+            {#each aboutRows as row (row.label)}
+              <dt>{row.label}</dt>
+              <dd class="mono">{row.value}</dd>
+            {/each}
+          </dl>
+        {:else}
+          <p class="lede empty">
+            The TV hasn't reported its details. Reconnect, and approve the
+            "Allow debugging?" prompt on the TV if it appears.
+          </p>
+        {/if}
       </div>
 
       <!-- Top Memory Consumers -->
@@ -544,6 +598,24 @@
     font-size: 14px;
     font-weight: 600;
   }
+  .about-list {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px 16px;
+    margin: 0;
+    align-items: baseline;
+  }
+  .about-list dt {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .about-list dd {
+    margin: 0;
+    font-size: 12px;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
   .hdr-tag {
     display: inline-flex;
     align-items: center;
