@@ -28,7 +28,27 @@ pub(crate) fn hide_console_window(cmd: &mut Command) {
     }
 }
 
-pub use driver::{discover_adb_binary, SubprocessAdb};
+/// Pin every adb subprocess to a stable working directory.
+///
+/// A child process inherits its parent's cwd, and `adb start-server` forks a
+/// daemon that outlives this app entirely. When the app is launched from a
+/// mounted DMG or with a removable volume as its cwd, that daemon goes on
+/// holding a `/Volumes/...` path after the window is closed — which on macOS
+/// keeps re-triggering the "would like to access files on a removable volume"
+/// prompt with no app left to grant it (GitHub #89).
+///
+/// adb resolves every path we pass it absolutely, so it has no need of the
+/// launch directory. Point the child at the user's home directory, falling
+/// back to the filesystem root, so nothing we spawn can pin a volume the user
+/// might eject.
+pub(crate) fn pin_working_directory(cmd: &mut Command) {
+    let stable = dirs::home_dir()
+        .filter(|home| home.is_dir())
+        .unwrap_or_else(|| std::path::PathBuf::from(std::path::MAIN_SEPARATOR_STR));
+    cmd.current_dir(stable);
+}
+
+pub use driver::{cached_adb_binary, discover_adb_binary, forget_cached_adb_binary, SubprocessAdb};
 pub use install::{adb_path_in_install_root, install_platform_tools, InstallError};
 pub use scan::{local_subnet_prefix, scan_subnet, ScanHit};
 pub use shield_optimizer_core::adb::{

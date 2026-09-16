@@ -63,6 +63,7 @@ impl SubprocessAdb {
         let mut cmd = Command::new(&self.binary);
         cmd.args(args).kill_on_drop(true);
         super::hide_console_window(&mut cmd);
+        super::pin_working_directory(&mut cmd);
         let fut = cmd.output();
 
         let output = match timeout(dur, fut).await {
@@ -134,6 +135,7 @@ impl AdbDriver for SubprocessAdb {
         let mut cmd = Command::new(&self.binary);
         cmd.args(args).kill_on_drop(true);
         super::hide_console_window(&mut cmd);
+        super::pin_working_directory(&mut cmd);
 
         let output = match timeout(self.command_timeout, cmd.output()).await {
             Ok(r) => r?,
@@ -177,8 +179,45 @@ impl AdbDriver for SubprocessAdb {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         super::hide_console_window(&mut cmd);
+        super::pin_working_directory(&mut cmd);
 
         cmd.spawn().map_err(AdbError::Io)
+    }
+}
+
+/// Memoized result of [`discover_adb_binary`].
+///
+/// `None` = never resolved; `Some(result)` = resolved, including a cached
+/// "not found". Discovery is not free and, on a machine with no adb installed,
+/// its last resort is probing the launch directory — which is a removable
+/// volume when the app was opened straight from its DMG. `adb_status` runs on
+/// every Devices refresh, so an uncached lookup re-probed that volume every
+/// few seconds and kept macOS asking for permission (GitHub #89).
+static CACHED_ADB_PATH: std::sync::RwLock<Option<Option<PathBuf>>> = std::sync::RwLock::new(None);
+
+/// [`discover_adb_binary`], resolved at most once per process until
+/// [`forget_cached_adb_binary`] is called. Use this for anything that runs on
+/// a refresh or a timer; the filesystem layout it inspects only changes when
+/// the user installs something, and those paths invalidate explicitly.
+pub fn cached_adb_binary() -> Option<PathBuf> {
+    if let Ok(guard) = CACHED_ADB_PATH.read() {
+        if let Some(cached) = guard.as_ref() {
+            return cached.clone();
+        }
+    }
+    let resolved = discover_adb_binary();
+    if let Ok(mut guard) = CACHED_ADB_PATH.write() {
+        *guard = Some(resolved.clone());
+    }
+    resolved
+}
+
+/// Drop the memoized path so the next [`cached_adb_binary`] re-resolves.
+/// Called after anything that can change which binary is correct: a
+/// platform-tools install, or the user explicitly asking to restart adb.
+pub fn forget_cached_adb_binary() {
+    if let Ok(mut guard) = CACHED_ADB_PATH.write() {
+        *guard = None;
     }
 }
 
@@ -422,6 +461,94 @@ mod tests {
         );
 
         assert_eq!(found.as_deref(), Some(managed.as_path()));
+    }
+
+    /// The launch directory is the last thing discovery inspects, and it is a
+    /// removable volume whenever the app was opened straight from its DMG.
+    /// Nothing must reach it while an installed adb exists.
+    #[test]
+    fn discovery_never_touches_the_launch_directory_when_adb_is_installed() {
+        let temp = tempfile::tempdir().unwrap();
+        let well_known = temp.path().join("well-known-adb");
+        std::fs::write(&well_known, b"fake adb").unwrap();
+        let volume = temp.path().join("Volumes").join("SHIELD OPTIMIZER");
+        let sources = AdbDiscoverySources {
+            explicit_override: None,
+            managed_install: None,
+            sdk_roots: Vec::new(),
+            well_known: vec![well_known.clone()],
+            cwd: Some(volume.clone()),
+        };
+
+        let mut inspected = Vec::new();
+        let found = discover_adb_binary_from(
+            sources,
+            || None,
+            |candidate| {
+                inspected.push(candidate.to_path_buf());
+                candidate.is_file()
+            },
+        );
+
+        assert_eq!(found.as_deref(), Some(well_known.as_path()));
+        assert!(
+            !inspected.iter().any(|path| path.starts_with(&volume)),
+            "launch directory was probed anyway: {inspected:?}"
+        );
+    }
+
+    /// `adb_status` runs on every Devices refresh. Before memoization that
+    /// meant a full re-walk — PATH included, launch directory included — every
+    /// few seconds on a machine with no adb installed, which is what kept
+    /// macOS re-asking for removable-volume access (GitHub #89).
+    #[test]
+    fn repeated_discovery_resolves_once_until_explicitly_forgotten() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Serialize against any other test that touches the process-global
+        // cache, and start from a known-empty one.
+        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        forget_cached_adb_binary();
+
+        static RESOLVES: AtomicUsize = AtomicUsize::new(0);
+        fn resolve_once() -> Option<PathBuf> {
+            RESOLVES.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+
+        // Model `cached_adb_binary`'s contract over an injectable resolver:
+        // the real one calls `discover_adb_binary`, which touches the live
+        // filesystem and cannot be asserted on here.
+        fn cached_with(resolve: fn() -> Option<PathBuf>) -> Option<PathBuf> {
+            if let Ok(guard) = CACHED_ADB_PATH.read() {
+                if let Some(cached) = guard.as_ref() {
+                    return cached.clone();
+                }
+            }
+            let resolved = resolve();
+            if let Ok(mut guard) = CACHED_ADB_PATH.write() {
+                *guard = Some(resolved.clone());
+            }
+            resolved
+        }
+
+        for _ in 0..10 {
+            assert_eq!(cached_with(resolve_once), None);
+        }
+        assert_eq!(
+            RESOLVES.load(Ordering::SeqCst),
+            1,
+            "a cached miss must not re-probe the filesystem"
+        );
+
+        // Installing adb or hitting Restart ADB is the only thing that may
+        // make us look again.
+        forget_cached_adb_binary();
+        assert_eq!(cached_with(resolve_once), None);
+        assert_eq!(RESOLVES.load(Ordering::SeqCst), 2);
+
+        forget_cached_adb_binary();
     }
 
     #[test]
