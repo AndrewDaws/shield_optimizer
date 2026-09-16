@@ -18,7 +18,9 @@ use tokio::process::Command;
 pub(crate) fn hide_console_window(cmd: &mut Command) {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
+        // tokio's Command has its own `creation_flags` on Windows, so the
+        // std `CommandExt` trait does not need importing — and importing it
+        // trips `-D unused-imports` in the Windows CI job.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
