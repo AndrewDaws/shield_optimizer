@@ -44,6 +44,10 @@ const device: Device = {
     sdk_level: "30",
     build_id: "PPR1.180610.011",
     board_platform: "tegra",
+    characteristics: "tv",
+    // Shaped like a real ro.serialno so the Profile row renders at a realistic
+    // width in the generated screenshots.
+    serial_number: "0323220012345",
   },
 };
 
