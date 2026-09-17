@@ -87,6 +87,13 @@ build works for you.
   instead of reporting "No matches, export from the app first" and sending you
   to redo an export that already worked.
 
+### Updates
+
+- **See what an update changes before it installs.** Update now opens the
+  release notes with Install / Not now, instead of taking your word for it from
+  a version number alone. The version in the header opens the full release
+  history.
+
 ### Device information
 
 - Diagnostics on the companion app gained an **About this TV** card: Android

@@ -132,6 +132,16 @@ jobs:
         working-directory: v2
         run: npm run test:device-list-rows
 
+      # Release notes are remote Markdown from the updater manifest: they must
+      # render before an update installs, and must never become markup.
+      - name: Release notes parser
+        working-directory: v2
+        run: npm run test:release-notes
+
+      - name: Update notes dialog
+        working-directory: v2
+        run: npm run test:update-notes-dialog
+
   frontend-mobile:
     name: Mobile frontend type check
     runs-on: ubuntu-latest

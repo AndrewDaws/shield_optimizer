@@ -13,6 +13,8 @@
     "test:pairing-flow": "node tests/pairing-flow.mjs",
     "test:sideload-scan": "node tests/sideload-scan.mjs",
     "test:device-list-rows": "node tests/device-list-rows.mjs",
+    "test:release-notes": "node tests/release-notes.mjs",
+    "test:update-notes-dialog": "node tests/update-notes-dialog.mjs",
     "screenshots": "node screenshots/capture.mjs && bash screenshots/build-gif.sh",
     "tauri": "tauri"
   },
