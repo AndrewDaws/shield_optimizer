@@ -148,6 +148,12 @@ jobs:
         working-directory: v2
         run: npm run test:remote-paste
 
+      # Memory-table verdicts stuck on "Checking" for a week without throwing
+      # or logging; only rendering the table catches that.
+      - name: Memory safety verdicts
+        working-directory: v2
+        run: npm run test:memory-safety
+
       - name: Playback and expert shell regressions
         working-directory: v2
         run: npm run test:playback-shell

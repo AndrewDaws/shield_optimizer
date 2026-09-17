@@ -263,6 +263,16 @@
     }
   }
 
+  /// Colour a usage meter by how full it is. Thresholds are the same ones the
+  /// memory table already uses for its PSS column, so "amber means getting
+  /// full" reads consistently across the Health tab.
+  function meterTone(percent: number | null): string {
+    if (percent == null) return "";
+    if (percent >= 90) return "danger";
+    if (percent >= 75) return "warn";
+    return "ok";
+  }
+
   /// Bytes/s → the largest unit that keeps the number readable.
   function formatRate(bytesPerSecond: number | null): string {
     if (bytesPerSecond == null) return "—";
@@ -287,7 +297,12 @@
       const pkgs = nextReport.top_memory.map((m) => m.package);
       memorySafety = Object.fromEntries(pkgs.map((pkg) => [pkg, { status: "checking" }]));
       const results = await Promise.allSettled(pkgs.map((pkg) => api.safetyInfo(pkg)));
-      if (!pageContextIsCurrent(context) || request !== healthRequest || report !== nextReport) return;
+      // Deliberately not comparing `report` to `nextReport`: `report` is
+      // $state, so assigning an object stores a deep proxy and the identity
+      // check is always true — which bailed out here every time and left every
+      // row stuck on "Checking". The request token already proves this load is
+      // the current one.
+      if (!pageContextIsCurrent(context) || request !== healthRequest) return;
       memorySafety = Object.fromEntries(pkgs.map((pkg, index) => {
         const result = results[index];
         return result.status === "fulfilled"
@@ -1614,9 +1629,13 @@
           <dt>Network</dt>
           <dd>
             {#if resource?.interfaces.length}
-              {#each resource.interfaces as network (network.name)}
-                <div>{network.name}: ↓ {formatRate(network.rx_bytes_per_s)} · ↑ {formatRate(network.tx_bytes_per_s)}</div>
-              {/each}
+              <div class="net-grid">
+                {#each resource.interfaces as network (network.name)}
+                  <span class="net-name">{network.name}</span>
+                  <span>↓ {formatRate(network.rx_bytes_per_s)}</span>
+                  <span>↑ {formatRate(network.tx_bytes_per_s)}</span>
+                {/each}
+              </div>
             {:else}
               {resourceLoading ? "sampling…" : "—"}
             {/if}
@@ -1624,11 +1643,20 @@
           <dt>Temperature</dt>
           <dd>{report.temperature_c != null ? `${report.temperature_c.toFixed(1)}°C` : "—"}</dd>
           {#if report.ram.total_mb != null}
+            {@const ramPercent =
+              report.ram.total_mb && report.ram.used_mb != null
+                ? Math.round((report.ram.used_mb / report.ram.total_mb) * 100)
+                : null}
             <dt>RAM</dt>
             <dd>
-              {report.ram.used_mb ?? "?"} / {report.ram.total_mb} MB
-              {#if report.ram.total_mb && report.ram.used_mb != null}
-                ({Math.round((report.ram.used_mb / report.ram.total_mb) * 100)}%)
+              <div class="meter-value">
+                <span>{report.ram.used_mb ?? "?"} / {report.ram.total_mb} MB</span>
+                {#if ramPercent != null}<span class="muted">{ramPercent}%</span>{/if}
+              </div>
+              {#if ramPercent != null}
+                <div class="meter" role="presentation">
+                  <div class="meter-fill {meterTone(ramPercent)}" style="width: {Math.min(100, ramPercent)}%"></div>
+                </div>
               {/if}
             </dd>
           {/if}
@@ -1638,8 +1666,20 @@
           {#if report.storage.total}
             <dt>Storage</dt>
             <dd>
-              {report.storage.used ?? "?"} / {report.storage.total}
-              {#if report.storage.used_percent != null}({report.storage.used_percent}%){/if}
+              <div class="meter-value">
+                <span>{report.storage.used ?? "?"} / {report.storage.total}</span>
+                {#if report.storage.used_percent != null}
+                  <span class="muted">{report.storage.used_percent}%</span>
+                {/if}
+              </div>
+              {#if report.storage.used_percent != null}
+                <div class="meter" role="presentation">
+                  <div
+                    class="meter-fill {meterTone(report.storage.used_percent)}"
+                    style="width: {Math.min(100, report.storage.used_percent)}%"
+                  ></div>
+                </div>
+              {/if}
             </dd>
           {/if}
         </dl>
@@ -1653,12 +1693,16 @@
         </dl>
 
         <h3>Top Memory Users</h3>
+        <p class="muted small consumers-note">
+          These are process names, so the app behind each one isn't confirmed.
+          Inspection only — nothing here can be disabled from this table.
+        </p>
         {#if report.top_memory.length === 0}
           <p class="muted">No process data.</p>
         {:else}
           <table class="mem-table">
             <thead>
-              <tr><th>PSS</th><th>Reported package field</th><th class="center">Rule for field</th><th>Use</th></tr>
+              <tr><th>Memory</th><th>Process</th><th class="center">Safety</th></tr>
             </thead>
             <tbody>
               {#each report.top_memory as m}
@@ -1671,15 +1715,9 @@
                   >
                     {m.mb.toFixed(1)} MB
                   </td>
-                  <td class="pkg">
-                    {m.package}
-                    <div class="muted small">Identity unverified</div>
-                  </td>
+                  <td class="pkg">{m.package}</td>
                   <td class="center" title={safetyReason(safety)}>
                     {safetyLabel(safety).toUpperCase()}
-                  </td>
-                  <td>
-                    <span class="muted small" title="Memory rows are diagnostics only because the reported package field is not verified ownership.">Inspect only</span>
                   </td>
                 </tr>
               {/each}
@@ -2280,6 +2318,50 @@
     justify-content: space-between;
     gap: 1rem;
   }
+  /* Usage meters, lifted from the mobile Diagnostics screen: a number alone
+     makes you do the arithmetic, a bar tells you at a glance. Desktop tokens
+     rather than mobile's, so it matches the rest of this app. */
+  .meter-value {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: baseline;
+    max-width: 22rem;
+  }
+  .meter {
+    max-width: 22rem;
+    margin-top: 0.3rem;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-inset);
+    overflow: hidden;
+  }
+  .meter-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+  .meter-fill.ok {
+    background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  }
+  .meter-fill.warn {
+    background: var(--warn);
+  }
+  .meter-fill.danger {
+    background: var(--danger);
+  }
+  /* One column per field instead of a ragged "name: down x / up y" line, so
+     the rates line up when a device reports six interfaces. */
+  .net-grid {
+    display: grid;
+    grid-template-columns: auto auto auto;
+    gap: 0.1rem 1rem;
+    justify-content: start;
+  }
+  .net-name {
+    color: var(--fg-muted);
+  }
+
   .kv {
     display: grid;
     grid-template-columns: max-content 1fr;

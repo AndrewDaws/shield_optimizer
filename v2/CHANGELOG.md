@@ -156,6 +156,17 @@ whether this build works for you.
   shifted every later value by one — so a device could report its model as its
   Android version. Each value is now read independently.
 
+### Health
+
+- **Fixed: Top Memory Users never finished checking.** Every row sat on
+  "Checking" forever. Nothing threw and nothing logged — the verdicts were
+  computed and then thrown away.
+- RAM and storage show a usage bar, not just a number, and network rates line
+  up in columns when a device reports several interfaces.
+- The memory table says once, above it, that these are process names and the
+  app behind each is unconfirmed — instead of repeating it on every row in
+  column headings nobody could parse.
+
 ### Safety
 
 - Apps missing from the audited catalog are labeled **Unknown** with a reason
