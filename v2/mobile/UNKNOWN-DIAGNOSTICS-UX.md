@@ -1,5 +1,8 @@
 # Unknown app diagnostics: local collection and review
 
+> **Implemented.** This was the pre-implementation contract; it shipped in `d02de57` as
+> `src/lib/unknownDiagnostics.ts`, covered by `tests/unknownDiagnostics.test.mjs`.
+
 Navigator UX handoff for `so-fb3.6` / `.6.1`; registry ownership `so-fb3.7`
 belongs to Mechanic. This is the pre-implementation design/source-review contract;
 the later `.6.1` integrated-local implementation and its separate test evidence are

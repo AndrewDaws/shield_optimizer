@@ -1,5 +1,8 @@
 # Repository correctness audit — 2026-09-05
 
+> **Snapshot, 2026-09-05.** Superseded by [`HANDOFF.md`](HANDOFF.md) §2; counts and file states
+> below are pinned to that date.
+
 ## Fix pass — 2026-09-05
 
 All nine findings below are addressed in the working tree. The original findings are retained as the reproduction record. Desktop/shared-core and mobile were in scope; v1 was not. The other agent's handoff/backlog/cloud-task files remain untouched.
