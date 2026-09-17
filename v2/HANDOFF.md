@@ -7,7 +7,7 @@ Full release pipeline live: installers built for macOS/Linux/Windows on every `v
 ## Unreleased on `main`
 
 Everything past the `v2-2.1.0` tag is unreleased. `v2/CHANGELOG.md` has a drafted
-`v2-2.2.0-beta.1` section covering it; `docs/RELEASE-DECISION-2026-09-09.md` has the
+`v2-2.2.0` section covering it; `docs/RELEASE-DECISION-2026-09-09.md` has the
 step-by-step physical device script, which is the remaining gate.
 
 The five user-reported issues are all addressed here:

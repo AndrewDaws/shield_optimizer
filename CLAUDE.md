@@ -38,8 +38,8 @@ as unconfirmed until they do.
 The remaining gate before a beta is the device script in
 [`docs/RELEASE-DECISION-2026-09-09.md`](docs/RELEASE-DECISION-2026-09-09.md); steps D1 and D8 are
 the only real proof for #89, since that fix concerns the working directory the app inherits when
-launched from a mounted DMG. `v2/CHANGELOG.md` already has the `v2-2.2.0-beta.1` section the
-release workflow will read.
+launched from a mounted DMG. `v2/CHANGELOG.md` already has the `v2-2.2.0` section the release workflow will read.
+(The 2026-09-09 decision packet proposed a beta first; the call since was to ship `2.2.0` straight.)
 
 The mobile companion app (`v2/mobile/`) has its own authoritative handoff at
 [`v2/mobile/HANDOFF.md`](v2/mobile/HANDOFF.md). Its safety story depends on never claiming more
