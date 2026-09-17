@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import type { AppUsage, Safety } from "$lib/types";
+  import { safetySourceLabel } from "../../../shared/safety";
   import StateBadge from "$lib/components/StateBadge.svelte";
   import RamBadge from "$lib/components/RamBadge.svelte";
   import UsageBadge from "$lib/components/UsageBadge.svelte";
@@ -22,6 +23,8 @@
     showUsage = true,
     safety = null,
     safetyStatus = "unavailable",
+    detailOpen = false,
+    onToggleDetail,
     rowClass,
     actions,
   }: {
@@ -36,6 +39,11 @@
     showUsage?: boolean;
     safety?: Safety | null;
     safetyStatus?: "checking" | "ready" | "unavailable";
+    /// Whether this row's safety detail is expanded. Owned by the caller so
+    /// only one row opens at a time — and because `state` is already a prop
+    /// here, which shadows the `$state` rune.
+    detailOpen?: boolean;
+    onToggleDetail?: () => void;
     rowClass?: string;
     actions: Snippet;
   } = $props();
@@ -45,6 +53,7 @@
     if (safetyStatus !== "ready" || !safety) return "Safety unavailable";
     if (safety.kind === "never_disable") return "Protected";
     if (safety.kind === "caution") return "Caution";
+    if (safety.kind === "safe") return "Safe";
     return "Unknown";
   }
 
@@ -53,8 +62,16 @@
     return safety.kind === "never_disable" ? "protected" : safety.kind;
   }
 
+  /// Where the verdict came from, in words. A bare "Unknown" conflates "we
+  /// rated this high risk" with "we have never seen this package"; those want
+  /// very different treatment from the reader.
+  function safetySource(): string {
+    if (safetyStatus !== "ready" || !safety) return "Could not be checked";
+    return safetySourceLabel(safety.source);
+  }
+
   function safetyReason(): string {
-    if (safetyStatus === "checking") return "Waiting for the canonical safety check.";
+    if (safetyStatus === "checking") return "Checking whether this is safe to remove…";
     if (safetyStatus !== "ready" || !safety) {
       return "Safety information is unavailable. Retry before disabling or uninstalling.";
     }
@@ -88,12 +105,33 @@
       <div class="cell-cue"><UsageBadge {usage} /></div>
     {/if}
   </td>
-  <td class={`safety center safety-${safetyClass()}`} title={safetyReason()}>
-    <span>{safetyLabel()}</span>
-    <span class="safety-reason">{safetyReason()}</span>
+  <!-- Verdict only, with the detail behind a click. The full sentence inline
+       turned every row into a five-line block and cut the list from five apps
+       on screen to three; a tooltip alone is undiscoverable and useless on
+       touch. -->
+  <td class={`safety center safety-${safetyClass()}`}>
+    <button
+      class="safety-toggle"
+      aria-expanded={detailOpen}
+      title={detailOpen ? "Hide the reason" : "Why this verdict?"}
+      onclick={() => onToggleDetail?.()}
+    >
+      {safetyLabel()}<span class="safety-caret">{detailOpen ? "▴" : "▾"}</span>
+    </button>
   </td>
   {@render actions()}
 </tr>
+{#if detailOpen}
+  <tr class="safety-detail-row">
+    <td colspan="5">
+      <div class="safety-detail">
+        <span class={`safety-detail-kind safety-${safetyClass()}`}>{safetyLabel()}</span>
+        <p class="safety-detail-reason">{safetyReason()}</p>
+        <p class="muted small safety-detail-source">{safetySource()} · {pkg}</p>
+      </div>
+    </td>
+  </tr>
+{/if}
 
 <style>
   /* The table chrome (th/td
@@ -151,13 +189,48 @@
   .safety-caution {
     color: var(--warn);
   }
-  .safety-reason {
-    display: block;
-    margin-top: 0.15rem;
-    font-family: inherit;
-    font-size: 0.7rem;
-    letter-spacing: normal;
-    text-transform: none;
+  .safety-safe {
+    color: var(--ok);
+  }
+  .safety-toggle {
+    background: none;
+    border: none;
+    padding: 0.1rem 0.3rem;
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .safety-toggle:hover {
+    background: var(--bg-button-hover);
+  }
+  .safety-caret {
+    margin-left: 0.25rem;
+    opacity: 0.6;
+    font-size: 0.7em;
+  }
+  .safety-detail-row td {
+    padding-top: 0;
+  }
+  .safety-detail {
+    margin: 0 0 0.5rem;
+    padding: 0.6rem 0.8rem;
+    background: var(--bg-inset);
+    border-left: 3px solid var(--border);
+    border-radius: 0 4px 4px 0;
+  }
+  .safety-detail-kind {
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .safety-detail-reason {
+    margin: 0.25rem 0 0.35rem;
+    line-height: 1.45;
+  }
+  .safety-detail-source {
+    margin: 0;
   }
   .tag {
     font-size: 0.7rem;

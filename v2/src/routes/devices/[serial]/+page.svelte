@@ -61,6 +61,10 @@
     | { status: "unavailable"; reason: string };
   type PageContext = { serial: string; epoch: number };
   let memorySafety = $state<Record<string, SafetyStatus>>({});
+  /// Package whose safety detail is expanded in the App List, or null. One at a
+  /// time: the verdict is a single line, and the reasoning behind it is worth
+  /// reading properly rather than skimming twelve at once.
+  let expandedSafety = $state<string | null>(null);
   let packageSafety = $state<Record<string, SafetyStatus>>({});
   let pageEpoch = $state(0);
   let deviceRequest = 0;
@@ -79,11 +83,24 @@
     return !destroyed && context.serial === serial && context.epoch === pageEpoch;
   }
 
+  /// One word for a verdict kind. Kept separate from `safetyLabel` because the
+  /// confirm dialogs have a bare `Safety` value, not a load status.
+  function safetyKindLabel(kind: Safety["kind"]): string {
+    if (kind === "never_disable") return "Protected";
+    if (kind === "caution") return "Caution";
+    if (kind === "safe") return "Safe";
+    return "Unknown";
+  }
+
   function safetyLabel(safety: SafetyStatus | undefined): string {
     if (!safety || safety.status === "unavailable") return "Unavailable";
     if (safety.status === "checking") return "Checking";
     if (safety.verdict.kind === "never_disable") return "Protected";
     if (safety.verdict.kind === "caution") return "Caution";
+    // This function feeds the memory table AND "Everything else". Process rows
+    // never produce `safe`, but package rows do — without this branch a package
+    // we reviewed and vouched for was displayed as "Unknown".
+    if (safety.verdict.kind === "safe") return "Safe";
     return "Unknown";
   }
 
@@ -288,7 +305,11 @@
     reportErr = null;
     // Kick the sample off in parallel and let it land on its own.
     void loadResourceSample();
-    memorySafety = {};
+    // Deliberately NOT clearing memorySafety here: Live Refresh ticks every
+    // three seconds, and wiping the map made the whole Safety column blank to
+    // "Checking" and back twenty times a minute. A process's verdict does not
+    // change between ticks; the effect below refetches when the *set* of
+    // processes changes.
     try {
       const nextReport = await api.healthReport(context.serial);
       if (!pageContextIsCurrent(context) || request !== healthRequest) return;
@@ -296,7 +317,9 @@
       reportLastRefreshed = new Date();
       const pkgs = nextReport.top_memory.map((m) => m.package);
       memorySafety = Object.fromEntries(pkgs.map((pkg) => [pkg, { status: "checking" }]));
-      const results = await Promise.allSettled(pkgs.map((pkg) => api.safetyInfo(pkg)));
+      // Process names, not verified packages — use the catalog-free lookup so an
+      // unverified string cannot inherit a curated "safe to remove" verdict.
+      const results = await Promise.allSettled(pkgs.map((pkg) => api.processSafetyInfo(pkg)));
       // Deliberately not comparing `report` to `nextReport`: `report` is
       // $state, so assigning an object stores a deep proxy and the identity
       // check is always true — which bailed out here every time and left every
@@ -538,7 +561,7 @@
     const request = ++mutationRequest;
     const inventoryVersion = otherInventoryVersion;
     if (!otherStateIsCurrent(pkg, false, inventoryVersion)) {
-      appActionMessage = `${pkg}: current disabled-state evidence is unavailable. Refresh to retry.`;
+      appActionMessage = `${pkg}: we couldn't read the current disabled state. Refresh to retry.`;
       return;
     }
     appMutationInFlight = true;
@@ -660,7 +683,7 @@
     const request = ++mutationRequest;
     const inventoryVersion = source === "catalog" ? catalogInventoryVersion : otherInventoryVersion;
     if (!removalSourceIsCurrent(source, pkg, inventoryVersion)) {
-      appActionMessage = `${pkg}: current inventory evidence is unavailable. Refresh to retry.`;
+      appActionMessage = `${pkg}: we couldn't read the current package list. Refresh to retry.`;
       return;
     }
     const name = removalName(source, pkg);
@@ -682,7 +705,7 @@
         return;
       }
       const approved = confirm(
-        `${action.toUpperCase()} ${name}\nPackage: ${pkg}\nSafety: ${before.safety.kind === "caution" ? "Caution" : "Unknown"}\nReason: ${before.safety.reason}\n\nProceed?`,
+        `${action.toUpperCase()} ${name}\nPackage: ${pkg}\nSafety: ${safetyKindLabel(before.safety.kind)}\nReason: ${before.safety.reason}\n\nProceed?`,
       );
       if (!approved
         || !pageContextIsCurrent(context)
@@ -714,7 +737,7 @@
       if (!pageContextIsCurrent(context)
         || request !== mutationRequest
         || !removalSourceIsCurrent(source, pkg, inventoryVersion)) return;
-      appActionMessage = `${pkg}: ${e}. Refresh to retry; no removal was dispatched without current evidence.`;
+      appActionMessage = `${pkg}: ${e}. Refresh to retry; nothing was removed without a current reading.`;
     } finally {
       appMutationInFlight = false;
       if (pageContextIsCurrent(context)
@@ -743,7 +766,7 @@
     const request = ++mutationRequest;
     const inventoryVersion = catalogInventoryVersion;
     if (!catalogStateIsCurrent(pkg, "disabled", inventoryVersion)) {
-      appActionMessage = `${pkg}: current disabled-state evidence is unavailable. Refresh to retry.`;
+      appActionMessage = `${pkg}: we couldn't read the current disabled state. Refresh to retry.`;
       return;
     }
     appMutationInFlight = true;
@@ -1890,9 +1913,10 @@
       {:else}
         <p class="muted small legend">
           <strong>State</strong> is what the device reports right now.
-          <strong>Safety</strong> is the canonical engine verdict. Unknown removals need explicit review;
-          unavailable safety or state blocks removal. <strong>Tools</strong> has the Play Store link
-          plus APK backup and copy-to-another-device.
+          <strong>Safety</strong> is our verdict on removing it — click it for the reason and where it came from.
+          Anything we can't vouch for needs an explicit tick before it can be removed.
+          <strong>Tools</strong> has the Play Store link plus APK backup and
+          copy-to-another-device.
         </p>
         {#if appActionMessage}
           <p class="muted small mono action-message">
@@ -1943,6 +1967,9 @@
                 showUsage={state !== "missing"}
                 safety={safety?.status === "ready" ? safety.verdict : null}
                 safetyStatus={safety?.status ?? "unavailable"}
+                detailOpen={expandedSafety === a.package}
+                onToggleDetail={() =>
+                  (expandedSafety = expandedSafety === a.package ? null : a.package)}
               >
                 {#snippet actions()}
                 <td class="rec-cell">
@@ -2046,7 +2073,7 @@
           <p class="muted small">
             Installed apps that aren't in the curated list — sideloaded apps (SmartTube etc.)
             get the same <strong>Backup</strong> and <strong>Copy to…</strong> tools.
-            Every removal uses the canonical safety verdict and current inventory evidence.
+            Removals here still go through the same safety checks as the curated list.
             {showSystemOthers ? "Showing system packages too." : "System packages are hidden; tick \"Show system packages\" to include them."}
           </p>
           {#if othersErr}
@@ -2093,8 +2120,8 @@
                     <td class="center" title={safetyReason(safety)}>{safetyLabel(safety).toUpperCase()}</td>
                     <td class="rec-cell">
                       {#if o.enabled}
-                        <button class="small-action subtle" onclick={() => disableOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight || !canRemove} title="Canonical safety and fresh inventory are required">Disable</button>
-                        <button class="small-action subtle danger" onclick={() => uninstallOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight || !canRemove} title="Canonical safety and fresh inventory are required">Uninstall</button>
+                        <button class="small-action subtle" onclick={() => disableOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight || !canRemove} title="Needs a completed safety check and a current package list">Disable</button>
+                        <button class="small-action subtle danger" onclick={() => uninstallOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight || !canRemove} title="Needs a completed safety check and a current package list">Uninstall</button>
                       {:else}
                         <button class="small-action subtle" onclick={() => enableOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight} title="pm enable">Enable</button>
                       {/if}
