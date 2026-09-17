@@ -23,7 +23,7 @@ PowerShell clarification: `pwsh` could not be located through PATH, common insta
 
 ## Original audit
 
-Reviewed HEAD `34d0575` on `feat/atv-optimizer-mobile`. This was a review, not a fix sweep. No production source was changed. `HANDOFF.md`, `BACKLOG.md`, and `CLOUD-TASK.md` were left to the other agent.
+Reviewed HEAD `34d0575` on `feat/atv-optimizer-mobile`. This was a review, not a fix sweep. No production source was changed. `HANDOFF.md` and `BACKLOG.md` were left to the other agent.
 
 The mobile app still has reproducible lifecycle bugs despite passing the host gates. The strongest findings concern commands surviving navigation, connection cancellation that only affects the frontend, and backend failures being converted into successful responses. These plausibly explain reported symptoms; no physical device was used to attribute a particular user incident to them.
 

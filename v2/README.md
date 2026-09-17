@@ -178,7 +178,6 @@ Default in the plan is **Svelte**. Override before running `create-tauri-app` if
 ## See also
 
 - [ATV-OPTIMIZER-ANDROID-PLAN.md](ATV-OPTIMIZER-ANDROID-PLAN.md) — Android app implementation plan
-- [PLAN.md](PLAN.md) — historical phased porting roadmap
 - [`../docs/FEATURES.md`](../docs/FEATURES.md) — behavior spec (the source of truth)
 - v1: `Shield-Optimizer.ps1` at repo root
 

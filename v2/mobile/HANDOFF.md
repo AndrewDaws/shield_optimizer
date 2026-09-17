@@ -5,8 +5,7 @@ Read this top-to-bottom before doing any mobile work. It is the authoritative, c
 2026-09-08 America/Chicago; older checkpoints are historical).
 Companion deep-dives (all in this dir): `ARCHITECTURE-REVIEW.md` (historical findings audit),
 `FEATURES.md` (historical screen ↔ command map), **`BACKLOG.md` (current ordered queue)**,
-`TRANSPORT-LICENSING-RESEARCH.md` (why the transport is what it is), `CLOUD-TASK.md` (brief for the
-nightly cloud agent). Cross-session memory also lives
+`TRANSPORT-LICENSING-RESEARCH.md` (why the transport is what it is). Cross-session memory also lives
 in `~/.claude/projects/-Users-bryanroscoe-Developer-shield-optimizer/memory/`.
 
 Current lifecycle evidence baseline: **`48cba23`**. The original mobile effort used
@@ -250,7 +249,7 @@ aarch64-Android; the clean APK has **zero GPL native libs** (only our `libatv_op
 - `v2/crates/core/src/adb/batch.rs` — sentinel-batched shell helper; `crates/core/src/license.rs`
   — signed license verification.
 - Mobile docs: `HANDOFF.md` (this), `BACKLOG.md`, `FAST-REMOTE-PLAN.md`, `PAIRING-PLAN.md`,
-  `LICENSING.md`, `RELEASE.md`, `THIRD-PARTY-NOTICES.md` (generated), `CLOUD-TASK.md`.
+  `LICENSING.md`, `RELEASE.md`, `THIRD-PARTY-NOTICES.md` (generated).
 - `v2/crates/core/` — SHARED engine+commands (pure `engine/`, `commands/*`, `adb/{driver,parse}`,
   `license.rs`). Desktop and mobile both register from here. **Keep `engine/` pure; keep aligned
   with desktop.**
