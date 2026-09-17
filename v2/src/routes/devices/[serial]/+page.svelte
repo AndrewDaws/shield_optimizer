@@ -19,6 +19,7 @@
     RebootMode,
     OtherPackage,
     ScreenshotResult,
+    ResourceSample,
     Safety,
   } from "$lib/types";
   import { deviceTypeLabel } from "$lib/types";
@@ -31,10 +32,12 @@
   import SideloadTab from "$lib/components/SideloadTab.svelte";
   import RemoteTab from "$lib/components/RemoteTab.svelte";
   import OptimizeTab from "$lib/components/OptimizeTab.svelte";
+  import MediaTab from "$lib/components/MediaTab.svelte";
+  import ShellTab from "$lib/components/ShellTab.svelte";
 
   let serial = $derived(decodeURIComponent($page.params.serial ?? ""));
 
-  type Tab = "overview" | "health" | "launcher" | "apps" | "optimize" | "tweaks" | "remote" | "files" | "snapshot" | "sideload";
+  type Tab = "overview" | "health" | "media" | "launcher" | "apps" | "optimize" | "tweaks" | "remote" | "files" | "snapshot" | "sideload" | "shell";
   let activeTab = $state<Tab>("overview");
 
   let device = $state<Device | null>(null);
@@ -202,6 +205,8 @@
   // this token (after an App List action, snapshot apply, or panic recovery)
   // tells the tab to drop that stale plan and reload fresh next run.
   let optimizeResetToken = $state(0);
+  let mediaResetToken = $state(0);
+  let shellAcknowledged = $state(false);
 
   async function loadDevice() {
     const context = capturePageContext();
@@ -231,11 +236,48 @@
     }
   }
 
+  // CPU + network rates, fetched separately from the health report: the
+  // sample needs a one-second device-side window, and making every refresh
+  // wait for it would make the whole tab feel slow.
+  let resource = $state<ResourceSample | null>(null);
+  let resourceLoading = $state(false);
+  let resourceErr = $state<string | null>(null);
+  let resourceRequest = 0;
+
+  async function loadResourceSample() {
+    if (resourceLoading) return;
+    const context = capturePageContext();
+    const request = ++resourceRequest;
+    resourceLoading = true;
+    resourceErr = null;
+    try {
+      const sample = await api.resourceSample(context.serial);
+      if (!pageContextIsCurrent(context) || request !== resourceRequest) return;
+      resource = sample;
+    } catch (e) {
+      if (!pageContextIsCurrent(context) || request !== resourceRequest) return;
+      resource = null;
+      resourceErr = String(e);
+    } finally {
+      if (pageContextIsCurrent(context) && request === resourceRequest) resourceLoading = false;
+    }
+  }
+
+  /// Bytes/s → the largest unit that keeps the number readable.
+  function formatRate(bytesPerSecond: number | null): string {
+    if (bytesPerSecond == null) return "—";
+    if (bytesPerSecond < 1024) return `${bytesPerSecond} B/s`;
+    if (bytesPerSecond < 1024 * 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+    return `${(bytesPerSecond / (1024 * 1024)).toFixed(2)} MB/s`;
+  }
+
   async function loadHealth() {
     const context = capturePageContext();
     const request = ++healthRequest;
     reportLoading = true;
     reportErr = null;
+    // Kick the sample off in parallel and let it land on its own.
+    void loadResourceSample();
     memorySafety = {};
     try {
       const nextReport = await api.healthReport(context.serial);
@@ -1107,6 +1149,7 @@
     const total =
       preview.packages_to_disable.length +
       Object.keys(preview.settings_to_write).length +
+      preview.settings_to_delete.length +
       (preview.launcher_to_set ? 1 : 0);
     if (!confirm(`Apply this snapshot? ${total} change(s) will be made to the device. Disabled packages can be re-enabled later via Recovery.`)) return;
     applyBusy = true;
@@ -1251,6 +1294,23 @@
   function invalidateDeviceCaches() {
     if (activeTab !== "launcher") launchersLoaded = false;
     if (activeTab !== "health") healthStale = true;
+    mediaResetToken++;
+  }
+
+  function shellExecuted() {
+    invalidateDeviceCaches();
+    appsRequest++;
+    otherRequest++;
+    enrichmentRequest++;
+    appsLoaded = false;
+    appsLoading = false;
+    othersLoaded = false;
+    othersLoading = false;
+    preview = null;
+    previewPath = null;
+    optimizeResetToken++;
+    visited.tweaks = false;
+    void loadDevice();
   }
 
   /// Wipe all per-device state. Used if the route's serial changes under a
@@ -1261,6 +1321,11 @@
     pageEpoch++;
     deviceRequest++;
     healthRequest++;
+    resourceRequest++;
+    resource = null;
+    resourceLoading = false;
+    resourceErr = null;
+    shellAcknowledged = false;
     appsRequest++;
     otherRequest++;
     enrichmentRequest++;
@@ -1414,6 +1479,7 @@
     {#each [
       { id: "overview", label: "Overview" },
       { id: "health", label: "Health" },
+      { id: "media", label: "Playback" },
       { id: "launcher", label: "Launcher" },
       { id: "apps", label: "App List" },
       { id: "optimize", label: "Optimize" },
@@ -1422,6 +1488,7 @@
       { id: "files", label: "Files" },
       { id: "sideload", label: "Install APK" },
       { id: "snapshot", label: "Snapshot" },
+      { id: "shell", label: "Shell" },
     ] as t (t.id)}
       <button
         role="tab"
@@ -1519,6 +1586,9 @@
           <button onclick={loadHealth} disabled={reportLoading}>
             {reportLoading ? "Loading…" : "Refresh"}
           </button>
+          <button onclick={loadResourceSample} disabled={resourceLoading}>
+            {resourceLoading ? "Sampling…" : "Sample resources"}
+          </button>
         </div>
       </div>
       {#if trimMessage}
@@ -1530,7 +1600,27 @@
         <div class="muted">{reportLoading ? "Querying…" : "—"}</div>
       {:else}
         <h3>Vitals</h3>
+        {#if resourceErr}<p class="error">Resource sample: {resourceErr}</p>{/if}
         <dl class="kv">
+          <dt>CPU</dt>
+          <dd>
+            {#if resource?.cpu_percent != null}
+              {resource.cpu_percent.toFixed(1)}%
+              {#if resource.interval_ms != null}<span class="muted small">over {(resource.interval_ms / 1000).toFixed(2)}s</span>{/if}
+            {:else}
+              {resourceLoading ? "sampling…" : "—"}
+            {/if}
+          </dd>
+          <dt>Network</dt>
+          <dd>
+            {#if resource?.interfaces.length}
+              {#each resource.interfaces as network (network.name)}
+                <div>{network.name}: ↓ {formatRate(network.rx_bytes_per_s)} · ↑ {formatRate(network.tx_bytes_per_s)}</div>
+              {/each}
+            {:else}
+              {resourceLoading ? "sampling…" : "—"}
+            {/if}
+          </dd>
           <dt>Temperature</dt>
           <dd>{report.temperature_c != null ? `${report.temperature_c.toFixed(1)}°C` : "—"}</dd>
           {#if report.ram.total_mb != null}
@@ -2039,6 +2129,9 @@
                 <span class="muted">({preview.settings_already_set.length} already set, no-op)</span>
               {/if}
             </li>
+            <li><strong>{preview.settings_to_delete.length}</strong> settings will be reset to device defaults
+              {#each preview.settings_to_delete as key}<div><code>{key}</code></div>{/each}
+            </li>
           </ul>
           <div class="apply-row">
             <button
@@ -2082,7 +2175,7 @@
        their state and fetched data persist across tab switches. -->
   {#if visited.tweaks}
     <div hidden={activeTab !== "tweaks"}>
-      <TweaksTab {serial} />
+      <TweaksTab {serial} onSettingsChanged={invalidateDeviceCaches} />
     </div>
   {/if}
   {#if visited.files}
@@ -2098,6 +2191,16 @@
   {#if visited.remote}
     <div hidden={activeTab !== "remote"}>
       <RemoteTab {serial} />
+    </div>
+  {/if}
+  {#if visited.media}
+    <div hidden={activeTab !== "media"}>
+      <MediaTab {serial} resetToken={mediaResetToken} active={activeTab === "media"} />
+    </div>
+  {/if}
+  {#if visited.shell}
+    <div hidden={activeTab !== "shell"}>
+      <ShellTab {serial} bind:acknowledged={shellAcknowledged} onexecuted={shellExecuted} />
     </div>
   {/if}
   {#if visited.optimize}

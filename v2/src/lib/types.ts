@@ -89,6 +89,28 @@ export interface DisplayMode {
   hdr_types: string[];
 }
 
+export type {
+  SurroundMode, VerdictLevel, VideoFormat, DisplayModeEntry,
+  AudioPassthrough, Verdict, MediaCapabilities,
+} from "../../shared/media";
+
+/// CPU + network rates over one device-side sampling window.
+export interface ResourceSample {
+  cpu_percent: number | null;
+  interfaces: { name: string; rx_bytes_per_s: number | null; tx_bytes_per_s: number | null }[];
+  interval_ms: number | null;
+}
+
+export interface ShellRunResult {
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+  termination: "completed" | "output_limit" | "timeout";
+  /// The safety gate refused it; nothing was sent to the device.
+  blocked: boolean;
+  blocked_reason: string | null;
+}
+
 export interface MemoryEntry {
   package: string;
   mb: number;
@@ -282,6 +304,7 @@ export interface SnapshotApplyPlan {
   packages_not_installed: string[];
   launcher_to_set: string | null;
   settings_to_write: Record<string, string>;
+  settings_to_delete: string[];
   settings_already_set: string[];
   cross_device_warning: string | null;
 }
@@ -292,6 +315,7 @@ export interface ApplyResult {
   launcher_set: boolean;
   launcher_message: string | null;
   settings_written: string[];
+  settings_deleted: string[];
   settings_failed: string[];
   summary: string;
 }
@@ -328,6 +352,10 @@ export interface TweaksState {
   animator_duration_scale: string | null;
   /// Background process limit: null = Standard, "0" = none, "1"–"4" = at most N.
   background_process_limit: string | null;
+  /// Encoded audio passthrough: "0" Auto, "1" Never, "2" Always, "3" Manual.
+  encoded_surround_output: string | null;
+  /// Comma-separated AudioFormat encodings; applies only in Manual mode.
+  encoded_surround_output_enabled_formats: string | null;
 }
 
 export type SettingNamespace = "global" | "secure" | "system";

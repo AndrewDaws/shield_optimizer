@@ -23,13 +23,15 @@ Research notes: aTV Tools is a **phone/tablet companion app** (Android 8.1+/iOS 
 | Screen recording | ✅ (Pro, no DRM content) | ❌ |
 | Remote control / D-pad / mouse | ✅ (Pro) | partial (D-pad + typing, no mouse) |
 | **Send text to TV (type from keyboard)** | ✅ | ✅ |
-| Permissions grant/revoke | ✅ | ❌ |
+| Permissions grant/revoke | ✅ | ✅ |
 | Bulk cache clear | ✅ | ✅ |
 | Running apps + force-stop | ✅ | ✅ |
-| Resource monitor | CPU/RAM/net/storage | RAM/temp/storage/display (no CPU/net) |
-| Shell runner with bookmarks | ✅ | ❌ |
+| Resource monitor | CPU/RAM/net/storage | ✅ CPU/RAM/net/temp/storage/display |
+| Shell runner with bookmarks | ✅ | ✅ |
 | Screen mirroring / gamepad / media remote | ✅ (phone-centric) | — (out of scope for desktop) |
 | Open source / free | ❌ | ✅ |
+
+**Playback report** (Playback tab, unreleased) shows codec configuration, reported HDR/display modes, and audio policy. These observations do not establish runtime decoder support, acceleration, or playback quality.
 
 **Bottom line:** we beat aTV Tools on the *debloat/optimize/safety* core, they beat us on *general device utilities*. The gaps worth closing are the utilities that complement debloating; the phone-centric features aren't our product.
 
@@ -57,9 +59,9 @@ Shape: `adb -s X exec-out screencap -p > local.png`, save to a user folder, show
 
 **5. Force-stop** on memory-table rows (`am force-stop <pkg>`) — trivial, pairs with the existing Disable button.
 **6. Send text to TV** — `input text '<escaped>'` for typing Wi-Fi passwords/searches from the desktop keyboard. Small input box on the device header. (Escape carefully; relates to the package-validation work.)
-**7. Shell runner with bookmarks** — an "Advanced" tab: command input → runs via the driver, shows combined output; bookmark list persisted locally. The catch-all that made aTV Tools sticky.
+**7. Shell runner with bookmarks** — implemented on the unreleased desktop Shell tab. Explicit expert acknowledgment → editor → Run → bounded stdout/stderr. Presets/bookmarks populate the editor only. The lexical gate catches obvious protected-package commands but can be bypassed by shell expressions; this is an explicit exception to curated-action safety. Mobile shell is deferred.
 **8. Bulk cache clear** — `pm trim-caches 999999999999` (one call, no per-app loop).
-**9. CPU + network monitor** — add `top -n1` / `/proc/stat` parse and `/proc/net/dev` deltas to the Health report.
+**9. CPU + network monitor** — implemented by `resource_sample` on the unreleased desktop and mobile apps: two device-side samples with `/proc/uptime` elapsed time and per-interface network rates. Independent of the health report; mobile sampling is explicitly requested, not polled.
 
 ### P3 — Evaluate later
 **10. Screen recording** — `screenrecord` (3-min cap, no DRM), pull + save. Nice demo material.

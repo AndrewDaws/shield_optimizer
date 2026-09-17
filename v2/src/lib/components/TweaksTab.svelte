@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { api } from "$lib/api";
   import type {
     TweaksState,
@@ -9,7 +9,9 @@
     PrivateDnsState,
   } from "$lib/types";
 
-  let { serial }: { serial: string } = $props();
+  let { serial, onSettingsChanged }: { serial: string; onSettingsChanged?: () => void } = $props();
+  let alive = true;
+  onDestroy(() => { alive = false; });
 
   let tweaks = $state<TweaksState | null>(null);
   let tweaksLoading = $state(false);
@@ -42,6 +44,7 @@
   let dnsMessage = $state("");
 
   async function loadTweaks() {
+    const target = serial;
     tweaksLoading = true;
     tweaksErr = null;
     try {
@@ -52,6 +55,7 @@
         api.appPermissionState(serial, ASSISTANT_PKG, ASSISTANT_PERM).catch(() => null),
         api.getPrivateDns(serial).catch(() => null),
       ]);
+      if (!alive || serial !== target) return;
       tweaks = t;
       currentDisplayScaling = s;
       netflixHooksState = states ? (states[NETFLIX_HOOKS_PKG] ?? null) : null;
@@ -59,9 +63,10 @@
       privateDns = dns;
       dnsHostInput = dns?.hostname ?? "";
     } catch (e) {
+      if (!alive || serial !== target) return;
       tweaksErr = String(e);
     } finally {
-      tweaksLoading = false;
+      if (alive && serial === target) tweaksLoading = false;
     }
   }
 
@@ -135,6 +140,60 @@
   function matchContentLabel(v: string | null): string {
     return v === "0" ? "Never" : v === "1" ? "Seamless only" : v === "2" ? "Always" : "Unset (default)";
   }
+  function surroundLabel(v: string | null): string {
+    return v === "0"
+      ? "Auto"
+      : v === "1"
+        ? "Never"
+        : v === "2"
+          ? "Always"
+          : v === "3"
+            ? "Manual"
+            : "Unset (Auto)";
+  }
+
+  /// `AudioFormat.ENCODING_*` values that can appear in a passthrough
+  /// allow-list, in the order a receiver owner thinks about them: lossy
+  /// first, then the lossless formats that are the reason to touch this.
+  const SURROUND_FORMATS: { code: string; label: string }[] = [
+    { code: "5", label: "Dolby Digital" },
+    { code: "6", label: "Dolby Digital Plus" },
+    { code: "18", label: "Atmos over DD+" },
+    { code: "14", label: "Dolby TrueHD" },
+    { code: "19", label: "Dolby MAT" },
+    { code: "7", label: "DTS" },
+    { code: "8", label: "DTS-HD" },
+  ];
+
+  function surroundFormatOn(raw: string | null, code: string): boolean {
+    if (!raw) return false;
+    return raw.split(",").map((c) => c.trim()).includes(code);
+  }
+
+  /// Toggling a format rewrites the whole comma-separated list. Order is
+  /// normalised to SURROUND_FORMATS so the value stays stable regardless of
+  /// which checkbox the user clicked first.
+  async function toggleSurroundFormat(raw: string | null, code: string) {
+    const current = new Set(
+      (raw ?? "")
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean),
+    );
+    if (current.has(code)) current.delete(code);
+    else current.add(code);
+    const ordered = SURROUND_FORMATS.filter((f) => current.has(f.code)).map((f) => f.code);
+    // Codes the picker does not model must survive a toggle rather than being
+    // silently dropped from the device's list.
+    const unknown = [...current].filter((c) => !SURROUND_FORMATS.some((f) => f.code === c));
+    await writeTweak(
+      "global",
+      "encoded_surround_output_enabled_formats",
+      [...ordered, ...unknown].join(","),
+      "encoded_surround_output_enabled_formats",
+    );
+  }
+
   function bgLimitLabel(v: string | null): string {
     if (!v) return "Standard";
     return v === "0" ? "None" : `At most ${v}`;
@@ -157,21 +216,29 @@
     value: string,
     busyId: string,
   ) {
+    if (tweaksActionBusy !== null) return;
+    const target = serial;
     tweaksActionBusy = busyId;
     tweaksActionMessage = "";
     try {
-      const r = await api.writeSetting(serial, namespace, key, value);
+      const r = await api.writeSetting(target, namespace, key, value);
+      if (!alive || serial !== target) return;
       tweaksActionMessage = `${key} → ${value || "(default)"}: ${r.message.trim()}`;
-      await loadTweaks();
     } catch (e) {
+      if (!alive || serial !== target) return;
       tweaksActionMessage = `${key}: ${e}`;
     } finally {
-      tweaksActionBusy = null;
+      if (alive && serial === target) {
+        onSettingsChanged?.();
+        await loadTweaks();
+        tweaksActionBusy = null;
+      }
     }
   }
 
   // Animation triple is one logical control — write all three keys in one go.
   async function setAnimationScale(scale: string) {
+    if (tweaksActionBusy !== null) return;
     tweaksActionBusy = "animations";
     tweaksActionMessage = "";
     try {
@@ -418,6 +485,64 @@
       </div>
     </div>
 
+    <h3>Audio Passthrough</h3>
+    <p class="muted small">
+      Controls Android's encoded surround format policy. Auto uses the connected
+      equipment's advertised formats. Manual overrides can cause silence on
+      unsupported equipment; actual playback also depends on the app and audio path.
+    </p>
+    <div class="tweak-row">
+      <div>
+        <div class="current">Current: <strong>{surroundLabel(tweaks.encoded_surround_output)}</strong></div>
+        <div class="muted small mono">
+          global.encoded_surround_output = {tweaks.encoded_surround_output ?? "(unset)"}
+        </div>
+      </div>
+      <div class="row-actions">
+        {#each [
+          { v: "0", label: "Auto" },
+          { v: "1", label: "Never" },
+          { v: "2", label: "Always" },
+          { v: "3", label: "Manual" },
+        ] as opt (opt.v)}
+          <button
+            class="small-action"
+            class:active={tweaks.encoded_surround_output === opt.v}
+            disabled={tweaksActionBusy !== null || tweaksLoading}
+            onclick={() => writeTweak("global", "encoded_surround_output", opt.v, "encoded_surround_output")}
+          >{opt.label}</button>
+        {/each}
+        <button
+          class="small-action"
+          disabled={tweaksActionBusy !== null || tweaksLoading}
+          onclick={() => writeTweak("global", "encoded_surround_output", "", "encoded_surround_output")}
+        >Reset</button>
+      </div>
+    </div>
+    {#if tweaks.encoded_surround_output === "3"}
+      <div class="surround-formats">
+        <p class="muted small">
+          Formats allowed by Android's Manual policy. This does not guarantee
+          passthrough or determine how an app handles other formats.
+        </p>
+        <div class="row-actions">
+          {#each SURROUND_FORMATS as f (f.code)}
+            <button
+              class="small-action"
+              class:active={surroundFormatOn(tweaks.encoded_surround_output_enabled_formats, f.code)}
+              disabled={tweaksActionBusy !== null || tweaksLoading}
+              onclick={() =>
+                toggleSurroundFormat(tweaks?.encoded_surround_output_enabled_formats ?? null, f.code)}
+            >{f.label}</button>
+          {/each}
+        </div>
+        <div class="muted small mono">
+          global.encoded_surround_output_enabled_formats =
+          {tweaks.encoded_surround_output_enabled_formats ?? "(empty)"}
+        </div>
+      </div>
+    {/if}
+
     <h3>Background Process Limit</h3>
     <p class="muted small">
       Caps how many apps stay alive in the background — frees RAM and can make the
@@ -663,6 +788,14 @@
     gap: 1rem;
     padding: 0.5rem 0;
     border-bottom: 1px solid var(--bg-button);
+  }
+  .surround-formats {
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem 0.7rem;
+    margin: 0.4rem 0 0.8rem;
+    line-height: 1.5;
   }
   .current-scaling {
     background: var(--bg-inset);

@@ -18,6 +18,7 @@ import type {
   Device,
   HealthReport,
   LauncherStatus,
+  MediaCapabilities,
   OptimizePlan,
   OptimizePlanItem,
   SnapshotFile,
@@ -79,6 +80,58 @@ const health: HealthReport = {
   ],
 };
 
+const media: MediaCapabilities = {
+  video: [
+    { label: "H.264 / AVC", mime: "video/avc", advertised: true, acceleration_unknown: true, software: true },
+    { label: "HEVC / H.265", mime: "video/hevc", advertised: true, acceleration_unknown: true, software: true },
+    { label: "VP9", mime: "video/x-vnd.on2.vp9", advertised: true, acceleration_unknown: true, software: true },
+    { label: "AV1", mime: "video/av01", advertised: true, acceleration_unknown: false, software: true },
+    { label: "Dolby Vision", mime: "video/dolby-vision", advertised: true, acceleration_unknown: true, software: false },
+    { label: "MPEG-2", mime: "video/mpeg2", advertised: true, acceleration_unknown: true, software: false },
+  ],
+  hdr_types: ["Dolby Vision", "HDR10", "HLG"],
+  modes: [
+    { width: 3840, height: 2160, fps: 59.94, active: true },
+    { width: 3840, height: 2160, fps: 29.97, active: false },
+    { width: 3840, height: 2160, fps: 23.976, active: false },
+    { width: 1920, height: 1080, fps: 60.0, active: false },
+    { width: 1920, height: 1080, fps: 23.976, active: false },
+  ],
+  audio: {
+    mode: "manual",
+    enabled_formats: [
+      "Dolby Digital (AC-3)",
+      "Dolby Digital Plus (E-AC-3)",
+      "Dolby Atmos over DD+ (E-AC-3 JOC)",
+      "Dolby TrueHD",
+      "DTS",
+      "DTS-HD",
+    ],
+    raw_formats: "5,6,18,14,7,8",
+  },
+  match_content_frame_rate: "2",
+  verdicts: [
+    {
+      level: "info",
+      title: "24p mode reported (23.976 Hz)",
+      detail:
+        "A matching display mode is available. Actual switching depends on the player, device, and display; this setting alone does not guarantee film-rate output.",
+    },
+    {
+      level: "info",
+      title: "Surround passthrough is on a manual allow-list",
+      detail:
+        "Android is configured with an explicit format list. Actual output still depends on the player and connected equipment.",
+    },
+    {
+      level: "info",
+      title: "Configuration, not a playback test",
+      detail:
+        "Codec entries describe available configuration. They do not verify runtime registration, acceleration, profiles, DRM, or playback performance.",
+    },
+  ],
+};
+
 const launchers: LauncherStatus[] = [
   {
     entry: { name: "Android TV Launcher (Stock)", package: "com.google.android.tvlauncher" },
@@ -104,6 +157,8 @@ const tweaks: TweaksState = {
   transition_animation_scale: "0.5",
   animator_duration_scale: "0.5",
   background_process_limit: "2",
+  encoded_surround_output: "3",
+  encoded_surround_output_enabled_formats: "5,6,18,14,7,8",
 };
 
 const snapshots: SnapshotFile[] = [
@@ -205,6 +260,33 @@ function demoFiles(path: string) {
   ];
 }
 
+function demoShellOutput(command: string): string {
+  if (command.includes("packages -d")) {
+    return [...DISABLED].map((p) => `package:${p}`).join("\n");
+  }
+  if (command.includes("packages -3")) {
+    return [
+      "package:com.plexapp.android",
+      "package:com.spocky.projengmenu",
+      "package:com.liskovsoft.smarttubetv.beta",
+      "package:org.jellyfin.androidtv",
+    ].join("\n");
+  }
+  if (command.includes("getprop")) {
+    return [
+      "[ro.product.brand]: [NVIDIA]",
+      "[ro.product.device]: [mdarcy]",
+      "[ro.product.manufacturer]: [NVIDIA]",
+      "[ro.product.model]: [SHIELD Android TV]",
+      "[ro.product.name]: [darcy]",
+    ].join("\n");
+  }
+  if (command.includes("uptime")) {
+    return " 21:14:07 up 6 days,  3:22,  0 users,  load average: 0.84, 0.61, 0.55";
+  }
+  return "ok";
+}
+
 // Map of command name → handler. Unlisted commands fall through to a benign
 // success so a stray click during capture never throws.
 function handle(cmd: string, args: Record<string, unknown>): unknown {
@@ -295,6 +377,39 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return { package: "com.spocky.projengmenu", activity: "com.spocky.projengmenu/.MainActivity" };
     case "channel_provider_disabled":
       return false;
+    case "media_report":
+      return media;
+    case "resource_sample":
+      return {
+        cpu_percent: 18.4,
+        interfaces: [{ name: "eth0", rx_bytes_per_s: 11_534_336, tx_bytes_per_s: 204_800 }],
+        interval_ms: 1000,
+      };
+    case "run_shell": {
+      const command = String(args.command ?? "");
+      // Mirror the real safety gate so the demo/screenshot layer cannot show
+      // a refusal-free shell that the shipping app would never allow.
+      if (/\b(disable|disable-user|uninstall|hide|suspend)\b/.test(command) &&
+          /\b(android|com\.android\.systemui|com\.android\.shell|com\.google\.android\.gms)\b/.test(command)) {
+        return {
+          stdout: "",
+          stderr: "",
+          exit_code: null,
+          termination: "completed",
+          blocked: true,
+          blocked_reason:
+            "Refused: this command would disable or remove com.android.systemui, which is on the do-not-disable list. System UI — the launcher's host process. Disabling makes the device unusable.",
+        };
+      }
+      return {
+        stdout: demoShellOutput(command),
+        stderr: "",
+        exit_code: 0,
+        termination: "completed",
+        blocked: false,
+        blocked_reason: null,
+      };
+    }
     case "get_tweaks":
       return tweaks;
     case "list_dir":
@@ -329,6 +444,7 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
           "secure.match_content_frame_rate": "2",
           "global.window_animation_scale": "0.5",
         },
+        settings_to_delete: ["global.encoded_surround_output"],
         settings_already_set: ["global.transition_animation_scale", "global.animator_duration_scale"],
         cross_device_warning: null,
       };
@@ -339,8 +455,9 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         launcher_set: true,
         launcher_message: "Set Projectivy as default.",
         settings_written: ["global.hdmi_control_enabled", "secure.match_content_frame_rate"],
+        settings_deleted: ["global.encoded_surround_output"],
         settings_failed: [],
-        summary: "Applied snapshot: 2 disabled, launcher set, 2 settings written.",
+        summary: "Applied snapshot: 2 disabled, launcher set, 2 settings written, 1 reset.",
       };
     case "prepare_optimize":
       return optimizePlan((args.mode as "optimize" | "restore") ?? "optimize");
