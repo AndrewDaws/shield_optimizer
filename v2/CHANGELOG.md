@@ -100,6 +100,9 @@ build works for you.
   release notes with Install / Not now, instead of taking your word for it from
   a version number alone. The version in the header opens the full release
   history.
+- **And after one lands.** If the app updated itself while you weren't looking
+  — or you upgraded through Homebrew — the first launch on the new version
+  shows what you just got. Once, not every time, and never on a fresh install.
 
 ### Device information
 
