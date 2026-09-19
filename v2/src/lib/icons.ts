@@ -19,6 +19,8 @@ export const ICONS = [
   "arrow_downward",
   "arrow_upward",
   "chevron_right",
+  "chevron_left",
+  "unfold_more",
   "expand_more",
   "open_in_new",
   "refresh",
@@ -36,6 +38,10 @@ export const ICONS = [
   "help",
   "check_circle",
   "lock",
+  "bug_report",
+  "radio_button_checked",
+  "radio_button_unchecked",
+  "thermostat",
 
   // Device and hardware
   "tv",

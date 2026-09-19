@@ -177,6 +177,29 @@ button {
 button:hover {
   background: var(--bg-button-hover);
 }
+/* An icon beside a label. Every round of feedback has included "the icon is
+   not centred with the text": a button is inline-block, the glyph is an
+   inline box on the baseline, and the two never agree. Any button or heading
+   that holds an icon directly becomes a flex row, so the glyph and the label
+   are centred on the same axis instead of sharing a baseline. Scoped to a
+   direct child so a button that stacks two lines (the verdict toggle) keeps
+   its own layout. */
+button:has(> .msr) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+h1:has(> .msr),
+h2:has(> .msr),
+h3:has(> .msr) {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+h2:has(> .msr) .msr {
+  color: var(--fg-muted);
+}
 /* The fill is lime in both themes, so the label is always dark ink. The
    border carries --accent rather than the fill colour: in dark that is the
    same lime and invisible, but in light it is the only thing separating a

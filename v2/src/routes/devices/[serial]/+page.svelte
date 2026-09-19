@@ -1676,7 +1676,7 @@
     <div class="profile-layout" role="tabpanel" tabindex={0} id="tabpanel-overview" aria-labelledby="tab-overview">
       <div class="card">
         <div class="card-header">
-          <h2><Icon name="tv" size={17} /> Profile</h2>
+          <h2><Icon name="tv" size={20} /> Profile</h2>
           <div class="header-actions">
             <button class="small-action" onclick={copyProfile} disabled={!device.properties}>
               <Icon name="content_copy" size={14} /> {profileCopied ? "Copied" : "Copy all"}
@@ -1741,7 +1741,7 @@
       <aside class="profile-side">
         <h3 class="side-label">Emergency recovery</h3>
         <div class="card danger-card">
-          <h2><Icon name="restore" size={17} /> Re-enable everything</h2>
+          <h2><Icon name="restore" size={20} /> Re-enable everything</h2>
           <!-- The copy says "everything currently disabled" rather than "what
                this app disabled", because that is what the command does:
                panic_recovery runs `pm enable` over `pm list packages -d`. There
@@ -1793,7 +1793,7 @@
     <div class="health-stack" role="tabpanel" tabindex={0} id="tabpanel-health" aria-labelledby="tab-health">
       <div class="health-head">
         <div class="header-title">
-          <h2><Icon name="monitor_heart" size={17} /> Health</h2>
+          <h2><Icon name="monitor_heart" size={20} /> Health</h2>
           <p class="muted small mono header-sub" title={reportLastRefreshed?.toISOString() ?? ""}>
             {refreshLabel} · dumpsys meminfo, df, top
           </p>
@@ -1931,7 +1931,7 @@
       <div class="health-grid">
         <div class="health-col">
           <div class="card">
-            <h2><Icon name="speed" size={17} /> Network · per interface</h2>
+            <h2><Icon name="speed" size={20} /> Network · per interface</h2>
             {#if resourceErr}<p class="error">Resource sample: {resourceErr}</p>{/if}
             {#if trimMessage}<p class="muted small mono trim-note">{trimMessage}</p>{/if}
             <!-- Every interface as its own row, as the board has it. The old
@@ -1958,7 +1958,7 @@
           </div>
 
           <div class="card">
-            <h2><Icon name="tv" size={17} /> Display &amp; Audio</h2>
+            <h2><Icon name="tv" size={20} /> Display &amp; Audio</h2>
             <!-- One card, two blocks. The board draws two cards, but the audio
                  side is a single string and a whole card for one value reads
                  as empty. The chips are facts, not verdicts, so they take no
@@ -1992,7 +1992,7 @@
         </div>
 
         <div class="card health-memory">
-          <h2><Icon name="memory" size={17} /> Top memory users</h2>
+          <h2><Icon name="memory" size={20} /> Top memory users</h2>
         <p class="muted small consumers-note">
           Rows whose name matches an installed package are classified against the
           reviewed app list. The rest are process names we cannot tie to an app,
@@ -2036,7 +2036,7 @@
           {#if appActionMessage}
             <p class="muted small mono">
               {appActionMessage}
-              <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss" aria-label="Dismiss"><Icon name="close" size={15} /></button>
+              <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss" aria-label="Dismiss"><Icon name="close" size={16} /></button>
             </p>
           {/if}
         {/if}
@@ -2071,7 +2071,7 @@
     <div class="card" role="tabpanel" tabindex={0} id="tabpanel-launcher" aria-labelledby="tab-launcher">
       <div class="card-header">
         <div class="header-title">
-          <h2><Icon name="home" size={17} /> Launcher</h2>
+          <h2><Icon name="home" size={20} /> Launcher</h2>
           <p class="muted small mono header-sub">
             home app resolution · {launchers.length} known launcher{launchers.length === 1 ? "" : "s"}
           </p>
@@ -2085,7 +2085,7 @@
       {:else}
         {#if channelDisabled}
           <div class="warning">
-            <Icon name="warning" size={15} /> <code>com.android.providers.tv</code> is disabled on this device. Watch Next / Continue
+            <Icon name="warning" size={16} /> <code>com.android.providers.tv</code> is disabled on this device. Watch Next / Continue
             Watching rows from Apple TV, Netflix, Disney+ etc. will be empty until you re-enable it.
           </div>
         {/if}
@@ -2230,7 +2230,7 @@
   {:else if activeTab === "apps"}
     <div class="card" role="tabpanel" tabindex={0} id="tabpanel-apps" aria-labelledby="tab-apps">
       <div class="card-header">
-        <h2><Icon name="apps" size={17} /> App List for {deviceTypeLabel(device.device_type)}</h2>
+        <h2><Icon name="apps" size={20} /> App List for {deviceTypeLabel(device.device_type)}</h2>
         <div class="header-actions">
           <span class="muted">{apps.length} curated · {otherPackages.length} other</span>
           <button onclick={loadApps} disabled={appsLoading}>
@@ -2266,7 +2266,7 @@
         {#if appActionMessage}
           <p class="muted small mono action-message">
             {appActionMessage}
-            <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss" aria-label="Dismiss"><Icon name="close" size={15} /></button>
+            <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss" aria-label="Dismiss"><Icon name="close" size={16} /></button>
           </p>
         {/if}
         {#if appMutationInFlight && !appActionBusy}
@@ -2574,13 +2574,13 @@
     <div class="card" role="tabpanel" tabindex={0} id="tabpanel-snapshot" aria-labelledby="tab-snapshot">
       <div class="card-header">
         <div class="header-title">
-          <h2><Icon name="history" size={17} /> Snapshot</h2>
+          <h2><Icon name="history" size={20} /> Snapshot</h2>
           <p class="muted small mono header-sub">
             package states, launcher &amp; tweak values for this device
           </p>
         </div>
         <button class="primary" onclick={saveSnapshot} disabled={saveBusy}>
-          <Icon name="save" size={15} /> {saveBusy ? "Saving…" : "Save snapshot"}
+          <Icon name="save" size={16} /> {saveBusy ? "Saving…" : "Save snapshot"}
         </button>
       </div>
       {#if saveResult}<p class="muted small">{saveResult}</p>{/if}

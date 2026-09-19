@@ -199,7 +199,7 @@
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-files" aria-labelledby="tab-files">
   <div class="card-header">
     <div class="header-title">
-      <h2><Icon name="folder" size={17} /> Files</h2>
+      <h2><Icon name="folder" size={20} /> Files</h2>
       <p class="muted small mono header-sub">
         {#if filesEntries}
           {filesEntries.length} item{filesEntries.length === 1 ? "" : "s"} · {formatSize(
@@ -212,7 +212,7 @@
     </div>
     <div class="header-actions">
       <button class="primary" onclick={uploadToCurrentDir} disabled={filesBusy !== null} title="Upload a file from this computer into the current folder">
-        <Icon name="upload" size={15} /> {filesBusy === "__upload__" ? "Uploading…" : "Upload here"}
+        <Icon name="upload" size={16} /> {filesBusy === "__upload__" ? "Uploading…" : "Upload here"}
       </button>
       <button onclick={() => loadFiles(filesPath)} disabled={filesLoading}>
         {filesLoading ? "Loading…" : "Refresh"}
@@ -303,7 +303,7 @@
       disabled={filesPath === "/" || (filesPath === "/sdcard" && !powerUserPaths) || filesLoading}
       title="Up one level"
     >
-      <Icon name="arrow_upward" size={15} /> Up
+      <Icon name="arrow_upward" size={16} /> Up
     </button>
     {#each crumbs as c, i (c.path)}
       {#if i > 0}<span class="muted">/</span>{/if}

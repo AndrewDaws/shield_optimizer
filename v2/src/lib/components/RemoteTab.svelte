@@ -190,7 +190,7 @@
 
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-remote" aria-labelledby="tab-remote">
   <div class="remote-header">
-    <h2><Icon name="settings_remote" size={17} /> Remote</h2>
+    <h2><Icon name="settings_remote" size={20} /> Remote</h2>
     {#if transport}
       <span class="transport" class:live={transport === "channel"}
         title={transport === "channel"
@@ -240,9 +240,9 @@
       <!-- Row order follows mobile board 6.1: nav trio, then the disc as the
            anchor, then transport, volume, and the system trio last. -->
       <div class="remote-row nav-row">
-        <button onclick={() => sendRemoteKey("back")} title="Back"><Icon name="arrow_back" size={15} /> Back</button>
-        <button onclick={() => sendRemoteKey("home")} title="Home"><Icon name="home" size={15} /> Home</button>
-        <button onclick={() => sendRemoteKey("recents")} title="Recent apps / app switcher"><Icon name="apps" size={15} /> Recents</button>
+        <button onclick={() => sendRemoteKey("back")} title="Back"><Icon name="arrow_back" size={16} /> Back</button>
+        <button onclick={() => sendRemoteKey("home")} title="Home"><Icon name="home" size={16} /> Home</button>
+        <button onclick={() => sendRemoteKey("recents")} title="Recent apps / app switcher"><Icon name="apps" size={16} /> Recents</button>
       </div>
       <!-- D-pad uses pointerdown/up (not click) so holding a direction
            auto-repeats on the fast channel; pointerleave/cancel stop the
@@ -281,9 +281,9 @@
         <button onclick={() => sendRemoteKey("volume_up")} title="Volume up" data-tip="Volume up" aria-label="Volume up"><Icon name="volume_up" size={18} /></button>
       </div>
       <div class="remote-row">
-        <button onclick={openSettings} title="Open Settings (the Shield remote's gear button)"><Icon name="settings" size={15} /> Settings</button>
+        <button onclick={openSettings} title="Open Settings (the Shield remote's gear button)"><Icon name="settings" size={16} /> Settings</button>
         <button onclick={() => sendRemoteKey("wakeup")} title="Wake the screen (KEYCODE_WAKEUP)">Wake</button>
-        <button class="power" onclick={() => sendRemoteKey("power")} title="Power toggle (sleep / wake)"><Icon name="power_settings_new" size={15} /> Power</button>
+        <button class="power" onclick={() => sendRemoteKey("power")} title="Power toggle (sleep / wake)"><Icon name="power_settings_new" size={16} /> Power</button>
       </div>
       </div>
       <!-- A setting about how this remote talks to the TV, so it sits with the

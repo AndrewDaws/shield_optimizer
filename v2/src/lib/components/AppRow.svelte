@@ -148,7 +148,7 @@
         aria-label={`Copy package id ${pkg}`}
         onclick={copyPkg}
       >
-        <Icon name={pkgCopied ? "check" : "content_copy"} size={13} />
+        <Icon name={pkgCopied ? "check" : "content_copy"} size={14} />
       </button>
     </div>
   </td>

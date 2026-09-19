@@ -254,7 +254,7 @@
   </div>
   <div class="header-actions">
     <button onclick={scan} disabled={scanBusy || adbMissing} title="Scan the local /24 subnet for ADB-listening devices">
-      <Icon name="wifi_tethering" size={15} /> {scanBusy ? "Scanning…" : "Scan LAN"}
+      <Icon name="wifi_tethering" size={16} /> {scanBusy ? "Scanning…" : "Scan LAN"}
     </button>
     <button onclick={refresh} disabled={loading} title="Re-read the list of connected devices">
       {loading ? "Refreshing…" : "Refresh"}
@@ -272,7 +272,7 @@
     onkeydown={(e) => e.key === "Enter" && connect()}
   />
   <button class="primary" onclick={connect} disabled={connectBusy || !connectAddress.trim()}>
-    <Icon name="add" size={15} /> {connectBusy ? "Connecting…" : "Add by IP"}
+    <Icon name="add" size={16} /> {connectBusy ? "Connecting…" : "Add by IP"}
   </button>
   <button onclick={() => (pairOpen = !pairOpen)} disabled={adbMissing} title="Android 11+ PIN pairing flow">
     {pairOpen ? "Cancel Pair" : "Pair PIN"}

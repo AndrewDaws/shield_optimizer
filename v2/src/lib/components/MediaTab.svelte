@@ -52,11 +52,11 @@
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-media" aria-labelledby="tab-media">
   <div class="card-header">
     <div class="header-title">
-      <h2><Icon name="play_circle" size={17} /> Playback</h2>
+      <h2><Icon name="play_circle" size={20} /> Playback</h2>
       <p class="muted small mono header-sub">decoders &amp; formats reported by the device</p>
     </div>
     <button onclick={load} disabled={loading}>
-      <Icon name="refresh" size={15} /> {loading ? "Reading…" : "Re-probe"}
+      <Icon name="refresh" size={16} /> {loading ? "Reading…" : "Re-probe"}
     </button>
   </div>
   <p class="muted small">

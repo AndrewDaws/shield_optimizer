@@ -36,6 +36,10 @@
     letter-spacing: normal;
     text-transform: none;
     display: inline-block;
+    /* Inline fallback for prose, table cells and tags: centre the glyph on
+       the x-height instead of parking it on the baseline. Flex parents
+       (buttons, headings) ignore this and centre it properly. */
+    vertical-align: middle;
     white-space: nowrap;
     word-wrap: normal;
     direction: ltr;

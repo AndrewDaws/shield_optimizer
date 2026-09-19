@@ -284,7 +284,7 @@
 
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-tweaks" aria-labelledby="tab-tweaks">
   <div class="card-header">
-    <h2><Icon name="tune" size={17} /> System Tweaks</h2>
+    <h2><Icon name="tune" size={20} /> System Tweaks</h2>
     <button onclick={loadTweaks} disabled={tweaksLoading}>
       {tweaksLoading ? "Loading…" : "Refresh"}
     </button>

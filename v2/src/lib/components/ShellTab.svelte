@@ -113,7 +113,7 @@
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-shell" aria-labelledby="tab-shell">
   <div class="card-header">
     <div class="header-title">
-      <h2><Icon name="terminal" size={17} /> Shell</h2>
+      <h2><Icon name="terminal" size={20} /> Shell</h2>
       <p class="muted small mono header-sub">adb -s {serial} shell</p>
     </div>
     <span class="muted small header-note">Ctrl/⌘+Enter runs</span>
@@ -266,7 +266,7 @@
               title="Remove bookmark"
               aria-label={`Remove the bookmark ${b.label}`}
               onclick={() => removeBookmark(b.label)}
-            ><Icon name="close" size={15} /></button>
+            ><Icon name="close" size={16} /></button>
           </div>
         {/each}
       </div>

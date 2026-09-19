@@ -211,7 +211,7 @@
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-sideload" aria-labelledby="tab-sideload">
   <div class="card-header">
     <div class="header-title">
-      <h2><Icon name="download" size={17} /> Install APK</h2>
+      <h2><Icon name="download" size={20} /> Install APK</h2>
       <p class="muted small mono header-sub">sideload to {deviceLabel || serial}</p>
     </div>
     <div class="header-actions">
@@ -322,7 +322,7 @@
   {/if}
 
   {#if scanError}
-    <div class="install-result bad" role="alert"><span><Icon name="close" size={15} /> {scanError}</span></div>
+    <div class="install-result bad" role="alert"><span><Icon name="close" size={16} /> {scanError}</span></div>
   {/if}
 
   {#if discoveredFolder && discoveredApks.length > 0}
@@ -361,7 +361,7 @@
           </div>
           {#if sideloadResultPath === apk.path && sideloadResult}
             <div class="install-result" class:ok={sideloadOk} class:bad={!sideloadOk}>
-              <span><Icon name={sideloadOk ? "check" : "close"} size={15} /> {sideloadResult}</span>
+              <span><Icon name={sideloadOk ? "check" : "close"} size={16} /> {sideloadResult}</span>
               {#if sideloadHint}<span class="muted small"> — {sideloadHint}</span>{/if}
             </div>
           {/if}
@@ -384,7 +384,7 @@
 
   {#if sideloadResult && !discoveredApks.some((a) => a.path === sideloadResultPath)}
     <div class="install-result" class:ok={sideloadOk} class:bad={!sideloadOk}>
-      <span><Icon name={sideloadOk ? "check" : "close"} size={15} /> {sideloadResult}</span>
+      <span><Icon name={sideloadOk ? "check" : "close"} size={16} /> {sideloadResult}</span>
       {#if sideloadHint}<span class="muted small"> — {sideloadHint}</span>{/if}
     </div>
   {/if}

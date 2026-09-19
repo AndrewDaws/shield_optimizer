@@ -138,7 +138,7 @@
   <div class="header-actions">
     {#if snapshotDir}
       <button onclick={revealFolder} title={snapshotDir}>
-        <Icon name="folder_open" size={15} /> Open folder
+        <Icon name="folder_open" size={16} /> Open folder
       </button>
     {/if}
     <button onclick={load} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
@@ -168,7 +168,7 @@
     </div>
 
     {#if plan.cross_device_warning}
-      <div class="warning"><Icon name="warning" size={15} /> {plan.cross_device_warning}</div>
+      <div class="warning"><Icon name="warning" size={16} /> {plan.cross_device_warning}</div>
     {/if}
 
     <div class="plan-summary">

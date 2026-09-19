@@ -166,7 +166,7 @@
         {#if pendingUpdate}
           {#if updateInstalled}
             <button class="update-badge installed" onclick={restartApp} title="Relaunch to finish updating">
-              Update installed — Restart now <Icon name="restart_alt" size={15} />
+              Update installed — Restart now <Icon name="restart_alt" size={16} />
             </button>
           {:else if updateBusy}
             <span class="update-badge updating">{updateProgress}</span>
@@ -214,7 +214,7 @@
   </main>
   <footer>
     <button class="kofi" onclick={() => openUrl("https://ko-fi.com/bryanroscoe")}>
-      <Icon name="local_cafe" size={15} /> Enjoying Shield Optimizer? Support it on Ko-fi
+      <Icon name="local_cafe" size={16} /> Enjoying Shield Optimizer? Support it on Ko-fi
     </button>
   </footer>
 </div>

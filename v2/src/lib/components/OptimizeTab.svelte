@@ -452,7 +452,7 @@
 
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-optimize" aria-labelledby="tab-optimize">
   <div class="card-header">
-    <h2><Icon name="auto_fix_high" size={17} /> Optimize / Restore Wizard</h2>
+    <h2><Icon name="auto_fix_high" size={20} /> Optimize / Restore Wizard</h2>
     <div class="header-actions">
       <!-- A mode switch, not an action pair. It was two buttons with the lime
            fill marking the current mode, but lime means "press this" — using
@@ -663,7 +663,7 @@
             </td>
             <td>
               {#if progress === "done"}
-                <span class="tag installed"><Icon name="check" size={13} /> DONE</span>
+                <span class="tag installed"><Icon name="check" size={14} /> DONE</span>
               {:else if progress === "pending"}
                 <span class="muted small">…</span>
               {:else if progress === "skipped"}
