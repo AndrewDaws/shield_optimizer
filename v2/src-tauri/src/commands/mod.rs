@@ -5,6 +5,7 @@
 //! installation, the desktop updater, or host-network scanning.
 
 pub mod backup;
+pub mod diagnostics;
 pub mod files;
 pub mod install;
 pub mod scan;

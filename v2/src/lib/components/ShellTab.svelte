@@ -100,6 +100,27 @@
     setShellBookmarks(next);
   }
 
+  /// Why Run is refusing, or undefined when it is not. Both halves, in the
+  /// order the user has to satisfy them: the tick gates everything, and a
+  /// ticked box with an empty prompt is the other way to be stuck. The button
+  /// is disabled in both cases, and a disabled button never gets :hover — so
+  /// this rides on a wrapper that does.
+  const runBlockedReason = $derived(
+    !acknowledged
+      ? "Tick the acknowledgement above"
+      : !command.trim()
+        ? "Type a command first"
+        : undefined,
+  );
+
+  const runHint = $derived(
+    !acknowledged
+      ? "Run is disabled until you tick the box above."
+      : !command.trim()
+        ? "Run is disabled until you type a command."
+        : null,
+  );
+
   // Ctrl/Cmd+Enter runs, so a multi-line command can still be submitted from
   // the keyboard without the Enter key being unusable for newlines.
   function onKeydown(e: KeyboardEvent) {
@@ -160,23 +181,18 @@
             aria-label="Shell command"
           ></textarea>
         </div>
-        <button
-          class="primary run-btn"
-          onclick={() => run()}
-          disabled={!acknowledged || running || !command.trim()}
-          title={!acknowledged
-            ? "Tick the box above to enable expert shell on this TV"
-            : !command.trim()
-              ? "Type a command first"
-              : "Run this command on the TV"}
-        >
-          <Icon name="play_arrow" size={16} fill /> {running ? "Running…" : "Run"}
-        </button>
+        <span class="run-wrap" data-tip={runBlockedReason} data-tip-align="end">
+          <button
+            class="primary run-btn"
+            onclick={() => run()}
+            disabled={!acknowledged || running || !command.trim()}
+          >
+            <Icon name="play_arrow" size={16} fill /> {running ? "Running…" : "Run"}
+          </button>
+        </span>
       </div>
-      {#if !acknowledged}
-        <p class="muted small run-hint">
-          Run is disabled until you tick the box above.
-        </p>
+      {#if runHint}
+        <p class="muted small run-hint">{runHint}</p>
       {/if}
 
       {#if err}
@@ -263,7 +279,8 @@
             </button>
             <button
               class="rail-run rail-remove"
-              title="Remove bookmark"
+              data-tip="Remove bookmark"
+              data-tip-align="end"
               aria-label={`Remove the bookmark ${b.label}`}
               onclick={() => removeBookmark(b.label)}
             ><Icon name="close" size={16} /></button>
@@ -400,9 +417,14 @@
      resizable textarea made the button grow into a lime slab. */
   .run-btn {
     flex: none;
-    align-self: flex-start;
     padding-inline: 1.4rem;
     padding-block: 0.7rem;
+  }
+  /* The wrapper is what hover reaches when the button is disabled. */
+  .run-wrap {
+    flex: none;
+    display: inline-flex;
+    align-self: flex-start;
   }
   .run-hint {
     margin: 0.4rem 0 0;

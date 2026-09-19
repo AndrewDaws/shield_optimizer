@@ -29,6 +29,59 @@ impl DeviceType {
     }
 }
 
+/// What the device itself said about being a TV.
+///
+/// Deliberately three-valued. `DeviceType::Unknown` answers "which app list
+/// applies", which is not the same question — a TV nobody has catalogued is
+/// still a TV, and saying "not an Android TV" about it was the 2.2.0
+/// regression (#120). Unreadable means unknown, and unknown claims nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TvEvidence {
+    /// It reported the `tv` characteristic or the leanback feature.
+    Tv,
+    /// It reported being something else — a phone, tablet, watch, car head
+    /// unit or emulator — or answered "no" to the leanback feature.
+    NotTv,
+    /// It said neither. The overwhelmingly likely case for an odd OEM box.
+    #[default]
+    Unknown,
+}
+
+/// Characteristics tokens that positively name a non-TV form factor. A device
+/// carrying one of these said what it is; anything else it might say
+/// (`nosdcard`, `emulator`-less vendor strings, …) says nothing at all.
+const NON_TV_CHARACTERISTICS: [&str; 5] = ["phone", "tablet", "watch", "automotive", "emulator"];
+
+fn characteristics_tokens(props: &DeviceProperties) -> impl Iterator<Item = &str> {
+    props.characteristics.split(',').map(str::trim)
+}
+
+/// Does this device report itself as a TV? Either signal is sufficient: some
+/// shipping boxes report a `ro.build.characteristics` that omits `tv` while
+/// `pm has-feature android.software.leanback` answers `true`.
+fn reports_tv(props: &DeviceProperties) -> bool {
+    characteristics_tokens(props).any(|c| c.eq_ignore_ascii_case("tv"))
+        || props.leanback == Some(true)
+}
+
+/// Pure: classify what the device claimed about its own form factor.
+pub fn tv_evidence(props: &DeviceProperties) -> TvEvidence {
+    if reports_tv(props) {
+        return TvEvidence::Tv;
+    }
+    let said_otherwise = characteristics_tokens(props).any(|c| {
+        NON_TV_CHARACTERISTICS
+            .iter()
+            .any(|n| c.eq_ignore_ascii_case(n))
+    }) || props.leanback == Some(false);
+    if said_otherwise {
+        TvEvidence::NotTv
+    } else {
+        TvEvidence::Unknown
+    }
+}
+
 /// Decide the device class from harvested properties. Mirrors v1's combined
 /// detection rules (see `Get-DeviceType` and `Get-Devices` in v1) but
 /// consolidated into one function.
@@ -37,14 +90,12 @@ pub fn detect_device_type(props: &DeviceProperties) -> DeviceType {
     let model = props.model.to_ascii_lowercase();
     let device = props.device_codename.to_ascii_lowercase();
     let manufacturer = props.manufacturer.to_ascii_lowercase();
-    // `ro.build.characteristics` carries `tv` on Android TV / Google TV. It is
-    // the signal that separates a TV from a phone or tablet sharing the same
+    // `ro.build.characteristics` carries `tv` on Android TV / Google TV, and
+    // `android.software.leanback` is the platform's own answer to the same
+    // question. Either separates a TV from a phone or tablet sharing the same
     // brand — a Google Pixel is `brand == "google"` too, so brand alone is not
     // enough to call something a TV.
-    let is_tv = props
-        .characteristics
-        .split(',')
-        .any(|c| c.trim().eq_ignore_ascii_case("tv"));
+    let is_tv = reports_tv(props);
 
     // Shield: any signal from Nvidia or known Shield codenames. Shield boxes
     // are never phones, so these strong signals don't need the `tv` gate.
@@ -198,6 +249,76 @@ mod tests {
             detect_device_type(&props("Generic", "Generic TV Box", "rk3328", "Generic")),
             DeviceType::Unknown
         );
+    }
+
+    /// The #120 regression, in one test: a Xiaomi TV Box S reports
+    /// `nosdcard` — not `tv` — in `ro.build.characteristics`, and 2.2.0 read
+    /// that as "not an Android TV" and locked the user out of their own box.
+    /// The leanback feature is the second signal that settles it.
+    #[test]
+    fn leanback_alone_is_enough_to_call_it_a_tv() {
+        let props = DeviceProperties {
+            leanback: Some(true),
+            ..props_ch("Xiaomi", "MiBOX4", "cezanne", "Xiaomi", "nosdcard")
+        };
+
+        assert_eq!(detect_device_type(&props), DeviceType::GoogleTv);
+        assert_eq!(tv_evidence(&props), TvEvidence::Tv);
+    }
+
+    #[test]
+    fn a_device_that_said_nothing_either_way_is_unknown() {
+        // No `tv`, no non-TV form factor, no readable leanback answer. The
+        // honest verdict is that we do not know — not that it is not a TV.
+        let props = props_ch("Generic", "TV Box", "rk3328", "Generic", "");
+
+        assert_eq!(detect_device_type(&props), DeviceType::Unknown);
+        assert_eq!(tv_evidence(&props), TvEvidence::Unknown);
+    }
+
+    #[test]
+    fn a_phone_says_so_and_we_believe_it() {
+        let props = props_ch("google", "Pixel 10 Pro", "blazer", "Google", "phone");
+
+        assert_eq!(detect_device_type(&props), DeviceType::Unknown);
+        assert_eq!(tv_evidence(&props), TvEvidence::NotTv);
+    }
+
+    #[test]
+    fn non_tv_tokens_are_matched_per_token_and_case_insensitively() {
+        for token in ["Tablet", "watch", "AUTOMOTIVE", "emulator"] {
+            let props = props_ch("x", "y", "z", "w", &format!("nosdcard,{token}"));
+            assert_eq!(tv_evidence(&props), TvEvidence::NotTv, "{token}");
+        }
+        // A substring is not a token: `phonecall` does not make it a phone.
+        assert_eq!(
+            tv_evidence(&props_ch("x", "y", "z", "w", "phonecall")),
+            TvEvidence::Unknown
+        );
+    }
+
+    #[test]
+    fn a_leanback_no_outweighs_nothing_else() {
+        let props = DeviceProperties {
+            leanback: Some(false),
+            ..props_ch("Generic", "Box", "rk3328", "Generic", "nosdcard")
+        };
+
+        assert_eq!(tv_evidence(&props), TvEvidence::NotTv);
+    }
+
+    #[test]
+    fn tv_characteristic_still_wins_over_a_leanback_no() {
+        // Contradictory answers: it explicitly claimed `tv`. Believing the
+        // positive claim keeps the tools reachable, which is the failure mode
+        // that matters here.
+        let props = DeviceProperties {
+            leanback: Some(false),
+            ..props_ch("Generic", "Box", "rk3328", "Generic", "tv")
+        };
+
+        assert_eq!(tv_evidence(&props), TvEvidence::Tv);
+        assert_eq!(detect_device_type(&props), DeviceType::GoogleTv);
     }
 
     #[test]

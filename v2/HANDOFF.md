@@ -6,9 +6,27 @@ Full release pipeline live: installers built for macOS/Linux/Windows on every `v
 
 ## Unreleased on `main`
 
-Everything past the `v2-2.1.0` tag is unreleased. `v2/CHANGELOG.md` has a drafted
-`v2-2.2.0` section covering it; `docs/RELEASE-DECISION-2026-09-09.md` has the
-step-by-step physical device script, which is the remaining gate.
+`v2-2.2.0` shipped 2026-09-16. Everything after it is the `worktree-ui-refresh` line:
+the design-system port plus four rounds of screen feedback, drafted as `v2-2.3.0` in
+`v2/CHANGELOG.md`. Things the next reader needs that the code does not say:
+
+- **The app is now ATV Optimizer.** `identifier`, the `ShieldOptimizer` data dir and
+  the updater channel are unchanged on purpose; the WiX UpgradeCode is pinned in
+  `tauri.conf.json` to the value the old name derived. The Homebrew tap change is a
+  draft PR (`homebrew-shield-optimizer#2`) that must merge right before the
+  `v2-2.3.0` tag, not earlier — its `url` names the renamed DMG.
+- **Launchers are data**: `crates/core/data/app-lists/launchers.json`, parsed once in
+  `loader.rs`. The leanback union is listing-only; the last-HOME-handler guard still
+  counts HOME handlers alone.
+- **Logs**: `<data_dir>/logs/`, daily rotation, 7 kept. Debug level is per-crate, not
+  global, so adb lines are not buried under hyper. `collect_diagnostics` formats in
+  the engine (pure) and reads in `src-tauri/src/commands/diagnostics.rs`.
+- **TV evidence** is a three-way value (`tv | not_tv | unknown`); only `not_tv` blocks a
+  row. Do not re-introduce "unknown means phone" — that was #120.
+- **Not addressed here**: the mobile identity bugs #115–#118 (same rule family, other
+  app).
+
+The 2.2.0 device-verification notes below still apply to the fixes that shipped in it.
 
 The five user-reported issues are all addressed here:
 

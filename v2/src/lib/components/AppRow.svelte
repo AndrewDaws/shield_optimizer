@@ -29,6 +29,7 @@
     safetyUnavailableReason,
     detailOpen = false,
     onToggleDetail,
+    columns = 6,
     rowClass,
     actions,
   }: {
@@ -61,9 +62,25 @@
     /// would otherwise make every `$state(...)` read as a store subscription.
     detailOpen?: boolean;
     onToggleDetail?: () => void;
+    /// How many columns the host table has, so the detail row spans all of
+    /// them. Six is the App List's shape (caret, app, verdict, RAM, last used,
+    /// actions); the Optimize wizard adds a Result column and passes seven.
+    columns?: number;
     rowClass?: string;
     actions: Snippet;
   } = $props();
+
+  /// The whole row is the disclosure. Anything interactive inside it — the
+  /// verbs, the tools, the copy button, the Optimize action pills, a link —
+  /// answers for itself, so a click that landed on one of those is not a
+  /// request to open the reason. Asking the event where it landed keeps that
+  /// true for controls a future caller adds: a missed `stopPropagation` in
+  /// some other file would otherwise silently toggle the row under the user.
+  function onRowClick(event: MouseEvent) {
+    const target = event.target as Element | null;
+    if (target?.closest("button, a, input, select, textarea, label")) return;
+    onToggleDetail?.();
+  }
 
   function safetyLabel(): string {
     if (safetyStatus === "checking") return "Checking safety";
@@ -118,7 +135,26 @@
   }
 </script>
 
-<tr class={rowClass}>
+<!-- The row is clickable but it is not a control: the caret button in the first
+     cell is the keyboard target and carries `aria-expanded`, so the row itself
+     needs no key handler of its own. -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<tr class={rowClass} class:row-open={detailOpen} onclick={onRowClick}>
+  <!-- A disclosure looks like one: a caret in its own narrow column, pointing
+       right when closed and down when open. It used to sit inside the verdict
+       chip, where it read as decoration on the verdict rather than as the
+       control for the row. -->
+  <td class="caret-cell">
+    <button
+      class="row-caret"
+      class:open={detailOpen}
+      aria-expanded={detailOpen}
+      aria-label={detailOpen ? `Hide why ${name} has this verdict` : `Show why ${name} has this verdict`}
+      data-tip={detailOpen ? "Hide the full reason" : "Show the full reason"}
+      onclick={() => onToggleDetail?.()}
+    ><span class="caret-glyph" aria-hidden="true"><Icon name="chevron_right" size={16} /></span></button>
+  </td>
   <!-- Board 11.5's app cell: identity on line one, what it does on line two,
        the id you paste into a bug report on line three. The state pill rides
        with the name rather than owning a column of its own. -->
@@ -131,20 +167,22 @@
         <span class="state-unavailable">STATE UNAVAILABLE</span>
       {/if}
       {#if review}
-        <span class="tag review" title="Usage review — check whether you use this app">REVIEW</span>
+        <span class="tag review" data-tip="Check whether you actually use this app">REVIEW</span>
       {/if}
       {#if extraTag}
         <span class={`tag tag-${extraTagKind}`}>{extraTag}</span>
       {/if}
     </div>
     {#if description}
+      <!-- A full sentence, clipped to one line here: `title` rather than
+           `data-tip`, which is a nowrap single-line strip. -->
       <div class="muted app-desc" title={description}>{description}</div>
     {/if}
     <div class="pkg-line">
       <span class="mono pkg-id">{pkg}</span>
       <button
         class="pkg-copy"
-        title={pkgCopied ? "Copied" : `Copy ${pkg}`}
+        data-tip={pkgCopied ? "Copied" : "Copy the package id"}
         aria-label={`Copy package id ${pkg}`}
         onclick={copyPkg}
       >
@@ -156,18 +194,17 @@
        "we rated this" and "we have never seen it" look identical; the source
        line is the difference. Click still opens the full reason. -->
   <td class={`verdict-cell safety-${safetyClass()}`}>
+    <!-- Still a button: the verdict is the thing you came to read, so it opens
+         the reason too. The caret it used to carry now lives in its own column
+         at the head of the row. -->
     <button
       class="safety-toggle"
       class:open={detailOpen}
-      aria-expanded={detailOpen}
-      title={detailOpen ? "Hide the full reason" : "Show the full reason"}
+      tabindex={-1}
       onclick={() => onToggleDetail?.()}
     >
       <span class="verdict-top">
         <span class="verdict-chip">{safetyLabel()}</span>
-        <!-- The row already opens; nothing said so. A chevron that turns is
-             the cheapest way to make a disclosure look like one. -->
-        <span class="verdict-caret" aria-hidden="true"><Icon name="expand_more" size={16} /></span>
       </span>
       <span class="verdict-source">{safetySource()}</span>
     </button>
@@ -187,8 +224,7 @@
            opened" — usagestats ages out and resets on a wipe. -->
       <span
         class="muted dash"
-        title="No usage record. Android's usagestats history is limited (roughly a year of rolling buckets) and is cleared by a factory reset, so this can mean the app aged out rather than that it was never opened."
-        data-tip="No usage record"
+        data-tip="No usage record · Android keeps about a year of history"
       >—</span>
     {/if}
   </td>
@@ -196,7 +232,7 @@
 </tr>
 {#if detailOpen}
   <tr class="safety-detail-row">
-    <td colspan="5">
+    <td colspan={columns}>
       <div class="safety-detail">
         <span class={`safety-detail-kind safety-${safetyClass()}`}>{safetyLabel()}</span>
         <p class="safety-detail-reason">{safetyReason()}</p>
@@ -230,6 +266,64 @@
   td.center {
     text-align: center;
   }
+  /* The whole row opens the reason, so it has to look like it does. The tint
+     is deliberately below the hover tint of the controls inside it — the row
+     saying "I can be clicked" must not outshout the button saying "click me". */
+  tr:not(.safety-detail-row) {
+    cursor: pointer;
+  }
+  tr:not(.safety-detail-row):hover {
+    background: color-mix(in srgb, var(--fg-primary) 4%, transparent);
+  }
+  tr.row-open {
+    background: color-mix(in srgb, var(--fg-primary) 6%, transparent);
+  }
+  /* A caret column wide enough for the button and nothing more. */
+  .caret-cell {
+    width: 1%;
+    /* The column pays for itself out of the App column's share rather than
+       widening the table — the App List already ran right up to the card's
+       edge, and a table that overflows its card is worse than a tight caret. */
+    padding-left: 0.25rem;
+    padding-right: 0;
+    text-align: center;
+  }
+  .row-caret {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.15rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+  .row-caret:hover {
+    background: var(--bg-button-hover);
+    color: var(--fg-primary);
+  }
+  /* First cell in the table, so a centred tooltip hangs off the card's left
+     edge. Anchor it to the button instead. */
+  .row-caret::after {
+    left: 0;
+    transform: none;
+  }
+  /* The glyph turns, not the button: rotating the button rotates its `data-tip`
+     pseudo-element with it, and the tooltip came out running down the page one
+     letter per line. */
+  .caret-glyph {
+    display: inline-flex;
+    transition: transform 0.15s;
+  }
+  /* Right when closed, down when open — the standard disclosure, rather than
+     a second glyph that has to be learned. */
+  .row-caret.open {
+    color: var(--fg-secondary);
+  }
+  .row-caret.open .caret-glyph {
+    transform: rotate(90deg);
+  }
   /* Two lines per row, fixed. Three stacked lines showed about five apps at a
      time on a list that runs to hundreds. */
   .app-cell {
@@ -252,7 +346,12 @@
     font-size: 0.95rem;
     font-weight: 600;
     min-width: 0;
-    /* A name longer than the column clips here rather than widening the table. */
+    /* At narrow widths the tags drop under the name instead of being clipped
+       out of existence: ENABLED and REVIEW are the two things the row is read
+       for, and a hidden overflow simply deleted them. The clip stays — it is
+       what stops a long name widening the table. */
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
     overflow: hidden;
   }
   /* The name never wraps and never shrinks: it is the one thing you read to
@@ -374,17 +473,6 @@
     display: flex;
     align-items: center;
     gap: 0.3rem;
-  }
-  .verdict-caret {
-    display: inline-flex;
-    color: var(--fg-muted);
-    transition: transform 0.15s;
-  }
-  .safety-toggle:hover .verdict-caret {
-    color: var(--fg-secondary);
-  }
-  .safety-toggle.open .verdict-caret {
-    transform: rotate(180deg);
   }
   /* Filled chip, per the board — the old treatment coloured the text only, so
      PROTECTED and UNKNOWN were typographically identical at a glance. */

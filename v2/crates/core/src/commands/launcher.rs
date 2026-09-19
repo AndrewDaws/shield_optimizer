@@ -4,15 +4,26 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::engine::{
-    is_last_enabled_home_handler, is_valid_package_name, launcher_catalog, launcher_rows,
-    stock_launcher_catalog, LauncherStatus,
+    is_last_enabled_home_handler, is_valid_package_name, launcher_rows, LauncherStatus,
 };
 use crate::license::Feature;
 
+use super::loader::launchers;
 use super::{home_tracking, AppState};
 
-pub(crate) const HOME_HANDLER_QUERY: &str =
+/// Public so the desktop diagnostics bundle asks the device the *same*
+/// question the launcher tab does — a bug report that used a different query
+/// would describe a state the app never saw.
+pub const HOME_HANDLER_QUERY: &str =
     "cmd package query-activities -a android.intent.action.MAIN -c android.intent.category.HOME";
+
+/// Leanback-only launchers declare `LEANBACK_LAUNCHER` and not `HOME`, so the
+/// HOME query alone never sees them and their row never appears. This is used
+/// for *listing* only: the last-HOME-handler guard below must keep counting
+/// HOME handlers, since a leanback entry point is not somewhere the Home key
+/// can land.
+pub(crate) const LEANBACK_HANDLER_QUERY: &str =
+    "cmd package query-activities -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER";
 
 /// Per-step progress sink for `set_default_launcher`. The multi-strategy
 /// switch can take a few seconds (enable → role → set-home-activity → verify,
@@ -52,12 +63,13 @@ pub async fn list_launchers_impl(
         "pm list packages",
         "pm list packages -d",
         HOME_HANDLER_QUERY,
+        LEANBACK_HANDLER_QUERY,
     ]);
     let out = adb
         .shell(serial, &cmd)
         .await
         .map_err(|e| format!("pm list packages: {e}"))?;
-    let sections = crate::adb::parse_checked_batch(&out.stdout, 3, &[0, 1])?;
+    let sections = crate::adb::parse_checked_batch(&out.stdout, 4, &[0, 1])?;
 
     let installed_pkgs = crate::adb::parse_installed_packages_output(&sections[0]);
     // An empty installed list must not hide every launcher's Enable path.
@@ -68,10 +80,18 @@ pub async fn list_launchers_impl(
     // The HOME query only adds "other handler" rows — an empty section (builds
     // where `cmd package` is limited) degrades to none rather than blanking
     // the whole list.
-    if sections[2].is_empty() {
+    if sections[2].is_empty() && sections[3].is_empty() {
         tracing::warn!("query-activities returned nothing; listing catalog launchers only");
     }
-    let handler_pkgs = parse_home_handler_packages(&sections[2]);
+    // HOME ∪ LEANBACK_LAUNCHER: a launcher that declares only the leanback
+    // entry point is a real, selectable launcher, and listing it is the only
+    // way the user can see (or re-enable) it.
+    let mut handler_pkgs = parse_home_handler_packages(&sections[2]);
+    for pkg in parse_home_handler_packages(&sections[3]) {
+        if !handler_pkgs.contains(&pkg) {
+            handler_pkgs.push(pkg);
+        }
+    }
 
     // Disabled handlers don't answer the HOME query — the tracker is what
     // keeps their rows (and the Enable path back) alive. Prune entries that
@@ -79,6 +99,7 @@ pub async fn list_launchers_impl(
     let tracked = home_tracking::prune(&state.data_dir, serial, &disabled_pkgs).await;
 
     Ok(launcher_rows(
+        launchers(),
         &installed_pkgs,
         &disabled_pkgs,
         &handler_pkgs,
@@ -116,11 +137,7 @@ pub async fn disable_launcher(
     let result =
         crate::commands::apps::disable_package(state, serial.clone(), package.clone()).await?;
 
-    let in_catalogs = stock_launcher_catalog()
-        .iter()
-        .chain(launcher_catalog().iter())
-        .any(|e| e.package == package);
-    if result.ok && !in_catalogs {
+    if result.ok && !launchers().contains(&package) {
         home_tracking::record(&data_dir, &serial, &package).await;
     }
     Ok(result)
@@ -286,7 +303,7 @@ pub async fn set_default_launcher_impl(
         None => "resolve-activity HOME -> unavailable".to_string(),
     });
     if let Some(active) = active_before.clone() {
-        let active_is_stock = stock_launcher_catalog().iter().any(|e| e.package == active);
+        let active_is_stock = launchers().is_stock(&active);
         if active_is_stock && active != package {
             progress.step("Assigning the Home role to it");
             let role_result = adb
@@ -490,7 +507,7 @@ async fn stock_takeover(
     progress: &Progress,
     diagnostics: &mut Vec<String>,
 ) -> Option<SetLauncherResult> {
-    let active_is_stock = stock_launcher_catalog().iter().any(|e| e.package == active);
+    let active_is_stock = launchers().is_stock(active);
     let blocked = matches!(
         crate::engine::classify_safety(active),
         crate::engine::Safety::NeverDisable { .. }
@@ -1142,9 +1159,10 @@ mod tests {
 
     #[tokio::test]
     async fn list_launchers_reads_every_section_from_one_batched_call() {
-        // installed / disabled / HOME handlers in one round-trip. A rule per
-        // sub-command would match the whole compound command, so the mock
-        // answers the sentinel with the concatenated sections.
+        // installed / disabled / HOME handlers / leanback handlers in one
+        // round-trip. A rule per sub-command would match the whole compound
+        // command, so the mock answers the sentinel with the concatenated
+        // sections.
         let mock = MockAdb::default().on_shell(
             BATCH_SEPARATOR,
             &batched(&[
@@ -1153,6 +1171,7 @@ mod tests {
                  package:com.example.otherhome",
                 "package:com.spocky.projengmenu",
                 "    packageName=com.example.otherhome",
+                "    packageName=com.example.leanbackonly",
             ]),
         );
         let log = mock.shell_log();
@@ -1183,11 +1202,19 @@ mod tests {
             .expect("non-catalog HOME handler row");
         assert!(other.other && other.enabled);
 
+        // A launcher that declares only LEANBACK_LAUNCHER is invisible to the
+        // HOME query, and without the union it never gets a row at all.
+        let leanback = rows
+            .iter()
+            .find(|r| r.entry.package == "com.example.leanbackonly")
+            .expect("leanback-only handler row");
+        assert!(leanback.other && leanback.enabled);
+
         let calls = log.lock().unwrap();
         assert_eq!(
             calls.len(),
             1,
-            "installed + disabled + HOME query must cost one round-trip: {calls:?}"
+            "installed + disabled + both handler queries must cost one round-trip: {calls:?}"
         );
     }
 
@@ -1195,7 +1222,7 @@ mod tests {
     async fn list_launchers_degrades_when_the_home_query_is_empty() {
         let mock = MockAdb::default().on_shell(
             BATCH_SEPARATOR,
-            &batched(&["package:com.google.android.tvlauncher", "", ""]),
+            &batched(&["package:com.google.android.tvlauncher", "", "", ""]),
         );
         let state = state_with(mock);
 
@@ -1211,7 +1238,9 @@ mod tests {
     #[tokio::test]
     async fn list_launchers_rejects_failed_disabled_reads_before_pruning_tracking() {
         let status = crate::adb::batch::BATCH_STATUS;
-        let output = format!("package:com.example\n{status}0\n{BATCH_SEPARATOR}\n{status}1\n{BATCH_SEPARATOR}\n{status}0\n");
+        let output = format!(
+            "package:com.example\n{status}0\n{BATCH_SEPARATOR}\n{status}1\n{BATCH_SEPARATOR}\n{status}0\n{BATCH_SEPARATOR}\n{status}0\n"
+        );
         let state = state_with(MockAdb::default().on_shell(BATCH_SEPARATOR, &output));
         assert!(list_launchers_impl(&state, "serial").await.is_err());
     }
@@ -1221,7 +1250,7 @@ mod tests {
         // Otherwise every launcher renders as not-installed and the Enable
         // path back disappears.
         let state =
-            state_with(MockAdb::default().on_shell(BATCH_SEPARATOR, &batched(&["", "", ""])));
+            state_with(MockAdb::default().on_shell(BATCH_SEPARATOR, &batched(&["", "", "", ""])));
         let err = match list_launchers_impl(&state, "list-launchers-empty").await {
             Ok(rows) => panic!(
                 "empty package listing must be an error, got {} rows",

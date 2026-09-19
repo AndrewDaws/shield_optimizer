@@ -141,6 +141,12 @@ async function exercise({ browser, base }) {
     "dismissing must not install",
   );
 
+  // There is exactly one clickable update badge, and it is the updater's.
+  // The GitHub-API badge used to sit beside it offering a release page the
+  // updater could not install from — two badges, one a dead end (#119).
+  assert.equal(await page.getByRole("button", { name: /Update available/ }).count(), 0,
+    "the release-page badge is gone; only the updater offers an update");
+
   // The version badge opens the release history.
   await page.locator("button.version").click();
   assert.deepEqual(await page.evaluate(() => window.__OPENED__), [
@@ -234,6 +240,70 @@ async function exerciseArrived({ browser, base }) {
   );
 }
 
+/// Between a tag push and `latest.json` propagating, the GitHub API knows
+/// about a version the in-app updater cannot install yet. The app used to
+/// offer that as a clickable "Update available" badge whose only destination
+/// was a release page — a dead end presented as an action (#119).
+///
+/// One source of truth now drives anything clickable: the updater. The API's
+/// head start is reported, inertly, as news.
+async function exerciseRollingOut({ browser, base }) {
+  const stub = (body) => ({ status: 200, contentType: "application/javascript", body });
+  const newPage = async (updaterBody) => {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+    await page.route(/plugin-updater/, (r) => r.fulfill(stub(updaterBody)));
+    await page.route(/plugin-opener/, (r) =>
+      r.fulfill(stub(`export async function openUrl(url) { (window.__OPENED__ ??= []).push(url); }`)),
+    );
+    await page.route(/plugin-process/, (r) =>
+      r.fulfill(stub(`export async function relaunch() {}`)),
+    );
+    await page.addInitScript(() => {
+      localStorage.clear();
+      // The demo layer's "API ahead of manifest" case.
+      localStorage.setItem("shieldopt.demo.updateAhead", "1");
+    });
+    await page.goto(base, { waitUntil: "networkidle" });
+    return page;
+  };
+
+  // The updater has nothing yet. The pill says so and does nothing.
+  const waiting = await newPage(`export async function check() { return null; }`);
+  const pill = waiting.getByText(/rolling out/);
+  await pill.waitFor();
+  assert.match(await pill.innerText(), /v2\.9\.9 rolling out/);
+  assert.equal(await waiting.getByRole("button", { name: /rolling out/ }).count(), 0,
+    "a version the updater cannot install must not be clickable");
+  assert.equal(await waiting.getByRole("button", { name: /Update available/ }).count(), 0,
+    "and must not be dressed up as one either");
+  assert.equal(
+    await pill.getAttribute("data-tip"),
+    "The in-app updater will offer it within a few minutes",
+  );
+  await waiting.close();
+
+  // The updater has caught up part-way: it offers 2.2.0 while the API has
+  // already seen 2.9.9. One clickable badge, one inert pill, no confusion
+  // about which version is being installed.
+  const both = await newPage(`
+    export async function check() {
+      return { version: "2.2.0", body: "", downloadAndInstall: async () => {} };
+    }
+  `);
+  await both.getByRole("button", { name: /Update now/ }).waitFor();
+  assert.match(
+    await both.getByRole("button", { name: /Update now/ }).innerText(),
+    /v2\.2\.0/,
+    "the clickable badge names the version the updater will actually install",
+  );
+  assert.match(await both.getByText(/rolling out/).innerText(), /v2\.9\.9/);
+  await both.close();
+
+  console.log(
+    "Update badge passed: only the in-app updater offers a clickable update, and a version the API has seen first is reported as rolling out rather than linked to a dead end.",
+  );
+}
+
 async function main() {
   const restore = setHarnessEnvironment();
   let server, browser;
@@ -245,6 +315,7 @@ async function main() {
     browser = await chromium.launch();
     await exercise({ browser, base: serverURL(server) });
     await exerciseArrived({ browser, base: serverURL(server) });
+    await exerciseRollingOut({ browser, base: serverURL(server) });
   } finally {
     await browser?.close().catch((e) => console.error("browser cleanup failed", e));
     await server?.close().catch((e) => console.error("Vite cleanup failed", e));

@@ -3,7 +3,7 @@
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
   import { Channel } from "@tauri-apps/api/core";
   import { api } from "$lib/api";
   import type {
@@ -282,9 +282,20 @@
   // tells the tab to drop that stale plan and reload fresh next run.
   let optimizeResetToken = $state(0);
   let mediaResetToken = $state(0);
-  /// Remembered per TV, by hardware id. Re-read whenever the device (and so
-  /// its id) resolves, and written back on every change.
+  /// Remembered per TV, by hardware id where we have one. Resolved once per
+  /// identity and written back on every change — never re-read over live
+  /// state. It used to be re-read inside `loadApps`, after an await, so the
+  /// tick vanished the moment the App List or Health refreshed underneath it:
+  /// with no hardware id yet resolved `getShellAcknowledged` answered false and
+  /// overwrote a consent the user had just given.
   let shellAcknowledged = $state(false);
+  let shellAckResolvedFor: string | null = null;
+  $effect(() => {
+    const identity = hardwareId ?? serial;
+    if (identity === shellAckResolvedFor) return;
+    shellAckResolvedFor = identity;
+    shellAcknowledged = getShellAcknowledged(hardwareId, serial);
+  });
 
   async function loadDevice() {
     const context = capturePageContext();
@@ -374,6 +385,34 @@
     if (percent >= 75) return "warn";
     return "ok";
   }
+
+  /// How hard the TV is paging. Only ever a claim when we know what it is a
+  /// share OF — a bare "512 MB of swap" says nothing without the total, so an
+  /// unknown total colours nothing.
+  let swapTone = $derived.by(() => {
+    const swap = report?.ram.swap_mb;
+    const total = report?.ram.total_mb;
+    if (swap == null || total == null || total <= 0) return null;
+    const share = (swap / total) * 100;
+    if (share >= 50) return "danger";
+    if (share >= 25) return "warn";
+    return null;
+  });
+
+  /// Temperature tiers. Deliberately coarse and deliberately not device-
+  /// specific: we read a thermal zone, not the throttle point, so these are
+  /// bands for a reader rather than a claim about this TV's limit.
+  let tempTone = $derived.by(() => {
+    const c = report?.temperature_c;
+    if (c == null) return null;
+    if (c >= 76) return "danger";
+    if (c > 60) return "warn";
+    return null;
+  });
+
+  let tempWord = $derived(
+    report?.temperature_c == null ? null : tempTone === "danger" ? "hot" : tempTone === "warn" ? "warm" : "fine",
+  );
 
   /// Bytes/s → the largest unit that keeps the number readable.
   function formatRate(bytesPerSecond: number | null): string {
@@ -563,7 +602,6 @@
       if (!pageContextIsCurrent(context) || request !== appsRequest) return;
       appStates = validatedPackageStates(packages, stateResult);
       keptPackages = getKeptPackages(hardwareId);
-      shellAcknowledged = getShellAcknowledged(hardwareId);
       catalogInventoryVersion++;
       const unavailableCount = packages.length - Object.keys(appStates).length;
       if (unavailableCount > 0) appsErr = `State unavailable for ${unavailableCount} package(s). Refresh before taking action.`;
@@ -1074,6 +1112,18 @@
     }
   }
 
+  const ISSUES_URL = "https://github.com/bryanroscoe/shield_optimizer/issues/new";
+
+  /// Open a page in the desktop browser. Nothing is downloaded or installed —
+  /// the launcher catalog's "Get" links and the issue tracker both land here.
+  async function openInBrowser(url: string) {
+    try {
+      await openUrl(url);
+    } catch (e) {
+      launcherActionMessage = `Could not open ${url}: ${e}`;
+    }
+  }
+
   async function installLauncherFromStore(pkg: string) {
     launcherActionBusy = pkg;
     launcherActionMessage = "";
@@ -1481,7 +1531,9 @@
     resource = null;
     resourceLoading = false;
     resourceErr = null;
-    shellAcknowledged = getShellAcknowledged(device?.properties?.serial_number);
+    // Resolved again by the $effect above once the new device's id lands.
+    shellAckResolvedFor = null;
+    shellAcknowledged = false;
     appsRequest++;
     otherRequest++;
     enrichmentRequest++;
@@ -1794,7 +1846,7 @@
       <div class="health-head">
         <div class="header-title">
           <h2><Icon name="monitor_heart" size={20} /> Health</h2>
-          <p class="muted small mono header-sub" title={reportLastRefreshed?.toISOString() ?? ""}>
+          <p class="muted small mono header-sub" data-tip={reportLastRefreshed?.toISOString() ?? undefined}>
             {refreshLabel} · dumpsys meminfo, df, top
           </p>
         </div>
@@ -1809,7 +1861,7 @@
           </span>
           <button
             onclick={toggleLiveRefresh}
-            title={liveRefresh
+            data-tip={liveRefresh
               ? "Stop re-reading the report every few seconds"
               : "Re-read the report every few seconds"}
           >
@@ -1872,20 +1924,35 @@
                 class="small-action subtle"
                 onclick={clearCaches}
                 disabled={trimBusy}
-                title="pm trim-caches — clears every app's cache; caches rebuild on next launch"
+                data-tip="Clears every app's cache; they rebuild on next launch"
+                data-tip-align="end"
               >{trimBusy ? "Clearing…" : "Clear caches"}</button>
             </div>
           </div>
 
+          <!-- Swap reads like CPU and Temperature because it is the same kind
+               of figure: one number with a unit, not a used/total pair. It was
+               rendered as a `.stat-figure` caption in the card's head, which
+               put the most alarming number on the screen in the smallest type
+               on the screen. -->
           <div class="stat-card">
             <div class="stat-head">
               <span class="stat-title">Swap</span>
+            </div>
+            <div class="stat-big mono" class:warn={swapTone === "warn"} class:danger={swapTone === "danger"}>
               {#if report.ram.swap_mb != null}
-                <span class="stat-figure mono">{report.ram.swap_mb} MB</span>
-              {/if}
+                {report.ram.swap_mb}<span class="stat-unit">MB</span>
+              {:else}<span class="stat-pending">—</span>{/if}
             </div>
             <div class="stat-foot mono">
-              <span>{report.ram.swap_mb != null ? "in use" : "not reported"}</span>
+              {#if report.ram.swap_mb != null}
+                <span
+                  class="tip-wrap"
+                  data-tip="RAM ran out and the TV is paging to storage. A little is normal; hundreds of MB means something is hogging memory"
+                >in use</span>
+              {:else}
+                <span>not reported</span>
+              {/if}
             </div>
           </div>
 
@@ -1898,6 +1965,16 @@
                 {resource.cpu_percent.toFixed(0)}<span class="stat-unit">%</span>
               {:else}<span class="stat-pending">{resourceLoading ? "…" : "—"}</span>{/if}
             </div>
+            <!-- A bar, like RAM and Storage. A percentage with no track beside
+                 it was the one figure on the row you had to know the scale of. -->
+            {#if resource?.cpu_percent != null}
+              <div class="meter" role="presentation">
+                <div
+                  class="meter-fill {meterTone(resource.cpu_percent)}"
+                  style="width: {Math.min(100, resource.cpu_percent)}%"
+                ></div>
+              </div>
+            {/if}
             <div class="stat-foot mono">
               <span>
                 {#if resource?.interval_ms != null}
@@ -1913,15 +1990,25 @@
             <div class="stat-head">
               <span class="stat-title">Temperature</span>
             </div>
-            <div class="stat-big mono">
+            <div class="stat-big mono" class:warn={tempTone === "warn"} class:danger={tempTone === "danger"}>
               {#if report.temperature_c != null}
                 {report.temperature_c.toFixed(0)}<span class="stat-unit">°C</span>
-              {:else}—{/if}
+              {:else}<span class="stat-pending">—</span>{/if}
             </div>
             <!-- The board prints "throttles at 85 °C". We do not read the
-                 throttle point from the device, so this says where the number
-                 came from instead of inventing a threshold. -->
-            <div class="stat-foot mono"><span>thermal zone</span></div>
+                 throttle point from the device, so the tiers are bands for a
+                 reader and the tooltip says the limit is not ours to quote. -->
+            <div class="stat-foot mono">
+              {#if tempWord}
+                <span
+                  class="tip-wrap"
+                  data-tip="Throttling usually starts around 80–85 °C; the device does not report its own limit"
+                  data-tip-align="end"
+                >thermal zone · {tempWord}</span>
+              {:else}
+                <span>thermal zone</span>
+              {/if}
+            </div>
           </div>
         </div>
         {/if}
@@ -2072,8 +2159,11 @@
       <div class="card-header">
         <div class="header-title">
           <h2><Icon name="home" size={20} /> Launcher</h2>
-          <p class="muted small mono header-sub">
-            home app resolution · {launchers.length} known launcher{launchers.length === 1 ? "" : "s"}
+          <p class="muted small header-sub launcher-sub">
+            <span class="mono">home app resolution · {launchers.length} known launcher{launchers.length === 1 ? "" : "s"}</span>
+            <button class="link-button" onclick={() => openInBrowser(ISSUES_URL)}>
+              Want another launcher listed? Open an issue
+            </button>
           </p>
         </div>
         <button onclick={loadLauncher} disabled={launcherLoading}>
@@ -2138,6 +2228,19 @@
                     >
                       {busy ? "Opening…" : "Install"}
                     </button>
+                    <!-- The Install button drives the TV's own Play Store, which
+                         is no help for a launcher that store doesn't carry. This
+                         opens the launcher's official page here instead; it
+                         downloads and installs nothing. -->
+                    {#if l.entry.source_url}
+                      <button
+                        class="small-action subtle launcher-get"
+                        onclick={() => openInBrowser(l.entry.source_url ?? "")}
+                        data-tip="Open its official page in your browser"
+                        data-tip-align="end"
+                        aria-label="Open the official page for {l.entry.name}"
+                      ><Icon name="open_in_new" size={14} /> <span>Get</span></button>
+                    {/if}
                   {:else}
                     {#if !l.enabled}
                       <button
@@ -2199,17 +2302,18 @@
             </button>
           </div>
           <div class="launcher-foot">
-            <div class="foot-card">
-              <span class="foot-label">Resolved home app</span>
-              <!-- `activity` is already a package/activity component; only
-                   fall back to the bare package when the TV gave us none. -->
+            <div class="foot-card" data-tip="What the TV launches when you press Home">
+              <span class="foot-label">Current home app</span>
+              <!-- The device reports a `package/activity` component and the
+                   command splits it; showing the activity alone (".MainActivity")
+                   named nothing. Put it back together. -->
               <span class="mono foot-value">
-                {currentLauncher?.activity ?? currentLauncher?.package ?? "—"}
+                {currentLauncher?.package
+                  ? currentLauncher.activity
+                    ? `${currentLauncher.package}/${currentLauncher.activity}`
+                    : currentLauncher.package
+                  : "—"}
               </span>
-            </div>
-            <div class="foot-card">
-              <span class="foot-label">State tags</span>
-              <span class="mono foot-value">stock · home app · installed · missing · disabled · active</span>
             </div>
           </div>
           {#if launcherActionMessage}
@@ -2266,7 +2370,7 @@
         {#if appActionMessage}
           <p class="muted small mono action-message">
             {appActionMessage}
-            <button class="dismiss" onclick={() => (appActionMessage = "")} title="Dismiss" aria-label="Dismiss"><Icon name="close" size={16} /></button>
+            <button class="dismiss" onclick={() => (appActionMessage = "")} data-tip="Dismiss" data-tip-align="end" aria-label="Dismiss"><Icon name="close" size={16} /></button>
           </p>
         {/if}
         {#if appMutationInFlight && !appActionBusy}
@@ -2288,15 +2392,20 @@
         <table class="app-table">
           <thead>
             <tr>
+              <th><span class="sr-only">Details</span></th>
               <th>App</th>
+              <!-- A whole paragraph, so it stays a `title`: `data-tip` paints
+                   one nowrap line and a paragraph in one line is a page-wide
+                   strip. The short version rides alongside it. -->
               <th
                 title="Our verdict on removing it, and which list it came from — click a row's verdict for the full reason. Anything we can't vouch for needs an explicit tick before it can be removed."
+                data-tip="Click a row to read the full reason"
               >Verdict &amp; source</th>
-              <th class="right" title="Resident RAM right now (dumpsys meminfo).">RAM</th>
+              <th class="right" data-tip="Resident RAM right now (dumpsys meminfo)">RAM</th>
               <th
                 class="right"
                 title="Last foreground use, from Android's usagestats. History is limited — roughly a year of rolling buckets — and is cleared by a factory reset, so a dash can mean the record aged out rather than that the app was never opened."
-                data-tip="Limited history — see tooltip"
+                data-tip="Android keeps about a year of usage history"
                 data-tip-align="end"
               >Last used</th>
               <th class="controls-start">Actions</th>
@@ -2344,7 +2453,7 @@
                       class:danger={rec.action === "uninstall"}
                       onclick={() => applyRecommendation(a.package, rec.action)}
                       disabled={appActionBusy === a.package || appMutationInFlight}
-                      title="You may not use this one — check the last-used cue, then {rec.action} if so."
+                      data-tip="Check the last-used cue, then act if you don't use it"
                     >
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
@@ -2353,7 +2462,7 @@
                       class="small-action recommended"
                       onclick={() => reinstallApp(a.package)}
                       disabled={appActionBusy === a.package || appMutationInFlight}
-                      title="cmd package install-existing — works for system apps still on /system"
+                      data-tip="Reinstalls a system app still present on /system"
                     >
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
@@ -2365,7 +2474,7 @@
                     <button
                       class="small-action subtle change-keep"
                       onclick={() => toggleKept(a.package)}
-                      title="Undo keeping this app"
+                      data-tip="Undo keeping this app"
                     >Change</button>
                   {:else if rec.kind === "done"}
                     <span class="muted small done"><Icon name="check" size={14} /> {rec.label}</span>
@@ -2383,7 +2492,7 @@
                     <button
                       class="small-action subtle"
                       onclick={() => toggleKept(a.package)}
-                      title="Mark this as one you use, so it stops being recommended for removal"
+                      data-tip="Mark as one you use — stops being recommended"
                     >Keep</button>
                   {/if}
                   {#if state === "enabled" && canRemove && rec.kind !== "act" && !(rec.kind === "review" && rec.action === "disable")}
@@ -2391,7 +2500,7 @@
                       class="small-action subtle"
                       onclick={() => disableApp(a.package)}
                       disabled={appActionBusy === a.package || appMutationInFlight}
-                      title="pm disable-user --user 0"
+                      data-tip="pm disable-user --user 0"
                     >Disable</button>
                   {/if}
                   {#if state === "disabled"}
@@ -2399,7 +2508,7 @@
                       class="small-action subtle"
                       onclick={() => enableApp(a.package)}
                       disabled={appActionBusy === a.package || appMutationInFlight}
-                      title="pm enable"
+                      data-tip="pm enable"
                     >Enable</button>
                   {/if}
                     </div>
@@ -2425,16 +2534,16 @@
                       class="tool-btn"
                       onclick={() => backupApkFor(a.package)}
                       disabled={appActionBusy === a.package}
-                      title="Back up this app's APK(s) to a folder on this computer"
-                      data-tip="Back up APK"
+                      data-tip="Back up this app's APKs to this computer"
+                      data-tip-align="end"
                       aria-label={`Back up the APK for ${a.name}`}
                     ><Icon name="download" size={16} /></button>
                     <button
                       class="tool-btn"
                       onclick={() => startClone(a.package)}
                       disabled={appActionBusy === a.package}
-                      title="Copy this app to another connected TV (app data does not transfer)"
-                      data-tip="Copy to another TV"
+                      data-tip="Copy to another TV — app data does not transfer"
+                      data-tip-align="end"
                       aria-label={`Copy ${a.name} to another TV`}
                     ><Icon name="swap_horiz" size={16} /></button>
                   {/if}
@@ -2443,8 +2552,7 @@
                       class="tool-btn"
                       onclick={() => openInPlayStore(a.package)}
                       disabled={appActionBusy === a.package}
-                      title="Open {a.name} on the Play Store on the TV"
-                      data-tip="Play Store"
+                      data-tip="Open on the Play Store on the TV"
                       data-tip-align="end"
                       aria-label={`Open ${a.name} on the Play Store`}
                     ><Icon name="shop" size={16} /></button>
@@ -2458,7 +2566,7 @@
               </AppRow>
             {/each}
             {#if visibleApps.length === 0}
-              <tr><td colspan="5" class="muted">No curated apps match your filters.</td></tr>
+              <tr><td colspan="6" class="muted">No curated apps match your filters.</td></tr>
             {/if}
           </tbody>
         </table>
@@ -2497,6 +2605,7 @@
             <table class="app-table">
               <thead>
                 <tr>
+                  <th><span class="sr-only">Details</span></th>
                   <th>App</th>
                   <th>Verdict &amp; source</th>
                   <th class="right">RAM</th>
@@ -2529,10 +2638,10 @@
                       <div class="actions-cell">
                         <div class="row-verbs">
                         {#if o.enabled}
-                          <button class="small-action subtle" onclick={() => disableOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight || !canRemove} title="Needs a completed safety check and a current package list">Disable</button>
-                          <button class="small-action subtle danger" onclick={() => uninstallOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight || !canRemove} title="Needs a completed safety check and a current package list">Uninstall</button>
+                          <button class="small-action subtle" onclick={() => disableOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight || !canRemove} data-tip="Needs a completed safety check and a current package list">Disable</button>
+                          <button class="small-action subtle danger" onclick={() => uninstallOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight || !canRemove} data-tip="Needs a completed safety check and a current package list">Uninstall</button>
                         {:else}
-                          <button class="small-action subtle" onclick={() => enableOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight} title="pm enable">Enable</button>
+                          <button class="small-action subtle" onclick={() => enableOther(o.package)} disabled={appActionBusy === o.package || appMutationInFlight} data-tip="pm enable">Enable</button>
                         {/if}
                         </div>
                         <span class="tool-sep" aria-hidden="true"></span>
@@ -2541,16 +2650,16 @@
                           class="tool-btn"
                           onclick={() => backupApkFor(o.package)}
                           disabled={appActionBusy === o.package}
-                          title="Back up this app's APK(s) to a folder on this computer"
-                      data-tip="Back up APK"
+                      data-tip="Back up this app's APKs to this computer"
+                      data-tip-align="end"
                           aria-label={`Back up the APK for ${o.name ?? o.package}`}
                         ><Icon name="download" size={16} /></button>
                         <button
                           class="tool-btn"
                           onclick={() => startClone(o.package)}
                           disabled={appActionBusy === o.package}
-                          title="Copy this app to another connected TV"
-                      data-tip="Copy to another TV"
+                      data-tip="Copy to another TV — app data does not transfer"
+                      data-tip-align="end"
                           aria-label={`Copy ${o.name ?? o.package} to another TV`}
                         ><Icon name="swap_horiz" size={16} /></button>
                         <span class="tool-slot-empty" aria-hidden="true"></span>
@@ -2799,7 +2908,7 @@
         acknowledged={shellAcknowledged}
         onacknowledge={(next) => {
           shellAcknowledged = next;
-          setShellAcknowledged(hardwareId, next);
+          setShellAcknowledged(hardwareId, serial, next);
         }}
         onexecuted={shellExecuted}
       />
@@ -3096,15 +3205,50 @@
   .stat-title {
     font-weight: 600;
   }
+  /* The used/total caption on RAM and Storage. It sits beside the card title
+     rather than under it, so at 0.78rem muted it read as a footnote on the one
+     card whose whole point is the pair of numbers. */
   .stat-figure {
-    font-size: 0.78rem;
-    color: var(--fg-muted);
+    font-size: 0.9rem;
+    color: var(--fg-secondary);
     white-space: nowrap;
   }
   .stat-big {
     font-size: 1.6rem;
     font-weight: 600;
     line-height: 1;
+  }
+  /* The figure carries the tone, not a separate badge: it is the thing being
+     read, and a number that is fine looks exactly like one that is not until
+     it is coloured. */
+  .stat-big.warn {
+    color: var(--warn);
+  }
+  .stat-big.danger {
+    color: var(--danger);
+  }
+  /* The global tooltip is one nowrap line, which is right for "Copy" and wrong
+     for a sentence. These two are sentences: they say what the number means,
+     which is the whole reason they are there. */
+  /* Visually hidden, still announced — the caret column has no visible head. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tip-wrap {
+    text-decoration: underline dotted;
+    text-underline-offset: 0.2em;
+    cursor: help;
+  }
+  .tip-wrap::after {
+    white-space: normal;
+    width: 15rem;
+    line-height: 1.4;
+    text-align: left;
   }
   .stat-foot {
     display: flex;
@@ -3470,13 +3614,26 @@
   .launcher-callout {
     margin-top: 1rem;
   }
-  /* The two reference panels the board ends on: what the TV actually resolved,
-     and what the tags above mean. */
+  /* One reference panel: what the TV actually resolved. The tag legend that
+     used to sit beside it explained the badges to someone already reading
+     them — the badges say it themselves. */
   .launcher-foot {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
     gap: 1rem;
     margin-top: 1rem;
+  }
+  /* Keeps the Get link on the row rather than below it when the actions wrap. */
+  .launcher-get {
+    white-space: nowrap;
+  }
+  /* The subtitle carries a second thought now, so it wraps onto its own line
+     on a narrow window instead of pushing the Refresh button off the card. */
+  .launcher-sub {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.15rem 0.6rem;
   }
   .foot-card {
     display: flex;

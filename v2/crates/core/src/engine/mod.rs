@@ -7,6 +7,7 @@
 
 pub mod app_lists;
 pub mod detection;
+pub mod diagnostics;
 pub mod launcher;
 pub mod media;
 pub mod optimize;
@@ -15,10 +16,11 @@ pub mod snapshot;
 pub mod types;
 
 pub use app_lists::{AppList, AppListBundle};
-pub use detection::{detect_device_type, DeviceType};
+pub use detection::{detect_device_type, tv_evidence, DeviceType, TvEvidence};
+pub use diagnostics::{format_diagnostics, DeviceDiagnostics, DiagnosticsInput};
 pub use launcher::{
-    is_last_enabled_home_handler, is_valid_package_name, launcher_catalog, launcher_rows,
-    stock_launcher_catalog, LauncherEntry, LauncherStatus,
+    is_last_enabled_home_handler, is_valid_package_name, launcher_rows, LauncherCatalog,
+    LauncherEntry, LauncherStatus,
 };
 pub use media::{
     build_capabilities, parse_media_codecs, surround_mode, video_formats, AudioPassthrough,

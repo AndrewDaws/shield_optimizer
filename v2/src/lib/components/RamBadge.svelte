@@ -11,7 +11,7 @@
     class="ram-tag"
     class:warn={mb >= 200}
     class:caution={mb >= 100 && mb < 200}
-    title="Using this much RAM right now — the app is currently running (dumpsys meminfo)"
+    data-tip="Resident RAM right now — the app is running"
   >
     {#if label}<span class="ram-label">RAM</span>{/if}{mb.toFixed(0)} MB
   </span>

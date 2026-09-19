@@ -4,6 +4,9 @@
 export type ConnectionType = "network" | "usb";
 export type DeviceStatus = "device" | "unauthorized" | "offline";
 export type DeviceType = "shield" | "google_tv" | "unknown";
+/// What the device said about being a TV. Distinct from DeviceType, whose
+/// "unknown" only means "no catalog match" — see engine/detection.rs.
+export type TvEvidence = "tv" | "not_tv" | "unknown";
 export type ActionMethod = "disable" | "uninstall";
 export type RiskTier = "safe" | "medium" | "high" | "advanced";
 
@@ -19,6 +22,9 @@ export interface DeviceProperties {
   board_platform: string;
   characteristics?: string;
   serial_number?: string;
+  /// `pm has-feature android.software.leanback`. null when the device gave no
+  /// readable answer — which is not the same as "no".
+  leanback?: boolean | null;
 }
 
 export interface Device {
@@ -27,6 +33,7 @@ export interface Device {
   name: string;
   model: string;
   device_type: DeviceType;
+  tv_evidence: TvEvidence;
   status: DeviceStatus;
   connection: ConnectionType;
   properties: DeviceProperties | null;
@@ -60,6 +67,10 @@ export interface AppUsage {
 export interface LauncherEntry {
   name: string;
   package: string;
+  /// The launcher's official page, for the "Get" link on a row that isn't
+  /// installed. Null for stock launchers and for HOME handlers found on the
+  /// device rather than in the catalog.
+  source_url: string | null;
 }
 
 export interface LauncherStatus {

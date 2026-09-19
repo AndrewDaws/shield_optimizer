@@ -5,8 +5,9 @@
 //! the resulting `AppListBundle` as an input.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-use crate::engine::AppListBundle;
+use crate::engine::{AppListBundle, LauncherCatalog};
 
 /// Embedded JSON for the three default app lists. Loaded at compile time so
 /// the binary works offline. Future versions will additionally check a
@@ -15,6 +16,7 @@ const COMMON_JSON: &str = include_str!("../../data/app-lists/common.json");
 const SHIELD_JSON: &str = include_str!("../../data/app-lists/shield.json");
 const GOOGLETV_JSON: &str = include_str!("../../data/app-lists/googletv.json");
 const KNOWN_NAMES_JSON: &str = include_str!("../../data/app-lists/known-names.json");
+const LAUNCHERS_JSON: &str = include_str!("../../data/app-lists/launchers.json");
 
 /// Load the bundled defaults. Returns a useful error string if any of the
 /// embedded JSON files fail to parse — that's a build-time mistake worth
@@ -31,6 +33,24 @@ pub fn load_embedded_app_lists() -> Result<AppListBundle, String> {
         shield,
         googletv,
     })
+}
+
+/// Parse the embedded launcher catalog. Separate from the accessor so a test
+/// can assert on the shipped file's contents and report a parse error rather
+/// than a panic.
+pub fn load_embedded_launchers() -> Result<LauncherCatalog, String> {
+    serde_json::from_str(LAUNCHERS_JSON).map_err(|e| format!("launchers.json parse error: {e}"))
+}
+
+/// The launcher catalog, parsed once. Unlike the app lists it has no
+/// per-device variant, so every caller shares one copy rather than threading it
+/// through `AppState`. The JSON is embedded at compile time and its parse is
+/// asserted by the tests below, so the failure this expects on is a build-time
+/// mistake that cannot reach a shipped binary.
+pub fn launchers() -> &'static LauncherCatalog {
+    static CATALOG: LazyLock<LauncherCatalog> =
+        LazyLock::new(|| load_embedded_launchers().expect("embedded launchers.json must parse"));
+    &CATALOG
 }
 
 /// Load the curated package→friendly-name map for popular sideloads. Display
@@ -184,6 +204,68 @@ mod tests {
             assert!(
                 bundle.common.iter().any(|e| e.package == pkg),
                 "missing defunct app: {pkg}"
+            );
+        }
+    }
+
+    /// The shipped launcher catalog, not a fixture — the engine takes the
+    /// catalog as an argument now, so this file is the only place the real
+    /// entries are checked.
+    #[test]
+    fn embedded_launchers_parse_with_every_shipped_entry() {
+        let cat = load_embedded_launchers().expect("launchers.json must parse");
+        assert_eq!(cat.custom.len(), 7, "custom launcher count");
+        assert_eq!(cat.stock.len(), 4, "stock launcher count");
+
+        // Critical correctness: the Dispatch package name change from v1's
+        // launcher selection fix.
+        let dispatch = cat
+            .custom
+            .iter()
+            .find(|e| e.name == "Dispatch Launcher")
+            .expect("Dispatch entry");
+        assert_eq!(dispatch.package, "com.spauldhaliwal.dispatch");
+        assert!(cat
+            .custom
+            .iter()
+            .any(|e| e.package == "com.spocky.projengmenu"));
+        // GitHub #121.
+        assert!(
+            cat.custom.iter().any(|e| e.package == "com.klevico.monet"),
+            "Monet Launcher is missing"
+        );
+        assert!(cat
+            .home_handler_name("com.google.android.tungsten.setupwraith")
+            .is_some());
+    }
+
+    /// A custom launcher with no source is a row whose "Get" link cannot be
+    /// rendered — the only way to install one the device's Play Store lacks.
+    #[test]
+    fn every_custom_launcher_has_a_source_url_and_no_package_repeats() {
+        let cat = load_embedded_launchers().expect("parse");
+        let mut seen = std::collections::HashSet::new();
+        for entry in cat.custom.iter().chain(cat.stock.iter()) {
+            assert!(
+                !entry.name.trim().is_empty(),
+                "{} has no display name",
+                entry.package
+            );
+            assert!(
+                seen.insert(entry.package.as_str()),
+                "duplicate launcher package {:?}",
+                entry.package
+            );
+        }
+        for entry in &cat.custom {
+            let url = entry
+                .source_url
+                .as_deref()
+                .unwrap_or_else(|| panic!("{} has no source_url", entry.package));
+            assert!(
+                url.starts_with("https://"),
+                "{} source_url must be https: {url}",
+                entry.package
             );
         }
     }

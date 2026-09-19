@@ -1,64 +1,52 @@
 //! Custom launcher catalog + plan helpers.
+//!
+//! The catalog itself is data: `crates/core/data/app-lists/launchers.json`,
+//! parsed by the loader and handed to these pure functions as an argument.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// One supported custom launcher.
+/// One supported launcher.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LauncherEntry {
     pub name: String,
     pub package: String,
+    /// Where to get it when it isn't installed — the launcher's own official
+    /// page. `None` for stock launchers, which ship with the device, and for
+    /// HOME handlers discovered on the device rather than read from the file.
+    #[serde(default)]
+    pub source_url: Option<String>,
 }
 
-/// The preset launcher catalog — direct port of v1's `$Script:Launchers`.
-pub fn launcher_catalog() -> Vec<LauncherEntry> {
-    [
-        ("Projectivy Launcher", "com.spocky.projengmenu"),
-        ("FLauncher", "me.efesser.flauncher"),
-        ("ATV Launcher", "com.sweech.launcher"),
-        ("Wolf Launcher", "com.wolf.firelauncher"),
-        ("AT4K Launcher", "com.overdevs.at4k"),
-        ("Dispatch Launcher", "com.spauldhaliwal.dispatch"),
-    ]
-    .iter()
-    .map(|(n, p)| LauncherEntry {
-        name: n.to_string(),
-        package: p.to_string(),
-    })
-    .collect()
+/// The launcher catalog, as loaded from `launchers.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LauncherCatalog {
+    /// Installable third-party launchers — listed even when missing, so there
+    /// is always a path to install one.
+    pub custom: Vec<LauncherEntry>,
+    /// Preinstalled launchers. Disabled when a custom launcher takes over, and
+    /// listed (when present) so "back to stock" is one click away.
+    pub stock: Vec<LauncherEntry>,
+    /// Friendly names for known HOME-capable apps that aren't launchers.
+    #[serde(default)]
+    pub home_handler_names: BTreeMap<String, String>,
 }
 
-/// Stock launchers, with friendly names. These get disabled when activating a
-/// custom launcher — and shown in the launcher list so users can switch back.
-pub fn stock_launcher_catalog() -> Vec<LauncherEntry> {
-    [
-        (
-            "Android TV Launcher (Stock)",
-            "com.google.android.tvlauncher",
-        ),
-        (
-            "Google TV Home (Stock)",
-            "com.google.android.apps.tv.launcherx",
-        ),
-        (
-            "Leanback Launcher (Stock)",
-            "com.google.android.leanbacklauncher",
-        ),
-        ("Amazon TV Launcher (Stock)", "com.amazon.tv.launcher"),
-    ]
-    .iter()
-    .map(|(n, p)| LauncherEntry {
-        name: n.to_string(),
-        package: p.to_string(),
-    })
-    .collect()
-}
+impl LauncherCatalog {
+    /// Friendly name for a known HOME-capable app that isn't a launcher.
+    pub fn home_handler_name(&self, pkg: &str) -> Option<&str> {
+        self.home_handler_names.get(pkg).map(String::as_str)
+    }
 
-/// Friendly names for known HOME-capable apps that aren't launchers.
-pub fn home_handler_name(pkg: &str) -> Option<&'static str> {
-    match pkg {
-        "com.google.android.tungsten.setupwraith" => Some("Setup Wraith (HOME)"),
-        "com.droidlogic.launcher.provider" => Some("Droidlogic Launcher Provider"),
-        _ => None,
+    /// True when `pkg` is a preinstalled launcher we know by name.
+    pub fn is_stock(&self, pkg: &str) -> bool {
+        self.stock.iter().any(|e| e.package == pkg)
+    }
+
+    /// True when `pkg` appears in either catalog list.
+    pub fn contains(&self, pkg: &str) -> bool {
+        self.is_stock(pkg) || self.custom.iter().any(|e| e.package == pkg)
     }
 }
 
@@ -88,14 +76,15 @@ pub struct LauncherStatus {
 /// Safe fallbacks (Settings) are deliberately absent: they must never be
 /// disabled, so we don't render them at all.
 pub fn launcher_rows(
+    catalog: &LauncherCatalog,
     installed_pkgs: &[String],
     disabled_pkgs: &[String],
     home_handler_pkgs: &[String],
     tracked_disabled_pkgs: &[String],
 ) -> Vec<LauncherStatus> {
     let is_disabled = |pkg: &str| disabled_pkgs.iter().any(|d| d == pkg);
-    let stock_catalog = stock_launcher_catalog();
-    let custom_catalog = launcher_catalog();
+    let stock_catalog = &catalog.stock;
+    let custom_catalog = &catalog.custom;
 
     let stock = stock_catalog
         .iter()
@@ -119,23 +108,20 @@ pub fn launcher_rows(
         }
     });
 
-    let in_catalogs = |pkg: &str| {
-        stock_catalog.iter().any(|e| e.package == pkg)
-            || custom_catalog.iter().any(|e| e.package == pkg)
-    };
     let mut seen_other = std::collections::HashSet::new();
     let other = home_handler_pkgs
         .iter()
         .chain(tracked_disabled_pkgs.iter())
         .filter(|pkg| {
-            !in_catalogs(pkg)
+            !catalog.contains(pkg)
                 && !safe_home_handlers().contains(&pkg.as_str())
                 && seen_other.insert(pkg.to_string())
         })
         .map(|pkg| LauncherStatus {
             entry: LauncherEntry {
-                name: home_handler_name(pkg).unwrap_or(pkg).to_string(),
+                name: catalog.home_handler_name(pkg).unwrap_or(pkg).to_string(),
                 package: pkg.clone(),
+                source_url: None,
             },
             installed: true,
             enabled: !is_disabled(pkg),
@@ -186,20 +172,41 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    #[test]
-    fn catalog_has_six_entries() {
-        let cat = launcher_catalog();
-        assert_eq!(cat.len(), 6);
-        // Critical correctness: the Dispatch package name change from v1's
-        // launcher selection fix.
-        let dispatch = cat.iter().find(|e| e.name == "Dispatch Launcher").unwrap();
-        assert_eq!(dispatch.package, "com.spauldhaliwal.dispatch");
-    }
-
-    #[test]
-    fn projectivy_present() {
-        let cat = launcher_catalog();
-        assert!(cat.iter().any(|e| e.package == "com.spocky.projengmenu"));
+    /// A stand-in for the shipped `launchers.json`. The engine is handed a
+    /// catalog rather than owning one, so these tests exercise the row logic
+    /// against a fixture; the shipped file's own contents (Monet, Dispatch's
+    /// package, the entry count) are asserted in the loader's tests, against
+    /// the real JSON.
+    fn catalog() -> LauncherCatalog {
+        let entry = |name: &str, package: &str, source_url: Option<&str>| LauncherEntry {
+            name: name.to_string(),
+            package: package.to_string(),
+            source_url: source_url.map(str::to_string),
+        };
+        LauncherCatalog {
+            custom: vec![
+                entry(
+                    "Projectivy Launcher",
+                    "com.spocky.projengmenu",
+                    Some("https://example.invalid/projectivy"),
+                ),
+                entry("FLauncher", "me.efesser.flauncher", None),
+            ],
+            stock: vec![
+                entry(
+                    "Android TV Launcher (Stock)",
+                    "com.google.android.tvlauncher",
+                    None,
+                ),
+                entry("Amazon TV Launcher (Stock)", "com.amazon.tv.launcher", None),
+            ],
+            home_handler_names: [(
+                "com.google.android.tungsten.setupwraith".to_string(),
+                "Setup Wraith (HOME)".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        }
     }
 
     fn pkgs(names: &[&str]) -> Vec<String> {
@@ -208,7 +215,9 @@ mod tests {
 
     #[test]
     fn launcher_rows_put_installed_stock_first() {
+        let cat = catalog();
         let rows = launcher_rows(
+            &cat,
             &pkgs(&["com.google.android.tvlauncher", "com.spocky.projengmenu"]),
             &[],
             &[],
@@ -218,17 +227,40 @@ mod tests {
         assert!(rows[0].stock);
         assert!(rows[0].installed);
         assert!(rows[0].enabled);
-        // Stock + all six custom catalog entries.
-        assert_eq!(rows.len(), 7);
+        // The installed stock launcher + every custom catalog entry.
+        assert_eq!(rows.len(), 1 + cat.custom.len());
         assert!(rows[1..].iter().all(|r| !r.stock));
     }
 
     #[test]
     fn launcher_rows_omit_stock_not_on_device() {
         // A Shield shouldn't get an Amazon (or any "missing stock") row.
-        let rows = launcher_rows(&pkgs(&["com.spocky.projengmenu"]), &[], &[], &[]);
+        let cat = catalog();
+        let rows = launcher_rows(&cat, &pkgs(&["com.spocky.projengmenu"]), &[], &[], &[]);
         assert!(rows.iter().all(|r| !r.stock));
-        assert_eq!(rows.len(), 6);
+        assert_eq!(rows.len(), cat.custom.len());
+    }
+
+    #[test]
+    fn launcher_rows_carry_the_catalog_source_url() {
+        // The "Get" link on a missing launcher is the only way to install one
+        // that isn't on the device's Play Store.
+        let rows = launcher_rows(
+            &catalog(),
+            &pkgs(&["com.google.android.tvlauncher"]),
+            &[],
+            &[],
+            &[],
+        );
+        let projectivy = rows
+            .iter()
+            .find(|r| r.entry.package == "com.spocky.projengmenu")
+            .expect("custom row");
+        assert!(!projectivy.installed);
+        assert_eq!(
+            projectivy.entry.source_url.as_deref(),
+            Some("https://example.invalid/projectivy")
+        );
     }
 
     #[test]
@@ -236,6 +268,7 @@ mod tests {
         // The post-cleanup state: stock disabled, custom active. The stock
         // row must still appear — it's the path back.
         let rows = launcher_rows(
+            &catalog(),
             &pkgs(&["com.google.android.tvlauncher", "com.spocky.projengmenu"]),
             &pkgs(&["com.google.android.tvlauncher"]),
             &[],
@@ -249,6 +282,7 @@ mod tests {
     #[test]
     fn launcher_rows_include_other_home_handlers_but_never_safe_fallbacks() {
         let rows = launcher_rows(
+            &catalog(),
             &pkgs(&["com.spocky.projengmenu"]),
             &[],
             &pkgs(&[
@@ -276,6 +310,7 @@ mod tests {
         // A disabled handler doesn't answer the HOME query — the tracked list
         // is what keeps its row (and its Enable path) alive.
         let rows = launcher_rows(
+            &catalog(),
             &pkgs(&["com.spocky.projengmenu"]),
             &pkgs(&["com.example.sideloaded.home"]),
             &[],

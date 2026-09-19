@@ -13,7 +13,7 @@
   <span
     class="usage-tag"
     class:stale={isStaleUsage(usage)}
-    title="Last foreground use from usagestats. History is limited (~1 year of rolling buckets) and resets on a factory wipe, so 'no recent use' may just mean it aged out."
+    data-tip="Last foreground use · Android keeps about a year of history"
   >
     {bare ? usageLabelBare(usage) : usageLabel(usage)}
   </span>

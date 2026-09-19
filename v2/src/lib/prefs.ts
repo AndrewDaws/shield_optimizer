@@ -148,26 +148,48 @@ function readAckSet(): Set<string> {
   }
 }
 
-/// Whether expert shell has been acknowledged for this TV before.
+/// The key this TV's shell consent is filed under.
 ///
-/// Keyed by hardware id, never by address — the same rule the keep decisions
-/// follow. Consenting to arbitrary shell on the living-room Shield must not
-/// silently consent for whatever else later answers on that IP. With no
-/// hardware id we have not identified the device, so the answer is no and the
-/// user ticks the box again.
-export function getShellAcknowledged(hardwareId: string | null | undefined): boolean {
-  if (!hardwareId) return false;
-  return readAckSet().has(hardwareId);
+/// Hardware id wherever we have one — the same rule the keep decisions follow.
+/// Consenting to arbitrary shell on the living-room Shield must not silently
+/// consent for whatever else later answers on that IP.
+///
+/// The fallback is the one case where the address is the only key we have: an
+/// unauthorised or not-yet-profiled transport reports no `ro.serialno`, so the
+/// consent is remembered per address and claims nothing about which device is
+/// on it. It is prefixed so an address can never collide with a hardware id.
+/// Refusing to key at all was worse in practice — `setShellAcknowledged` then
+/// silently discarded the tick, and Run stayed disabled with the box visibly
+/// ticked.
+function shellAckKey(
+  hardwareId: string | null | undefined,
+  serial?: string | null,
+): string | null {
+  if (hardwareId) return hardwareId;
+  const address = serial?.trim();
+  return address ? `addr:${address}` : null;
+}
+
+/// Whether expert shell has been acknowledged for this TV before.
+export function getShellAcknowledged(
+  hardwareId: string | null | undefined,
+  serial?: string | null,
+): boolean {
+  const key = shellAckKey(hardwareId, serial);
+  if (!key) return false;
+  return readAckSet().has(key);
 }
 
 export function setShellAcknowledged(
   hardwareId: string | null | undefined,
+  serial: string | null | undefined,
   acknowledged: boolean,
 ): void {
-  if (!hardwareId) return;
+  const key = shellAckKey(hardwareId, serial);
+  if (!key) return;
   const set = readAckSet();
-  if (acknowledged) set.add(hardwareId);
-  else set.delete(hardwareId);
+  if (acknowledged) set.add(key);
+  else set.delete(key);
   try {
     localStorage.setItem(SHELL_ACK_KEY, JSON.stringify([...set].sort()));
   } catch {

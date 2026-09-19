@@ -5,9 +5,9 @@ use tauri::State;
 
 use crate::adb::{batch_command, parse_device_list, split_batch, AdbDriver};
 use crate::engine::{
-    detect_device_type,
+    detect_device_type, tv_evidence,
     types::{Device, DeviceProperties, DeviceStatus},
-    DeviceType,
+    DeviceType, TvEvidence,
 };
 
 use super::AppState;
@@ -41,6 +41,9 @@ pub async fn list_devices_impl(state: &AppState) -> Result<Vec<Device>, String> 
                 name: e.serial.clone(),
                 model: String::new(),
                 device_type: DeviceType::Unknown,
+                // Nothing was readable, so it told us nothing. The UI says
+                // nothing about it in turn.
+                tv_evidence: TvEvidence::Unknown,
                 status: e.status,
                 connection: e.connection,
                 properties: None,
@@ -74,6 +77,7 @@ pub async fn list_devices_impl(state: &AppState) -> Result<Vec<Device>, String> 
             name,
             model,
             device_type,
+            tv_evidence: tv_evidence(&props),
             status: e.status,
             connection: e.connection,
             properties: Some(props),
@@ -421,7 +425,7 @@ async fn harvest_properties(adb: &dyn AdbDriver, serial: &str) -> Result<DeviceP
 }
 
 /// The property reads, in the order `properties_from_sections` consumes them.
-const PROPERTY_READS: [&str; 11] = [
+const PROPERTY_READS: [&str; 12] = [
     "settings get global device_name",
     "getprop ro.product.brand",
     "getprop ro.product.model",
@@ -433,6 +437,11 @@ const PROPERTY_READS: [&str; 11] = [
     "getprop ro.board.platform",
     "getprop ro.build.characteristics",
     "getprop ro.serialno",
+    // The platform's own answer to "is this a TV?", independent of whatever
+    // the OEM chose to put in ro.build.characteristics. Prints `true` or
+    // `false`; anything else (an old build without the subcommand, a denied
+    // shell) is no answer at all.
+    "pm has-feature android.software.leanback",
 ];
 
 /// Pure: map batched sections onto `DeviceProperties`. Split out so the
@@ -469,6 +478,19 @@ fn properties_from_sections(sections: &[String]) -> DeviceProperties {
         board_platform: get(8),
         characteristics: get(9),
         serial_number: get(10),
+        leanback: parse_bool_answer(&get(11)),
+    }
+}
+
+/// `pm has-feature` prints `true` or `false`. Anything else — an empty
+/// section, a usage message from a build that predates the subcommand, a
+/// permission error — is not a "no": it is no answer, and the caller must not
+/// read it as one.
+fn parse_bool_answer(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
     }
 }
 
@@ -609,6 +631,11 @@ mod tests {
         assert_eq!(props.board_platform, "value8");
         assert_eq!(props.characteristics, "value9");
         assert_eq!(props.serial_number, "value10");
+        // `value11` is neither `true` nor `false`, so the leanback answer is
+        // absent rather than negative — the field is still fed by section 11.
+        assert_eq!(props.leanback, None);
+        let yes = vec!["true".to_string(); PROPERTY_READS.len()];
+        assert_eq!(properties_from_sections(&yes).leanback, Some(true));
     }
 
     #[tokio::test]
@@ -693,6 +720,7 @@ mod tests {
             name: "TV".into(),
             model: "TV".into(),
             device_type: DeviceType::Unknown,
+            tv_evidence: TvEvidence::Unknown,
             status: DeviceStatus::Device,
             connection: crate::engine::types::ConnectionType::Network,
             properties: Some(DeviceProperties {
@@ -709,6 +737,7 @@ mod tests {
             name: serial.to_string(),
             model: String::new(),
             device_type: DeviceType::Unknown,
+            tv_evidence: TvEvidence::Unknown,
             status: DeviceStatus::Unauthorized,
             connection: crate::engine::types::ConnectionType::Network,
             properties: None,

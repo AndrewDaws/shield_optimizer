@@ -1,6 +1,7 @@
 <script lang="ts">
   import "../app.css";
   import Icon from "$lib/components/Icon.svelte";
+  import BrandMark from "$lib/components/BrandMark.svelte";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -50,6 +51,44 @@
   let arrivedOn = $state<string | null>(null);
   const arrivedNotes = $derived<NoteBlock[]>(
     update?.current_notes ? parseReleaseNotes(update.current_notes) : [],
+  );
+
+  /// Compare `MAJOR.MINOR.PATCH[-pre]`. The same rule as `is_newer` in
+  /// `src-tauri/src/commands/update.rs`, for the one question asked here.
+  function isNewerVersion(a: string, b: string): boolean {
+    const parse = (v: string) => {
+      const dash = v.indexOf("-");
+      const core = dash === -1 ? v : v.slice(0, dash);
+      const parts = core.split(".").map((n) => Number.parseInt(n, 10) || 0);
+      return {
+        core: [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0],
+        pre: dash === -1 ? null : v.slice(dash + 1),
+      };
+    };
+    const x = parse(a);
+    const y = parse(b);
+    for (let i = 0; i < 3; i++) {
+      if (x.core[i] !== y.core[i]) return x.core[i] > y.core[i];
+    }
+    if (x.pre === y.pre) return false;
+    // A stable build beats a pre-release of the same core version.
+    if (x.pre === null) return true;
+    if (y.pre === null) return false;
+    return x.pre > y.pre;
+  }
+
+  /// GitHub has published a tag the updater manifest has not caught up with.
+  ///
+  /// There is a real window between a tag push and `latest.json` propagating,
+  /// and the app used to fill it with a second clickable "Update available"
+  /// badge sourced from the GitHub API — which could only open a release page,
+  /// because the updater had nothing to install. Two badges, one of them a
+  /// dead end. Only `pendingUpdate` is clickable now; this says the true thing
+  /// instead, and says it inertly.
+  const rollingOut = $derived(
+    update?.update_available && update.latest
+      ? !pendingUpdate || isNewerVersion(update.latest, pendingUpdate.version)
+      : false,
   );
 
   onMount(() => {
@@ -133,6 +172,84 @@
     await installUpdate();
   }
 
+  // ---- Report a bug -------------------------------------------------
+  //
+  // Everything here is text the user reads and then chooses to paste. The app
+  // sends nothing: there is no upload path, and the GitHub issue opens with an
+  // empty body because a URL cannot carry the bundle anyway.
+
+  const ISSUE_URL =
+    "https://github.com/bryanroscoe/shield_optimizer/issues/new" +
+    `?title=${encodeURIComponent("Bug: ")}` +
+    `&body=${encodeURIComponent("Paste the diagnostics from Report a bug below:\n\n")}`;
+
+  let bugOpen = $state(false);
+  let bugBundle = $state("");
+  let bugBusy = $state(false);
+  let bugMessage = $state("");
+  let bugCopied = $state(false);
+  let debugLogging = $state(false);
+  let logPath = $state("");
+
+  /// The device the user is looking at, if they are looking at one. Its
+  /// properties are usually the whole answer to "why won't this open?".
+  const currentSerial = $derived.by(() => {
+    const match = /^\/devices\/([^/]+)/.exec($page.url.pathname);
+    return match ? decodeURIComponent(match[1]) : null;
+  });
+
+  async function openBugReport() {
+    bugOpen = true;
+    bugBusy = true;
+    bugCopied = false;
+    bugMessage = "";
+    bugBundle = "";
+    try {
+      const [bundle, debug, dir] = await Promise.all([
+        api.collectDiagnostics(currentSerial),
+        api.getDebugLogging(),
+        api.logDirPath(),
+      ]);
+      bugBundle = bundle;
+      debugLogging = debug;
+      logPath = dir;
+    } catch (e) {
+      bugMessage = String(e);
+    } finally {
+      bugBusy = false;
+    }
+  }
+
+  async function toggleDebugLogging(e: Event) {
+    const wanted = (e.currentTarget as HTMLInputElement).checked;
+    try {
+      // Believe the backend, not the click: a failed reload must not leave
+      // the checkbox claiming a level that isn't running.
+      debugLogging = await api.setDebugLogging(wanted);
+    } catch (err) {
+      bugMessage = String(err);
+      debugLogging = await api.getDebugLogging().catch(() => debugLogging);
+    }
+  }
+
+  async function copyBugBundle() {
+    try {
+      await navigator.clipboard.writeText(bugBundle);
+      bugCopied = true;
+    } catch (e) {
+      // Clipboard access can be refused; the textarea is still selectable.
+      bugMessage = `Couldn't reach the clipboard (${e}) — select the text above and copy it.`;
+    }
+  }
+
+  async function openLogsFolder() {
+    try {
+      await api.openLogDir();
+    } catch (e) {
+      bugMessage = String(e);
+    }
+  }
+
   function toggleAutoUpdate() {
     autoUpdate = !autoUpdate;
     setAutoUpdate(autoUpdate);
@@ -153,8 +270,8 @@
 <div class="app">
   <header>
     <div class="brand">
-      <span class="logo-dot"></span>
-      <span class="title">Shield Optimizer</span>
+      <BrandMark size={22} />
+      <span class="title">ATV Optimizer</span>
       {#if update}
         <button
           class="version"
@@ -175,10 +292,15 @@
               Update now → v{pendingVersion}
             </button>
           {/if}
-        {:else if update.update_available}
-          <button class="update-badge" onclick={() => openUrl(update!.url)} title="Open the release page">
-            Update available → v{update.latest}
-          </button>
+        {/if}
+        {#if rollingOut}
+          <!-- Not a button: there is nothing useful to click yet. -->
+          <span
+            class="update-badge rolling"
+            data-tip="The in-app updater will offer it within a few minutes"
+          >
+            v{update.latest} rolling out
+          </span>
         {/if}
       {:else}
         <span class="version">v2</span>
@@ -191,6 +313,14 @@
           Snapshots
         </a>
       </nav>
+      <button
+        class="bug-btn"
+        onclick={openBugReport}
+        aria-label="Report a bug"
+        data-tip="Report a bug"
+      >
+        <Icon name="bug_report" size={18} />
+      </button>
       <label class="auto-update-toggle" title="Automatically download and install updates on launch">
         <input type="checkbox" checked={autoUpdate} onchange={toggleAutoUpdate} />
         Auto-update
@@ -214,7 +344,7 @@
   </main>
   <footer>
     <button class="kofi" onclick={() => openUrl("https://ko-fi.com/bryanroscoe")}>
-      <Icon name="local_cafe" size={16} /> Enjoying Shield Optimizer? Support it on Ko-fi
+      <Icon name="local_cafe" size={16} /> Enjoying ATV Optimizer? Support it on Ko-fi
     </button>
   </footer>
 </div>
@@ -280,6 +410,45 @@
   </div>
 {/if}
 
+{#if bugOpen}
+  <div class="notes-backdrop" role="presentation" onclick={() => (bugOpen = false)}></div>
+  <div class="notes-dialog" role="dialog" aria-modal="true" aria-labelledby="bug-title">
+    <h2 id="bug-title">Report a bug</h2>
+    <p class="notes-current muted">
+      Nothing here is sent anywhere. Copy the text below and paste it into a GitHub issue.
+    </p>
+    <label class="bug-toggle">
+      <input type="checkbox" checked={debugLogging} onchange={toggleDebugLogging} />
+      Debug logging
+    </label>
+    <p class="bug-path muted mono">
+      {logPath ? `Logs: ${logPath}` : "Logs: (no log folder)"}
+    </p>
+    <textarea
+      class="bug-bundle mono"
+      readonly
+      aria-label="Diagnostics"
+      value={bugBusy ? "Collecting…" : bugBundle}
+    ></textarea>
+    {#if bugMessage}
+      <p class="bug-message muted">{bugMessage}</p>
+    {/if}
+    <div class="notes-actions">
+      <button onclick={copyBugBundle} disabled={bugBusy || !bugBundle}>
+        <Icon name="content_copy" size={14} /> {bugCopied ? "Copied" : "Copy"}
+      </button>
+      <button onclick={openLogsFolder}>
+        <Icon name="folder_open" size={14} /> Open logs folder
+      </button>
+      <span class="spacer"></span>
+      <button onclick={() => (bugOpen = false)}>Close</button>
+      <button class="primary" onclick={() => openUrl(ISSUE_URL)}>
+        Open GitHub issue <Icon name="open_in_new" size={14} />
+      </button>
+    </div>
+  </div>
+{/if}
+
 <style>
   .app {
     display: grid;
@@ -299,13 +468,6 @@
     align-items: center;
     gap: 0.6rem;
     font-weight: 600;
-  }
-  .logo-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--accent-strong);
-    box-shadow: 0 0 8px var(--accent-glow);
   }
   .title {
     font-size: 1.05rem;
@@ -419,6 +581,46 @@
   .notes-history {
     font-size: 0.85rem;
   }
+  /* Same shell as the release-notes dialog above; only the body differs. */
+  .bug-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.88rem;
+    cursor: pointer;
+  }
+  .bug-toggle input {
+    accent-color: var(--accent-strong);
+    cursor: pointer;
+  }
+  .bug-path {
+    margin: 0;
+    font-size: 0.76rem;
+    word-break: break-all;
+  }
+  .bug-bundle {
+    flex: 1;
+    min-height: 12rem;
+    resize: vertical;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    white-space: pre;
+    overflow: auto;
+  }
+  .bug-message {
+    margin: 0;
+    font-size: 0.8rem;
+  }
+  .bug-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.3rem;
+    color: var(--fg-secondary);
+  }
+  .bug-btn:hover {
+    color: var(--fg-primary);
+  }
   .update-badge {
     display: inline-flex;
     align-items: center;
@@ -441,6 +643,14 @@
   .update-badge.updating {
     cursor: default;
     opacity: 0.8;
+  }
+  /* Muted and inert: it is news, not an action. */
+  .update-badge.rolling {
+    cursor: default;
+    border-color: var(--border);
+    background: var(--bg-muted);
+    color: var(--fg-muted);
+    font-weight: 500;
   }
   .update-badge.installed {
     background: var(--accent-strong);

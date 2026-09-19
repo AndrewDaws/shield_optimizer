@@ -194,6 +194,8 @@
     return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
   }
 
+  const ISSUES_URL = "https://github.com/bryanroscoe/shield_optimizer/issues/new";
+
   async function openDownloadPage(url: string) {
     try {
       await openUrl(url);
@@ -395,7 +397,7 @@
          It is the answer to "what do I even install", so it should not be a
          thing you have to know to open. -->
     <aside class="sideload-rail">
-      <p class="rail-label">Suggested sideloads · {sideloadCatalog.length}</p>
+      <p class="rail-label">Popularly requested sideloads · {sideloadCatalog.length}</p>
       <ul class="catalog-list">
         {#each sideloadCatalog as entry (entry.package)}
           <li>
@@ -421,10 +423,11 @@
         {/each}
       </ul>
       <p class="muted small rail-note">
-        Apps people commonly install that aren't on the Play Store. Links go to the
-        official source only — download the APK there, then install it with the
-        buttons on the left. You're sideloading third-party software; check it's the
-        official release.
+        Apps people ask for that aren't on the Play Store; links go to the official
+        source only. Download there, then install with the buttons on the left.
+        <button class="link-button" onclick={() => openDownloadPage(ISSUES_URL)}>
+          Suggest one on GitHub
+        </button>
       </p>
     </aside>
   </div>
@@ -477,6 +480,17 @@
   }
   .rail-note {
     margin-top: 0.7rem;
+  }
+  /* Reads as the link it is, inside the sentence, rather than as a button
+     parked under it. */
+  .link-button {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
   }
   .saved-folder-head {
     display: flex;

@@ -134,14 +134,19 @@
 
   /// Do we positively know this is not an Android TV?
   ///
-  /// `detect_device_type` only falls through to Unknown when the device did
-  /// *not* report the `tv` characteristic — a TV we don't recognise still
-  /// self-reports and classifies as Google TV. So Unknown plus readable
-  /// properties means "definitely something else", such as a phone.
-  /// Properties we could not read (an unauthorized device) mean we don't know
-  /// yet, and we say nothing.
+  /// Only when the device said so: a `phone`/`tablet`/`watch` characteristic,
+  /// or a flat "no" to the leanback feature. This used to be inferred from
+  /// `device_type === "unknown"`, which answers a different question — "no
+  /// catalog match" — and so locked people out of perfectly ordinary TV boxes
+  /// that report something unusual (#120).
   function isNotATv(d: Device): boolean {
-    return d.device_type === "unknown" && d.properties !== null;
+    return d.tv_evidence === "not_tv";
+  }
+
+  /// Readable, and it never said either way. The tools open; the row is honest
+  /// about not knowing. A device we could not read at all claims nothing.
+  function isUnconfirmedTv(d: Device): boolean {
+    return d.tv_evidence === "unknown" && d.properties !== null;
   }
 
   function deviceHref(d: Device): string | null {
@@ -149,6 +154,37 @@
     // is at best useless. Still listed, just not opened.
     if (isNotATv(d)) return null;
     return d.status === "device" ? `/devices/${encodeURIComponent(d.serial)}` : null;
+  }
+
+  /// A control inside the row link. The row is the link, so its own actions
+  /// have to say so explicitly or every click navigates instead.
+  function rowAction(e: MouseEvent, run: () => void) {
+    e.preventDefault();
+    e.stopPropagation();
+    run();
+  }
+
+  let diagnosticsBusy = $state<string | null>(null);
+  let diagnosticsCopied = $state<string | null>(null);
+
+  /// Copy the bug-report bundle for one device. Offered exactly where it is
+  /// needed: a row the app cannot open, or one it is not sure about. Nothing
+  /// is sent anywhere — it goes to the clipboard and no further.
+  async function copyDiagnostics(d: Device) {
+    diagnosticsBusy = d.serial;
+    diagnosticsCopied = null;
+    connectMessage = "";
+    try {
+      const report = await api.collectDiagnostics(d.serial);
+      await navigator.clipboard.writeText(report);
+      diagnosticsCopied = d.serial;
+    } catch (e) {
+      // The clipboard can be refused; say so rather than silently doing
+      // nothing.
+      connectMessage = `Couldn't copy diagnostics for ${d.serial}: ${e}`;
+    } finally {
+      diagnosticsBusy = null;
+    }
   }
 
   /// What the authorization prompt is called on this device.
@@ -372,7 +408,7 @@
   <div class="install-pane">
     <h2>ADB not found on this system</h2>
     <p>
-      Shield Optimizer needs Android's <code>adb</code> binary to talk to your TV.
+      ATV Optimizer needs Android's <code>adb</code> binary to talk to your TV.
       We can download Google's official platform-tools and install them locally —
       no system-wide changes, just a self-contained copy under your app-data folder.
     </p>
@@ -416,6 +452,12 @@
                 <span class="device-status online">
                   <span class="status-dot" aria-hidden="true"></span> Online
                 </span>
+                {#if isUnconfirmedTv(d)}
+                  <span
+                    class="status-tag unconfirmed"
+                    data-tip="Didn't report itself as an Android TV; tools may not apply"
+                  >UNCONFIRMED TV</span>
+                {/if}
               </div>
               <div class="device-meta muted mono">
                 {d.serial} · {deviceTypeLabel(d.device_type)}
@@ -423,9 +465,38 @@
                 · {d.connection === "network" ? "network" : "usb"}
               </div>
             </div>
-            <!-- The whole row is the link, so a button inside it was a second
-                 target for the same action. A chevron says "this opens"
-                 without pretending to be separately clickable. -->
+            <!-- Row actions. They live inside the link, so each one has to
+                 stop the click reaching it — otherwise Forget would navigate
+                 to the device it just disconnected. -->
+            <span class="row-actions">
+              {#if isUnconfirmedTv(d)}
+                <button
+                  class="row-action"
+                  onclick={(e) => rowAction(e, () => copyDiagnostics(d))}
+                  disabled={diagnosticsBusy === d.serial}
+                  data-tip="Copies what this device reported — paste it into a bug report"
+                >
+                  {diagnosticsBusy === d.serial
+                    ? "Copying…"
+                    : diagnosticsCopied === d.serial
+                      ? "Copied"
+                      : "Copy diagnostics"}
+                </button>
+              {/if}
+              {#if d.connection === "network"}
+                <button
+                  class="row-action forget-btn"
+                  onclick={(e) => rowAction(e, () => forgetDevice(d))}
+                  disabled={forgetBusy === d.serial}
+                  data-tip="adb disconnect · removes this row, the TV is untouched"
+                  data-tip-align="end"
+                >
+                  {forgetBusy === d.serial ? "Forgetting…" : "Forget"}
+                </button>
+              {/if}
+            </span>
+            <!-- A chevron says "this opens" without pretending to be
+                 separately clickable. -->
             <span class="device-go" aria-hidden="true"><Icon name="chevron_right" size={28} /></span>
           </a>
         {:else}
@@ -443,6 +514,11 @@
                 {/if}
                 {#if isNotATv(d)}
                   <span class="status-tag not-a-tv">NOT AN ANDROID TV</span>
+                {:else if isUnconfirmedTv(d)}
+                  <span
+                    class="status-tag unconfirmed"
+                    data-tip="Didn't report itself as an Android TV; tools may not apply"
+                  >UNCONFIRMED TV</span>
                 {/if}
               </div>
               <div class="device-meta muted mono">
@@ -473,20 +549,37 @@
                 </div>
               {/if}
             </div>
-            <!-- Only for network transports: "forget" here is `adb disconnect`,
-                 and there is nothing to disconnect on USB. It removes the row,
+            <!-- A row the app will not open is exactly the row someone needs
+                 to report, so the bundle is one click away from it. "Forget"
+                 is `adb disconnect`: only for network transports, because
+                 there is nothing to disconnect on USB. It removes the row,
                  not the device — adding the address back brings it straight
                  home. -->
-            {#if d.connection === "network"}
+            <span class="row-actions">
               <button
-                class="forget-btn"
-                onclick={() => forgetDevice(d)}
-                disabled={forgetBusy !== null}
-                title="adb disconnect {d.serial} — removes this row; the TV itself is untouched"
+                class="row-action"
+                onclick={() => copyDiagnostics(d)}
+                disabled={diagnosticsBusy === d.serial}
+                data-tip="Copies what this device reported — paste it into a bug report"
               >
-                {forgetBusy === d.serial ? "Forgetting…" : "Forget"}
+                {diagnosticsBusy === d.serial
+                  ? "Copying…"
+                  : diagnosticsCopied === d.serial
+                    ? "Copied"
+                    : "Copy diagnostics"}
               </button>
-            {/if}
+              {#if d.connection === "network"}
+                <button
+                  class="row-action forget-btn"
+                  onclick={() => forgetDevice(d)}
+                  disabled={forgetBusy === d.serial}
+                  data-tip="adb disconnect · removes this row, the TV is untouched"
+                  data-tip-align="end"
+                >
+                  {forgetBusy === d.serial ? "Forgetting…" : "Forget"}
+                </button>
+              {/if}
+            </span>
           </div>
         {/if}
       </li>
@@ -593,17 +686,30 @@
   .device-status.online .status-dot {
     background: var(--ok);
   }
-  /* Lime, because it is the one thing on the row that does something. */
+  /* The row's own controls, pushed to the far end and kept clear of the
+     chevron. Secondary by design: the row itself is the primary action. */
+  .row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: none;
+    margin-left: auto;
+    align-self: flex-start;
+  }
+  .row-action {
+    flex: none;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.82rem;
+  }
   .forget-btn {
     flex: none;
-    align-self: flex-start;
     padding: 0.3rem 0.8rem;
     font-size: 0.82rem;
   }
   .device-go {
     display: inline-flex;
     flex: none;
-    margin-left: auto;
+    margin-left: 0.6rem;
     color: var(--accent);
   }
   a.device-row:hover .device-go {
@@ -663,6 +769,13 @@
   .status-tag.not-a-tv {
     background: var(--bg-muted);
     color: var(--fg-faint);
+  }
+  /* Amber: a caveat, not a refusal. The row still opens — this says only that
+     the device never confirmed what it is, so a tool may not land. */
+  .status-tag.unconfirmed {
+    background: var(--warn-surface-2);
+    color: var(--warn);
+    white-space: nowrap;
   }
   .device-meta {
     font-size: 0.82rem;

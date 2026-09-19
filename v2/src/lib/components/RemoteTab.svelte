@@ -204,14 +204,10 @@
     <div class="remote-typing">
       <div class="typing-header">
         <h3>Live typing</h3>
-        <button class="small-action primary" onclick={pasteFromClipboard} title="Send the clipboard to the TV">
-          <Icon name="content_paste" size={14} /> Paste
-        </button>
       </div>
       <p class="muted small">
-        Click below and type — keystrokes go straight to whatever field has
-        focus on the TV, including Backspace and Enter. You can paste too
-        (⌘V / Ctrl+V), which is easier for a long URL or password.
+        Click the box and type; keystrokes go to whatever has focus on the TV.
+        ⌘V / Ctrl+V pastes.
       </p>
       <div
         class="type-capture"
@@ -224,6 +220,17 @@
         onfocus={() => (remoteCaptureFocused = true)}
         onblur={() => (remoteCaptureFocused = false)}
       >
+        <!-- Inside the box, because pasting is a thing you do *to* this box.
+             `preventDefault` on mousedown keeps the click from pulling focus
+             off the capture — otherwise pasting would end the typing session
+             it exists to serve. -->
+        <button
+          class="small-action paste-action"
+          onclick={pasteFromClipboard}
+          onmousedown={(e) => e.preventDefault()}
+          data-tip="Send the clipboard to the TV"
+          data-tip-align="end"
+        ><Icon name="content_paste" size={13} /> Paste</button>
         {#if remoteEcho}
           <span class="mono">{remoteEcho}</span><span class="caret">▏</span>
         {:else if remoteCaptureFocused}
@@ -393,13 +400,23 @@
   .type-capture {
     /* Five lines, so a pasted URL or a multi-line paste has somewhere to go
        and the column reads as a surface rather than a single input. */
+    position: relative;
     min-height: 9rem;
     overflow-wrap: anywhere;
     padding: 0.8rem;
+    /* Room for the Paste button in the corner so the echo never runs under it. */
+    padding-right: 5.2rem;
     border: 1px dashed var(--border);
     border-radius: var(--radius-md);
     cursor: text;
     background: var(--bg-inset);
+  }
+  .paste-action {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    padding: 0.15rem 0.45rem;
+    font-size: 0.72rem;
   }
   .type-capture.focused {
     border-style: solid;

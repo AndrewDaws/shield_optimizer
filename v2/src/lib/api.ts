@@ -226,6 +226,15 @@ export const api = {
   setPrivateDns: (serial: string, mode: string, hostname: string | null = null) =>
     invoke<PrivateDnsResult>("set_private_dns", { serial, mode, hostname }),
 
+  /// The bug-report bundle. Returns text; nothing is sent anywhere.
+  collectDiagnostics: (serial: string | null = null) =>
+    invoke<string>("collect_diagnostics", { serial }),
+  getDebugLogging: () => invoke<boolean>("get_debug_logging"),
+  setDebugLogging: (enabled: boolean) =>
+    invoke<boolean>("set_debug_logging", { enabled }),
+  logDirPath: () => invoke<string>("log_dir_path"),
+  openLogDir: () => invoke<void>("open_log_dir"),
+
   prepareOptimize: (serial: string, deviceType: DeviceType, mode: OptimizeMode) =>
     invoke<OptimizePlan>("prepare_optimize", { serial, deviceType, mode }),
   applyPerformanceSettings: (serial: string, profile: PerformanceProfile) =>
