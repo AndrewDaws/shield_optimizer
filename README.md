@@ -1,4 +1,4 @@
-# Shield Optimizer
+# ATV Optimizer
 
 Debloat and tune Android TV devices — disable bloat, switch launchers, sideload APKs, tweak HDMI-CEC and frame-rate matching, and pull health reports. Works on **Nvidia Shield TV, Onn 4K Pro, Chromecast with Google TV, Google TV Streamer**, and other Android TV devices. Every change is reversible.
 
@@ -29,16 +29,18 @@ The first time the tool connects, your TV shows an **"Allow debugging?"** prompt
 
 # v2 — Desktop app (recommended)
 
-<img alt="Shield Optimizer v2 walkthrough (dark)" src="v2/screenshots/gallery.gif" />
+<img alt="ATV Optimizer v2 walkthrough (dark)" src="v2/screenshots/gallery.gif" />
 
 <details>
 <summary>Light theme</summary>
 
-<img alt="Shield Optimizer v2 walkthrough (light)" src="v2/screenshots/gallery-light.gif" />
+<img alt="ATV Optimizer v2 walkthrough (light)" src="v2/screenshots/gallery-light.gif" />
 
 </details>
 
 A native desktop app — no PowerShell, no terminal, no scripting. It bundles its own `adb` (auto-downloaded on first launch), scans your network for devices on startup, and walks you through everything with a GUI. Dark and light themes with a Light / Dark / Auto toggle.
+
+> **Renamed:** the desktop app is now **ATV Optimizer** (it was Shield Optimizer). Same app, same settings, same update channel — only the name and icon changed. The Homebrew tap and cask are still `bryanroscoe/shield-optimizer` / `shield-optimizer`, so `brew upgrade` keeps working. macOS users who installed from the `.dmg` will still have the old `Shield Optimizer.app` until they reinstall; it is safe to drag to the Trash afterwards.
 
 ## Install
 
@@ -65,9 +67,9 @@ Grab the latest from the [**Releases page**](https://github.com/bryanroscoe/shie
 
 These builds aren't code-signed yet, so your OS may warn on first launch. One-time dismissal:
 
-- **macOS** (if you used the `.dmg` instead of Homebrew): the macOS 15+ dialog only offers *Move to Trash* / *Done*. Click **Done**, then run `xattr -dr com.apple.quarantine "/Applications/Shield Optimizer.app"`, **or** go to System Settings → Privacy & Security → **Open Anyway**. (Homebrew installs skip this entirely.)
+- **macOS** (if you used the `.dmg` instead of Homebrew): the macOS 15+ dialog only offers *Move to Trash* / *Done*. Click **Done**, then run `xattr -dr com.apple.quarantine "/Applications/ATV Optimizer.app"`, **or** go to System Settings → Privacy & Security → **Open Anyway**. (Homebrew installs skip this entirely.)
 - **Windows** (SmartScreen): **More info → Run anyway**.
-- **Linux**: `chmod +x Shield*.AppImage` before running the AppImage.
+- **Linux**: `chmod +x ATV.Optimizer*.AppImage` before running the AppImage.
 
 ## Using it
 

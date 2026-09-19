@@ -1,4 +1,4 @@
-# Changelog — Shield Optimizer v2
+# Changelog — ATV Optimizer v2
 
 This file is the authoring surface for v2 release notes. The release workflow
 (`.github/workflows/v2-release.yml`) looks for a section matching the tag
@@ -16,6 +16,79 @@ Tag conventions:
 When you add a new section, put it at the top; older releases go below.
 
 ---
+
+## v2-2.3.0
+
+### Renamed to ATV Optimizer
+
+- **The desktop app is now called ATV Optimizer** — same app, new name and a new
+  lime TV icon that matches the mobile companion. Nothing under the hood moved:
+  the application identifier (`com.shieldoptimizer.app`), the `ShieldOptimizer`
+  data folder holding your snapshots and downloaded platform-tools, and the
+  auto-update channel are all unchanged, so this arrives as an ordinary update
+  and your saved devices and snapshots are exactly where they were.
+- **Windows** upgrades in place: the installer's upgrade code is pinned to the
+  one the old name derived, so the MSI replaces the existing install rather than
+  asking you to uninstall first.
+- **macOS**: Homebrew users get the renamed bundle on the next
+  `brew upgrade --cask shield-optimizer` (the tap and cask names are unchanged).
+  If you installed from the `.dmg`, the app you already have keeps the filename
+  `Shield Optimizer.app` until you reinstall from this release's DMG — after
+  that you can drag the old `Shield Optimizer.app` to the Trash.
+- **Linux**: the AppImage / `.deb` / `.rpm` filenames now start with
+  `ATV.Optimizer` instead of `Shield.Optimizer`.
+
+### Fixed
+
+- **A real Android TV was refused as "Not an Android TV"**
+  ([#120](https://github.com/bryanroscoe/shield_optimizer/issues/120)). 2.2.0 decided
+  from one property (`ro.build.characteristics`) and treated its absence as proof. The
+  app now also asks for the `android.software.leanback` feature, and only calls a device
+  "not a TV" when it positively says it is a phone, tablet, watch, car or emulator.
+  Anything in between opens normally with an "Unconfirmed TV" tag.
+- **Dead-end "Update available" badge after every release**
+  ([#119](https://github.com/bryanroscoe/shield_optimizer/issues/119)). The GitHub-API
+  check no longer drives a clickable badge; only the in-app updater does. While a
+  release is propagating the header says "rolling out" and nothing more.
+- **Optimize showed "Safety unavailable" on apps that were already disabled.** The tab
+  never asked for their verdict. Every installed row is checked now, so a disabled
+  Live Channels Provider reads Caution, as it does on the App List.
+- **Shell's Run button ignored the acknowledgement tick.** The tick was re-read from
+  storage after every inventory load and, for a TV with no readable hardware id, never
+  stored at all. It is resolved once per device, falls back to the address as the key
+  when that is all we have, and a disabled Run now says why on hover.
+- **Icons sat below their labels** in every button and heading. One global rule fixes
+  all of them, and a new test measures every icon-bearing control on every screen.
+
+### Added
+
+- **Report a bug** (the bug icon in the header): a diagnostics bundle you can copy or
+  paste into a GitHub issue, with app/OS/adb versions, the selected TV's properties
+  and TV evidence, its Home handlers, and the tail of the app log. Nothing is sent
+  automatically. A **Debug logging** switch raises the log level for adb calls; logs
+  live in the app data folder under `logs/` (Open logs folder is in the same dialog).
+- **Copy diagnostics** on any device row the app cannot confirm or open.
+- **Monet Launcher** ([#121](https://github.com/bryanroscoe/shield_optimizer/issues/121))
+  in the Launcher tab. The launcher catalog now lives in `launchers.json`, each custom
+  launcher has a Get link to its source, leanback-only launchers are discovered too,
+  and the tab links to the issue tracker for the next request.
+- **Forget** on every network device row, not only unreachable ones.
+
+### Changed
+
+- Health: Swap is a headline figure like CPU and Temperature, CPU has a meter, and
+  Temperature is coloured by tier with a plain-words tooltip on each.
+- App List and Optimize rows: the disclosure chevron sits at the left and the whole row
+  toggles the detail. Optimize's per-row action is a radio group with the plan's choice
+  labelled, and the header walks through review-then-run.
+- Every hover hint is instant and short; the long explanations moved into the detail
+  panels.
+- Remote: Paste sits inside the typing box; the explanation is one sentence.
+- Install APK: the rail is "Popularly requested sideloads" with a link to suggest more.
+- Catalog descriptions for 52 entries now say what the component does and what
+  disabling changes, instead of naming it.
+
+<!-- more entries below -->
 
 ## v2-2.2.0
 

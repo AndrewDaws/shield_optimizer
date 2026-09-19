@@ -1,13 +1,13 @@
-# Shield Optimizer v2
+# ATV Optimizer v2 (formerly Shield Optimizer)
 
 A ground-up rewrite of Shield Optimizer as a **native installable desktop app** with **built-in auto-update** and a **mobile companion** (`mobile/`) — replacing the v1 PowerShell script while preserving every behavior catalogued in [`docs/FEATURES.md`](../docs/FEATURES.md).
 
-<img alt="Shield Optimizer v2 walkthrough (dark)" src="screenshots/gallery.gif" />
+<img alt="ATV Optimizer v2 walkthrough (dark)" src="screenshots/gallery.gif" />
 
 <details>
 <summary>Light theme</summary>
 
-<img alt="Shield Optimizer v2 walkthrough (light)" src="screenshots/gallery-light.gif" />
+<img alt="ATV Optimizer v2 walkthrough (light)" src="screenshots/gallery-light.gif" />
 
 </details>
 
