@@ -492,3 +492,9 @@ textarea:focus-visible {
   right: 0;
   transform: none;
 }
+/* Controls in the top bar have no room above them — the tooltip left the
+   window. These open downward instead. */
+[data-tip][data-tip-side="bottom"]::after {
+  bottom: auto;
+  top: calc(100% + 6px);
+}

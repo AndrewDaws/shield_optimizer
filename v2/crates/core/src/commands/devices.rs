@@ -411,7 +411,12 @@ async fn harvest_properties(adb: &dyn AdbDriver, serial: &str) -> Result<DeviceP
         .shell(serial, &cmd)
         .await
         .map_err(|e| format!("device profile: {e}"))?;
-    if out.stdout.trim().is_empty() || out.exit_code.is_some_and(|code| code != 0) {
+    // A batch reports only its LAST command's exit code, and the last read is
+    // `pm has-feature`, which exits 1 to say "no" — that is an answer, not a
+    // failure. A phone answered every question here and was refused for it.
+    // Sections that did not print degrade to empty values on their own, so
+    // the only real failure is a shell that produced nothing at all.
+    if out.stdout.trim().is_empty() {
         return Err(format!(
             "device profile unavailable: {}",
             out.combined().trim()
@@ -636,6 +641,51 @@ mod tests {
         assert_eq!(props.leanback, None);
         let yes = vec!["true".to_string(); PROPERTY_READS.len()];
         assert_eq!(properties_from_sections(&yes).leanback, Some(true));
+    }
+
+    #[tokio::test]
+    async fn a_device_that_answers_no_to_leanback_is_still_profiled() {
+        // The live regression: a batch reports only its last command's exit
+        // code, and the last read is `pm has-feature`, which exits 1 to say
+        // "no". A Pixel that answered every question was refused with
+        // "adb process failed (exit code Some(1))". The exit code carries no
+        // information about the reads that came before it.
+        let mock = MockAdb::default().on_shell_exit(
+            "settings get global device_name",
+            &batched_props(&[
+                "Bryan's Pixel",
+                "google",
+                "Pixel 8",
+                "shiba",
+                "Google",
+                "15",
+                "35",
+                "AP4A",
+                "zuma",
+                "",
+                "58040DLCH005YV",
+                "false",
+            ]),
+            1,
+        );
+
+        let props = harvest_properties(&mock, "58040DLCH005YV").await.unwrap();
+
+        assert_eq!(props.leanback, Some(false));
+        assert_eq!(props.brand, "google");
+        assert_eq!(props.model, "Pixel 8");
+        assert_eq!(props.serial_number, "58040DLCH005YV");
+    }
+
+    #[tokio::test]
+    async fn a_shell_that_prints_nothing_is_still_a_failure() {
+        let mock = MockAdb::default().on_shell_exit("settings get global device_name", "", 1);
+
+        let err = harvest_properties(&mock, "58040DLCH005YV")
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("device profile unavailable"), "{err}");
     }
 
     #[tokio::test]

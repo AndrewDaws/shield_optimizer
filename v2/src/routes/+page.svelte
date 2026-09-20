@@ -591,8 +591,8 @@
   <div class="callout devices-note">
     <Icon name="info" size={16} />
     <span>
-      Pairing keys are stored locally, on this computer. Every other screen needs a
-      selected TV — this is the only one that works without one.
+      Click a TV to open its tools. Everything runs over ADB from this computer;
+      nothing is sent anywhere else.
     </span>
   </div>
 {/if}

@@ -298,6 +298,7 @@
           <span
             class="update-badge rolling"
             data-tip="The in-app updater will offer it within a few minutes"
+            data-tip-side="bottom"
           >
             v{update.latest} rolling out
           </span>
@@ -318,6 +319,7 @@
         onclick={openBugReport}
         aria-label="Report a bug"
         data-tip="Report a bug"
+        data-tip-side="bottom"
       >
         <Icon name="bug_report" size={18} />
       </button>
