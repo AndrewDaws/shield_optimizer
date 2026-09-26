@@ -2,6 +2,11 @@
   import type { Snippet } from "svelte";
   import type { AppUsage, Safety } from "$lib/types";
   import { safetySourceLabel } from "../../../shared/safety";
+  import {
+    safetyLabel as sharedSafetyLabel,
+    safetyReason as sharedSafetyReason,
+    statusOf,
+  } from "$lib/safety";
   import StateBadge from "$lib/components/StateBadge.svelte";
   import RamBadge from "$lib/components/RamBadge.svelte";
   import UsageBadge from "$lib/components/UsageBadge.svelte";
@@ -82,13 +87,10 @@
     onToggleDetail?.();
   }
 
+  let lookup = $derived(statusOf(safetyStatus, safety, safetyUnavailableReason));
+
   function safetyLabel(): string {
-    if (safetyStatus === "checking") return "Checking safety";
-    if (safetyStatus !== "ready" || !safety) return "Safety unavailable";
-    if (safety.kind === "never_disable") return "Protected";
-    if (safety.kind === "caution") return "Caution";
-    if (safety.kind === "safe") return "Safe";
-    return "Unknown";
+    return sharedSafetyLabel(lookup);
   }
 
   function safetyClass(): string {
@@ -115,11 +117,7 @@
   }
 
   function safetyReason(): string {
-    if (safetyStatus === "checking") return "Checking whether this is safe to remove…";
-    if (safetyStatus !== "ready" || !safety) {
-      return "Safety information is unavailable. Retry before disabling or uninstalling.";
-    }
-    return safety.reason;
+    return sharedSafetyReason(lookup);
   }
 
   let pkgCopied = $state(false);
@@ -193,7 +191,10 @@
   <!-- Verdict AND where it came from, as the board has it. A bare chip makes
        "we rated this" and "we have never seen it" look identical; the source
        line is the difference. Click still opens the full reason. -->
-  <td class={`verdict-cell safety-${safetyClass()}`}>
+  <td
+    class={`verdict-cell safety-${safetyClass()}`}
+    data-verdict={lookup.status === "ready" ? lookup.verdict.kind : lookup.status}
+  >
     <!-- Still a button: the verdict is the thing you came to read, so it opens
          the reason too. The caret it used to carry now lives in its own column
          at the head of the row. -->
@@ -570,6 +571,12 @@
   }
   /* Review rows awaiting a human call: full opacity (unlike other skipped
      rows) + a warn accent bar — the wizard wants eyes here. */
+  tr.review-flag {
+    background: var(--warn-surface);
+  }
+  tr.review-flag:hover {
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+  }
   tr.review-flag td:first-child {
     box-shadow: inset 3px 0 0 var(--warn);
   }

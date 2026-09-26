@@ -25,7 +25,22 @@
   import { deviceTypeLabel } from "$lib/types";
   import { getKeptPackages, setPackageKept, getShellAcknowledged, setShellAcknowledged } from "$lib/prefs";
   import Icon from "$lib/components/Icon.svelte";
-  import { isBlocked, safetyClass, type SafetyStatus } from "$lib/safety";
+  import {
+    isBlocked,
+    safetyClass,
+    safetyLabel,
+    safetyReason,
+    verdictLabel,
+    type SafetyStatus,
+  } from "$lib/safety";
+  import {
+    canOfferUninstall,
+    isReinstallable,
+    recommendation,
+    sideloadSource,
+    uninstallNote,
+    type Recommendation,
+  } from "$lib/recommendation";
   import AppRow from "$lib/components/AppRow.svelte";
   import FilesTab from "$lib/components/FilesTab.svelte";
   import TweaksTab from "$lib/components/TweaksTab.svelte";
@@ -114,18 +129,14 @@
 
   /// Safety for one row of the memory report.
   ///
-  /// Confirming the name against the installed list is allowed to make a
-  /// verdict *more* cautious, never less. An app can declare
-  /// `android:process` as any string — including another package's name — so
-  /// a matching name is strong evidence of ownership but not proof. Being
-  /// wrong about Protected or Caution costs a needless warning; being wrong
-  /// about Safe tells someone it is fine to remove something on the strength
-  /// of a string, which is the one claim this app must never make from an
-  /// unverified name. tests/memory-safety.mjs pins that.
+  /// A name the device reports as an installed package gets that package's
+  /// verdict — the same one the App List shows, so the two screens cannot
+  /// disagree about one app. A name we cannot tie to an installed package
+  /// stays a process: catalog-free classification only, and it is shown as
+  /// "Not an app" rather than as a verdict. tests/memory-safety.mjs pins that
+  /// an unverified name never reads as Safe to remove.
   async function memorySafetyFor(pkg: string, installed: Set<string>): Promise<Safety> {
-    if (!installed.has(pkg)) return api.processSafetyInfo(pkg);
-    const verdict = await api.safetyInfo(pkg);
-    return verdict.kind === "safe" ? api.processSafetyInfo(pkg) : verdict;
+    return installed.has(pkg) ? api.safetyInfo(pkg) : api.processSafetyInfo(pkg);
   }
 
   function capturePageContext(): PageContext {
@@ -134,34 +145,6 @@
 
   function pageContextIsCurrent(context: PageContext): boolean {
     return !destroyed && context.serial === serial && context.epoch === pageEpoch;
-  }
-
-  /// One word for a verdict kind. Kept separate from `safetyLabel` because the
-  /// confirm dialogs have a bare `Safety` value, not a load status.
-  function safetyKindLabel(kind: Safety["kind"]): string {
-    if (kind === "never_disable") return "Protected";
-    if (kind === "caution") return "Caution";
-    if (kind === "safe") return "Safe";
-    return "Unknown";
-  }
-
-  function safetyLabel(safety: SafetyStatus | undefined): string {
-    if (!safety || safety.status === "unavailable") return "Unavailable";
-    if (safety.status === "checking") return "Checking";
-    if (safety.verdict.kind === "never_disable") return "Protected";
-    if (safety.verdict.kind === "caution") return "Caution";
-    // This function feeds the memory table AND "Everything else". Process rows
-    // never produce `safe`, but package rows do — without this branch a package
-    // we reviewed and vouched for was displayed as "Unknown".
-    if (safety.verdict.kind === "safe") return "Safe";
-    return "Unknown";
-  }
-
-  function safetyReason(safety: SafetyStatus | undefined): string {
-    if (!safety) return "Safety lookup has not completed.";
-    if (safety.status === "checking") return "Safety lookup is in progress.";
-    if (safety.status === "unavailable") return `Safety lookup failed: ${safety.reason}`;
-    return safety.verdict.reason;
   }
 
   let renaming = $state(false);
@@ -859,8 +842,30 @@
         appActionMessage = `${pkg}: safety changed. Refresh and review before ${action}.`;
         return;
       }
+      // A sideload the store cannot give back: offer the backup before the
+      // uninstall, while there is still something to back up.
+      const sideload = action === "uninstall" ? sideloadSource(pkg) : null;
+      if (sideload && confirm(
+        `Back up ${name}'s APK before uninstalling it?\n\n${name} isn't on the Play Store. To get it back you would reinstall it from ${sideload.url}. A backup keeps this exact version.\n\nOK: choose a folder and back it up first.\nCancel: continue without a backup.`,
+      )) {
+        const folder = await openDialog({ directory: true, title: `Choose a folder for the ${name} APK backup` });
+        if (!folder) {
+          appActionMessage = `${pkg}: backup cancelled — nothing was uninstalled.`;
+          return;
+        }
+        const backup = await api.backupApk(context.serial, pkg, folder as string);
+        if (!pageContextIsCurrent(context)
+          || request !== mutationRequest
+          || !removalSourceIsCurrent(source, pkg, inventoryVersion)) return;
+        if (!backup.ok) {
+          appActionMessage = `${pkg}: backup failed, so nothing was uninstalled — ${backup.message}`;
+          return;
+        }
+      }
+      const entry = apps.find((a) => a.package === pkg) ?? null;
+      const note = action === "uninstall" ? uninstallNote(pkg, entry) : null;
       const approved = confirm(
-        `${action.toUpperCase()} ${name}\nPackage: ${pkg}\nSafety: ${safetyKindLabel(before.safety.kind)}\nReason: ${before.safety.reason}\n\nProceed?`,
+        `${action.toUpperCase()} ${name}\nPackage: ${pkg}\nSafety: ${verdictLabel(before.safety)}\nReason: ${before.safety.reason}${note ? `\n\n${note}` : ""}\n\nProceed?`,
       );
       if (!approved
         || !pageContextIsCurrent(context)
@@ -987,54 +992,40 @@
     }
   }
 
-  type Recommendation =
-    | { kind: "done"; label: string }
-    | { kind: "act"; label: string; action: "disable" | "uninstall" }
-    | { kind: "review"; label: string; action: "disable" | "uninstall" }
-    | { kind: "restore"; label: string }
-    | { kind: "unavailable"; label: string }
-    | { kind: "keep" };
+  /// What Health's Suggestion column says for one memory row. An installed
+  /// catalog app gets exactly the App List's recommendation — same function,
+  /// same inputs — so the two screens cannot disagree. Another installed
+  /// package gets its verdict. A name no installed package carries is a
+  /// process, and a process is not something you remove.
+  type MemorySuggestion =
+    | { kind: "recommendation"; rec: Recommendation }
+    | { kind: "verdict"; status: SafetyStatus | undefined }
+    | { kind: "process"; status: SafetyStatus | undefined };
 
-  /// The action actually safe to offer — mirrors the engine's AppEntry::
-  /// safe_method: never uninstall an app you can't get back (not on the Play
-  /// Store and not defunct), downgrade to the reversible disable instead.
-  function effectiveMethod(a: AppEntry): "disable" | "uninstall" {
-    return a.method === "uninstall" && !(a.play_store || a.defunct) ? "disable" : a.method;
+  function memorySuggestion(pkg: string): MemorySuggestion {
+    if (!memoryConfirmed.has(pkg)) return { kind: "process", status: memorySafety[pkg] };
+    // Until the catalog lands we cannot tell a catalog app from any other
+    // package, and a verdict that flips to a recommendation a second later
+    // is a column that cannot be trusted at a glance.
+    if (!appsLoaded) return { kind: "verdict", status: { status: "checking" } };
+    const entry = apps.find((a) => a.package === pkg);
+    if (entry) {
+      return {
+        kind: "recommendation",
+        rec: recommendation(entry, appStates[pkg] ?? null, packageSafety[pkg]),
+      };
+    }
+    return { kind: "verdict", status: memorySafety[pkg] };
   }
 
-  /// What the wizard would suggest for this row, given its current on-device
-  /// state. `act` = a recommended (default) action. `review` = a "remove if you
-  /// don't use it" candidate (optional, never a default). `restore` = the app
-  /// is gone and would be brought back. `done`/`keep` = nothing to do.
-  function recommendation(a: AppEntry, state: PackageState | null, safety: SafetyStatus | undefined): Recommendation {
-    if (state === null) return { kind: "unavailable", label: "State unavailable" };
-    if (state === "missing") {
-      if (a.default_restore) return { kind: "restore", label: "Reinstall" };
-      if (a.default_optimize && a.method === "uninstall") return { kind: "done", label: "Already uninstalled" };
-      return { kind: "keep" };
-    }
-    const method = effectiveMethod(a);
-    if (safety?.status !== "ready") return { kind: "unavailable", label: "Safety unavailable" };
-    if (isBlocked(safety.verdict)) return { kind: "done", label: "Protected" };
-    if (safety.verdict.kind === "unknown") {
-      return state === "enabled"
-        ? { kind: "review", label: `${method === "disable" ? "Disable" : "Remove"} after review`, action: method }
-        : { kind: "keep" };
-    }
-    if (a.default_optimize) {
-      if (method === "disable") {
-        return state === "disabled"
-          ? { kind: "done", label: "Already disabled" }
-          : { kind: "act", label: "Disable", action: "disable" };
-      }
-      return { kind: "act", label: "Uninstall", action: "uninstall" };
-    }
-    if (a.review && state === "enabled") {
-      return method === "disable"
-        ? { kind: "review", label: "Disable if unused", action: "disable" }
-        : { kind: "review", label: "Remove if unused", action: "uninstall" };
-    }
-    return { kind: "keep" };
+  /// Open the App List on exactly this package.
+  function openInAppList(pkg: string) {
+    appSearch = pkg;
+    hideNotInstalled = false;
+    hideDecided = false;
+    showSystemOthers = true;
+    expandedSafety = pkg;
+    activeTab = "apps";
   }
 
   function applyRecommendation(pkg: string, action: "disable" | "uninstall") {
@@ -2081,22 +2072,31 @@
         <div class="card health-memory">
           <h2><Icon name="memory" size={20} /> Top memory users</h2>
         <p class="muted small consumers-note">
-          Rows whose name matches an installed package are classified against the
-          reviewed app list. The rest are process names we cannot tie to an app,
-          so only the protected and caution rules apply to them. Inspection only
-          — nothing here can be disabled from this table.
+          The suggestion for an app is the same one the App List gives it —
+          click a row to open it there. Names we cannot tie to an installed
+          package are processes, not apps, and there is nothing to remove.
         </p>
         {#if report.top_memory.length === 0}
           <p class="muted">No process data.</p>
         {:else}
           <table class="mem-table">
             <thead>
-              <tr><th>Memory</th><th>Process</th><th class="center">Safety</th></tr>
+              <tr><th>Memory</th><th>Process</th><th class="center">Suggestion</th></tr>
             </thead>
             <tbody>
               {#each report.top_memory as m}
-                {@const safety = memorySafety[m.package]}
-                <tr>
+                {@const suggestion = memorySuggestion(m.package)}
+                {@const lookup = suggestion.kind === "recommendation" ? packageSafety[m.package] : suggestion.status}
+                {@const isApp = suggestion.kind !== "process"}
+                <!-- The package name is the keyboard target; the row click is a
+                     larger mouse target for the same thing. -->
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                <tr
+                  class:mem-row-link={isApp}
+                  data-package={m.package}
+                  onclick={isApp ? () => openInAppList(m.package) : undefined}
+                >
                   <td
                     class="num"
                     class:warn={m.mb >= 200}
@@ -2105,16 +2105,34 @@
                     {m.mb.toFixed(1)} MB
                   </td>
                   <td class="pkg">
-                    {m.package}
-                    {#if !memoryConfirmed.has(m.package)}
+                    {#if isApp}
+                      <button
+                        class="mem-open"
+                        onclick={(e) => { e.stopPropagation(); openInAppList(m.package); }}
+                        data-tip="Open in the App List"
+                      >{m.package}</button>
+                    {:else}
+                      {m.package}
                       <span
                         class="unconfirmed"
-                        title="No installed package has this name, so this is a process we cannot tie to an app. Its verdict comes from the protected and caution rules only — the reviewed app list is not applied to unverified names."
+                        title="No installed package has this name, so this is a process we cannot tie to an app. The reviewed app list is not applied to unverified names."
                       >not a package</span>
                     {/if}
                   </td>
-                  <td class="center" title={safetyReason(safety)}>
-                    <span class={safetyClass(safety)}>{safetyLabel(safety)}</span>
+                  <td
+                    class="center suggestion-cell"
+                    data-suggestion={suggestion.kind}
+                    data-verdict={lookup?.status === "ready" ? lookup.verdict.kind : (lookup?.status ?? "unavailable")}
+                    title={safetyReason(lookup)}
+                  >
+                    {#if suggestion.kind === "recommendation"}
+                      {@const kept = keptPackages.has(m.package) && !["act", "review", "restore"].includes(suggestion.rec.kind)}
+                      <span class={`suggestion suggestion--${kept ? "keep" : suggestion.rec.kind}`}>{kept ? "Kept" : suggestion.rec.label}</span>
+                    {:else if suggestion.kind === "process"}
+                      <span class="suggestion suggestion--keep">Not an app</span>
+                    {:else}
+                      <span class={safetyClass(lookup)}>{safetyLabel(lookup)}</span>
+                    {/if}
                   </td>
                 </tr>
               {/each}
@@ -2444,6 +2462,7 @@
                       onclick={() => applyRecommendation(a.package, rec.action)}
                       disabled={appActionBusy === a.package || appMutationInFlight}
                       title={a.optimize_description}
+                      data-rec={rec.label}
                     >
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
@@ -2454,6 +2473,7 @@
                       onclick={() => applyRecommendation(a.package, rec.action)}
                       disabled={appActionBusy === a.package || appMutationInFlight}
                       data-tip="Check the last-used cue, then act if you don't use it"
+                      data-rec={rec.label}
                     >
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
@@ -2463,6 +2483,7 @@
                       onclick={() => reinstallApp(a.package)}
                       disabled={appActionBusy === a.package || appMutationInFlight}
                       data-tip="Reinstalls a system app still present on /system"
+                      data-rec={rec.label}
                     >
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
@@ -2470,22 +2491,22 @@
                     <!-- The user's own decision, shown exactly like "already
                          disabled": grey, because a decided row should recede.
                          Never teal or lime — those mean verdict and action. -->
-                    <span class="muted small done"><Icon name="check" size={14} /> Kept</span>
+                    <span class="muted small done" data-rec="Kept"><Icon name="check" size={14} /> Kept</span>
                     <button
                       class="small-action subtle change-keep"
                       onclick={() => toggleKept(a.package)}
                       data-tip="Undo keeping this app"
                     >Change</button>
                   {:else if rec.kind === "done"}
-                    <span class="muted small done"><Icon name="check" size={14} /> {rec.label}</span>
+                    <span class="muted small done" data-rec={rec.label}><Icon name="check" size={14} /> {rec.label}</span>
                   {:else if rec.kind === "unavailable"}
-                    <span class="muted small">{rec.label} — refresh to retry</span>
+                    <span class="muted small" data-rec={rec.label}>{rec.label} — refresh to retry</span>
                   {:else}
                     <!-- No recommendation. This used to read "Keep", which now
                          collides with the Keep button one column over: the same
                          word meant both "we suggest keeping it" and "I have
                          decided to keep it". -->
-                    <span class="muted small">No change needed</span>
+                    <span class="muted small" data-rec={rec.label}>{rec.label}</span>
                   {/if}
 
                   {#if !keptPackages.has(a.package) && state === "enabled" && (rec.kind === "act" || rec.kind === "review")}
@@ -2502,6 +2523,18 @@
                       disabled={appActionBusy === a.package || appMutationInFlight}
                       data-tip="pm disable-user --user 0"
                     >Disable</button>
+                  {/if}
+                  <!-- A sideload whose source we can name. The store can't give
+                       it back, so the confirm names where it comes from and
+                       offers an APK backup first. A preinstalled app with no
+                       store listing never gets this button. -->
+                  {#if canRemove && !isReinstallable(a) && canOfferUninstall(a) && !((rec.kind === "act" || rec.kind === "review") && rec.action === "uninstall")}
+                    <button
+                      class="small-action subtle danger"
+                      onclick={() => uninstallApp(a.package)}
+                      disabled={appActionBusy === a.package || appMutationInFlight}
+                      data-tip={`Not on the Play Store — reinstall from ${sideloadSource(a.package)?.name ?? "its source"}`}
+                    >Uninstall</button>
                   {/if}
                   {#if state === "disabled"}
                     <button
@@ -2619,6 +2652,7 @@
                   {@const canRemove = othersLoaded && safety?.status === "ready" && !isBlocked(safety.verdict)}
                   <AppRow
                     name={o.name ?? o.package}
+                    description={o.description ?? undefined}
                     package={o.package}
                     state={o.enabled ? "enabled" : "disabled"}
                     mb={appMemory[o.package]}
@@ -3292,6 +3326,64 @@
   .mem-table .pkg {
     max-width: 0;
     overflow-wrap: anywhere;
+  }
+  /* Memory and Suggestion shrink to their content so the package id gets the
+     rest; otherwise the spare width went to the pills and the id broke mid-word. */
+  .mem-table td.num,
+  .mem-table td.suggestion-cell,
+  .mem-table th:first-child,
+  .mem-table th:last-child {
+    width: 1%;
+    white-space: nowrap;
+  }
+  .mem-table tr.mem-row-link {
+    cursor: pointer;
+  }
+  .mem-table tr.mem-row-link:hover {
+    background: color-mix(in srgb, var(--fg-primary) 4%, transparent);
+  }
+  .mem-open {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  .mem-open:hover {
+    background: none;
+    color: var(--accent);
+    text-decoration: underline;
+  }
+  /* The App List's recommendation, as words rather than a verdict chip: it is
+     advice about an action, and the verdict chip vocabulary is reserved for
+     how safe that action is. Amber is "look at this first", as it is on a
+     review row; everything that needs nothing recedes. */
+  .suggestion {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    color: var(--fg-secondary);
+  }
+  .suggestion--act {
+    color: var(--fg-primary);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .suggestion--review,
+  .suggestion--unavailable {
+    color: var(--warn);
+    background: var(--warn-surface);
+    border-color: var(--warn-border);
+  }
+  .suggestion--done,
+  .suggestion--keep,
+  .suggestion--restore {
+    color: var(--fg-muted);
   }
   @media (max-width: 1100px) {
     .health-grid {

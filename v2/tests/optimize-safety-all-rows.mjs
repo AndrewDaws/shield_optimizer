@@ -53,8 +53,13 @@ async function exercise({ browser, base }) {
   await rows.first().waitFor();
 
   // Every lookup resolves, or the assertions below read a half-loaded table.
+  // Read the state, not the words: the label is free to change, and a poll
+  // for a string that no longer exists passes before anything has resolved.
   await page.waitForFunction(
-    () => !document.body.innerText.includes("CHECKING SAFETY"),
+    () => {
+      const cells = [...document.querySelectorAll("#tabpanel-optimize td.verdict-cell")];
+      return cells.length > 0 && cells.every((c) => c.dataset.verdict !== "checking");
+    },
     null,
     { timeout: 15000 },
   );

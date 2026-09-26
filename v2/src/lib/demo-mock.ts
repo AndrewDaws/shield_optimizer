@@ -581,7 +581,7 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         if (entry.risk === "safe") {
           return {
             kind: "safe",
-            reason: `Reviewed for Android TV and rated safe to remove.${tail}`,
+            reason: detail || "Reviewed for Android TV.",
             source: "reviewed_catalog",
           };
         }

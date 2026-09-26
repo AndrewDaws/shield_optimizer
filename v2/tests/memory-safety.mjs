@@ -42,35 +42,58 @@ async function exercise({ browser, base }) {
   await page.getByRole("tab", { name: "Health" }).click();
   await page.getByText("Top Memory Users").waitFor();
 
-  const verdicts = page.locator("table.mem-table tbody tr td.center");
+  // Read the resolved state off the cell rather than matching words: the
+  // labels are free to change, and a poll for a word that no longer exists
+  // passes before anything has resolved.
+  const cells = "table.mem-table tbody tr td.suggestion-cell";
   await page.waitForFunction(
-    () =>
-      [...document.querySelectorAll("table.mem-table tbody tr td.center")].every(
-        (cell) => cell.textContent.trim() !== "CHECKING",
-      ),
-    null,
+    (sel) => {
+      const all = [...document.querySelectorAll(sel)];
+      return all.length > 0 && all.every((c) => c.dataset.verdict !== "checking");
+    },
+    cells,
     { timeout: 10000 },
   );
 
-  const shown = await verdicts.allInnerTexts();
-  assert.ok(shown.length > 0, "the demo device has memory rows");
-  assert.ok(
-    !shown.includes("CHECKING"),
-    `every lookup must resolve, got: ${JSON.stringify(shown)}`,
+  const rows = await page.$$eval(cells, (all) =>
+    all.map((c) => ({
+      pkg: c.closest("tr")?.dataset.package ?? "",
+      suggestion: c.dataset.suggestion,
+      verdict: c.dataset.verdict,
+      text: c.innerText.trim(),
+    })),
+  );
+  assert.ok(rows.length > 0, "the demo device has memory rows");
+
+  const KINDS = new Set(["never_disable", "caution", "safe", "unknown"]);
+  const resolved = rows.filter((r) => KINDS.has(r.verdict));
+  // Positive: "unavailable" everywhere would satisfy "nothing is checking"
+  // while meaning every lookup broke.
+  assert.equal(
+    resolved.length,
+    rows.length,
+    `every row must resolve to a real verdict, got: ${JSON.stringify(rows)}`,
   );
 
-  // Fail closed: an uncatalogued package is Unknown, never Safe. A row that
-  // resolved to a real verdict is the point — "Unavailable" everywhere would
-  // pass the check above while meaning the lookup broke.
-  const allowed = new Set(["PROTECTED", "CAUTION", "UNKNOWN"]);
+  // Fail closed: a name we cannot tie to an installed package is a process.
+  // It never inherits a catalog verdict and never reads as removable.
+  const processes = rows.filter((r) => r.suggestion === "process");
+  for (const r of processes) {
+    assert.notEqual(r.verdict, "safe", `unverified process ${r.pkg} must never be Safe: ${JSON.stringify(r)}`);
+    assert.equal(r.text, "Not an app", `process ${r.pkg} reads as a process: ${JSON.stringify(r)}`);
+  }
+
+  // An installed catalog app carries a recommendation, and the reviewed
+  // catalog verdict behind it is no longer downgraded on this screen.
+  const recs = rows.filter((r) => r.suggestion === "recommendation");
+  assert.ok(recs.length > 0, `installed catalog apps get a recommendation: ${JSON.stringify(rows)}`);
   assert.ok(
-    shown.some((v) => allowed.has(v)),
-    `at least one row must carry a real verdict, got: ${JSON.stringify(shown)}`,
+    recs.some((r) => r.verdict === "safe"),
+    `a reviewed-safe installed app keeps its Safe verdict on Health: ${JSON.stringify(recs)}`,
   );
-  assert.ok(!shown.includes("SAFE"), "memory rows never claim Safe");
 
   console.log(
-    `Memory safety passed: ${shown.length} rows resolved to real verdicts, none left Checking.`,
+    `Memory safety passed: ${rows.length} rows resolved (${recs.length} recommendations, ${processes.length} processes, no process Safe).`,
   );
 }
 

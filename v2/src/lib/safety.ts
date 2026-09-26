@@ -39,9 +39,9 @@ export interface SafetyTier {
 export const SAFETY_TIERS: Record<SafetyKind, SafetyTier> = {
   safe: {
     kind: "safe",
-    label: "Safe",
+    label: "Safe to remove",
     description:
-      "Reviewed for Android TV and rated safe to remove. The reason says what it is and what you lose. Only ever comes from the reviewed list, never as a fallback.",
+      "The reason says what the app is and what you lose. Only ever comes from the reviewed list, never as a fallback.",
     cls: "safety-tier safety-tier--safe",
   },
   unknown: {
@@ -85,16 +85,33 @@ export function verdictOf(status: SafetyStatus | undefined): Safety | null {
   return status?.status === "ready" ? status.verdict : null;
 }
 
-/// Short label for a table cell or chip.
-///
-/// "Checking" and "Unavailable" are single words on purpose: they sit in the
-/// same column as the real verdicts, and tests/memory-safety.mjs polls for the
-/// literal "CHECKING" to prove that every lookup resolves. Lengthening it
-/// would satisfy that poll immediately and silently retire the check.
+export const CHECKING_LABEL = "Checking…";
+export const UNAVAILABLE_LABEL = "Safety unavailable";
+
+/// Label for a resolved verdict. Confirm prompts hold a bare `Safety`, not a
+/// lookup state, so this is the entry point for them.
+export function verdictLabel(safety: Safety): string {
+  return SAFETY_TIERS[safety.kind].label;
+}
+
+/// Short label for a table cell or chip — the only place a screen gets one.
+/// tests/memory-safety.mjs proves resolution by reading `data-verdict`, not
+/// these words, so the wording is free to change.
 export function safetyLabel(status: SafetyStatus | undefined): string {
-  if (!status || status.status === "unavailable") return "Unavailable";
-  if (status.status === "checking") return "Checking";
-  return SAFETY_TIERS[status.verdict.kind].label;
+  if (!status || status.status === "unavailable") return UNAVAILABLE_LABEL;
+  if (status.status === "checking") return CHECKING_LABEL;
+  return verdictLabel(status.verdict);
+}
+
+/// Build a lookup state from the split props a row component receives.
+export function statusOf(
+  status: SafetyStatus["status"] | undefined,
+  verdict: Safety | null | undefined,
+  reason?: string,
+): SafetyStatus {
+  if (status === "ready" && verdict) return { status: "ready", verdict };
+  if (status === "checking") return { status: "checking" };
+  return { status: "unavailable", reason: reason?.trim() || "Safety lookup has not completed." };
 }
 
 /// Chip class for a lookup state.
@@ -131,5 +148,5 @@ export function needsConfirm(safety: Safety | null | undefined): boolean {
 
 /// The Safety/Reason lines shared by every removal confirm prompt.
 export function confirmVerdictLine(safety: Safety): string {
-  return `Safety: ${SAFETY_TIERS[safety.kind].label}\nReason: ${safety.reason}`;
+  return `Safety: ${verdictLabel(safety)}\nReason: ${safety.reason}`;
 }
