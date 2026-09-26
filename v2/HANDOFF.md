@@ -16,8 +16,31 @@ the design-system port plus four rounds of screen feedback, drafted as `v2-2.3.0
   draft PR (`homebrew-shield-optimizer#2`) that must merge right before the
   `v2-2.3.0` tag, not earlier — its `url` names the renamed DMG.
 - **Launchers are data**: `crates/core/data/app-lists/launchers.json`, parsed once in
-  `loader.rs`. The leanback union is listing-only; the last-HOME-handler guard still
-  counts HOME handlers alone.
+  `loader.rs`. The Launcher list shows HOME handlers only. An earlier `LEANBACK_LAUNCHER`
+  union listed every TV app as a Home app (every TV launch activity carries that
+  category) and was removed; `launcher-rows` and a Rust test guard it. The
+  last-HOME-handler guard counts HOME handlers alone.
+- **Stock takeover is its own step.** `set_home_any` (Launcher › Advanced) enables a
+  package and asks Android to make it Home, then reports whether Android accepted it.
+  It never disables stock. Disabling stock is the separate `disable_stock_launcher`
+  command behind its own confirmed button. Both stay gated by
+  `is_last_enabled_home_handler`, so the TV always keeps a Home screen.
+- **Snapshot semantics.** `engine/snapshot.rs` receives the current launcher in
+  `ApplyPlanInputs` and sets `launcher_to_set` only when the snapshot's launcher
+  differs from it; `apply_snapshot` skips the launcher ladder entirely when it is
+  `None`. Settings already at the snapshot's value are carried as "already set", so the
+  preview's Now column is real. A restore disables the recorded apps and writes the
+  settings back; it never re-enables or reinstalls anything.
+- **One label source, one recommendation source.** `src/lib/safety.ts` owns every
+  verdict label (Protected, Caution, Safe to remove, Unknown, Checking…, Safety
+  unavailable). `src/lib/recommendation.ts` owns `effectiveMethod`, `recommendation`,
+  `canOfferUninstall` and the review labels; the App List, Optimize defaults and
+  Health's Suggestion column all call it. Uninstall is recommended only when the app is
+  reinstallable (`play_store || defunct`), and never labelled "Remove". Don't add a
+  mapping inline in a component; `recommendation-labels` checks the screens agree.
+- **Demo catalog**: `src/lib/demo-apps.json` is `common.json` followed by `shield.json`,
+  copied verbatim. Regenerate it whenever those change, or the demo drifts from the
+  product.
 - **Logs**: `<data_dir>/logs/`, daily rotation, 7 kept. Debug level is per-crate, not
   global, so adb lines are not buried under hyper. `collect_diagnostics` formats in
   the engine (pure) and reads in `src-tauri/src/commands/diagnostics.rs`.

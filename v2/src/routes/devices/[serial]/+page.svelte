@@ -2675,6 +2675,7 @@
                 safety={safety?.status === "ready" ? safety.verdict : null}
                 safetyStatus={safety?.status ?? "unavailable"}
                 safetyUnavailableReason={safety?.status === "unavailable" ? safety.reason : undefined}
+                rowClass={rec.kind === "review" ? "review-flag" : undefined}
                 detailOpen={expandedSafety === a.package}
                 onToggleDetail={() =>
                   (expandedSafety = expandedSafety === a.package ? null : a.package)}
@@ -4241,6 +4242,13 @@
     white-space: nowrap;
     font-size: 0.75rem;
     letter-spacing: 0.04em;
+  }
+  /* A package id in the Home app row would otherwise stretch both value
+     columns to its full width and squeeze every item id into a sliver. */
+  .plan-table tr[data-plan-item="launcher"] .plan-now,
+  .plan-table tr[data-plan-item="launcher"] .plan-next {
+    white-space: normal;
+    min-width: 9rem;
   }
   .plan-next.change {
     color: var(--ok);

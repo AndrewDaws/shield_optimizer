@@ -59,6 +59,27 @@ When you add a new section, put it at the top; older releases go below.
   when that is all we have, and a disabled Run now says why on hover.
 - **Icons sat below their labels** in every button and heading. One global rule fixes
   all of them, and a new test measures every icon-bearing control on every screen.
+- **The Launcher tab listed ordinary TV apps as Home apps.** PBS Kids, YouTube, Plex and
+  the Play Store all read "HOME APP", because every TV app's launch activity carries the
+  leanback category. Only apps that actually declare a Home screen are listed now.
+- **A fresh snapshot always proposed a launcher change.** The launcher only counts as a
+  change when it differs from the TV's current Home, and restoring skips the launcher
+  switch entirely otherwise. The preview's "Now" column shows the value already on the
+  TV instead of "—".
+- **Health and the App List disagreed about the same app.** Health downgraded a reviewed
+  app to Unknown; both now read the one verdict.
+- **Optimize offered Uninstall on apps the Play Store can't give back.** Those rows offer
+  Disable only. Sideloads such as SmartTube and TizenTube still offer Uninstall, and the
+  confirmation names where to reinstall them from and suggests backing up the APK.
+- **"Select all safe" armed Caution and Unknown rows.** It now arms only rows rated
+  Safe to remove.
+- **Forget sat above the chevron** on device rows, and fifteen other rows mixed buttons
+  and icons off one centre line. The alignment test now also checks that sibling
+  controls in a row share a centre line.
+- **Play-installed Amazon and Google apps were filed as system apps** under Everything
+  else. Only packages missing from the third-party list count as system now.
+- **A file dropped on Files was also staged by Install APK**, which stays mounted while
+  hidden. Each tab ignores drops unless it is the one showing.
 
 ### Added
 
@@ -70,9 +91,23 @@ When you add a new section, put it at the top; older releases go below.
 - **Copy diagnostics** on any device row the app cannot confirm or open.
 - **Monet Launcher** ([#121](https://github.com/bryanroscoe/shield_optimizer/issues/121))
   in the Launcher tab. The launcher catalog now lives in `launchers.json`, each custom
-  launcher has a Get link to its source, leanback-only launchers are discovered too,
-  and the tab links to the issue tracker for the next request.
+  launcher has a Source site link to its developer's page, and the tab links to the
+  issue tracker for the next request.
 - **Forget** on every network device row, not only unreachable ones.
+- **Set another app as Home…** under Launcher › Advanced: pick any installed app and
+  the app asks Android to make it Home, then reports honestly whether Android accepted
+  it. It never disables the stock launcher. That is a separate **Disable stock
+  launcher** button, enabled only once something else is Home, with a confirmation and
+  an offer to save a snapshot first. The TV always keeps at least one Home screen.
+- **Open Play Store on TV** for a missing launcher shows a success callout and refreshes
+  the list every few seconds for a minute, until the app appears.
+- **Files drag and drop**: drop files on the listing to upload them into the folder on
+  screen. Folders are refused with a message.
+- **GitHub issue forms** for bug reports, device support and launcher requests. Report a
+  bug opens the bug form and fills in the diagnostics field when the bundle fits in the
+  link; otherwise the dialog asks you to paste it.
+- Names and one-line descriptions for many more packages under Everything else. These
+  are descriptions only; the verdict stays Unknown.
 
 ### Changed
 
@@ -87,6 +122,19 @@ When you add a new section, put it at the top; older releases go below.
 - Install APK: the rail is "Popularly requested sideloads" with a link to suggest more.
 - Catalog descriptions for 52 entries now say what the component does and what
   disabling changes, instead of naming it.
+- **One safety and recommendation vocabulary** across the App List, Optimize and Health:
+  Protected, Caution, **Safe to remove** (was "Safe"), Unknown. Recommendations read
+  **Uninstall** only when the app can be reinstalled from the store, **Disable**
+  otherwise, and never "Remove". Apps worth removing only if unused read "Review:
+  disable if unused" or "Review: uninstall if unused".
+- Health › Top memory users: the Safety column is now **Suggestion**, showing the same
+  recommendation as the App List. Clicking a row opens that app on the App List.
+- Optimize: a labelled **Mode: Optimize | Restore** toggle, **Run plan**, a
+  "Recommended" pill on the suggested action, and review rows tinted amber with their
+  own pill.
+- Snapshots are marked **Beta**. "Preview apply" is now **Preview restore**, the preview
+  explains in one line what a restore does and doesn't do, and "Package states" is
+  "Disabled apps".
 
 <!-- more entries below -->
 
@@ -246,7 +294,8 @@ whether this build works for you.
   jobs — "we rated this risky" and "we have never seen this package" — which
   read the same and mean very different things. There are now four verdicts:
   **Protected** (refused on every path), **Caution** (a known consequence,
-  stated), **Safe** (in the reviewed catalog and rated safe to remove), and
+  stated), **Safe** (in the reviewed catalog and rated safe; labeled **Safe to remove**
+  from 2.3.0), and
   **Unknown** (no record). Click a verdict to see the reason and which list it
   came from.
 - Apps missing from the audited catalog are labeled **Unknown** with a reason

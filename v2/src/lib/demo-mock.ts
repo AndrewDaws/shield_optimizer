@@ -353,8 +353,15 @@ function optimizePlan(mode: "optimize" | "restore"): OptimizePlan {
       (entry, index) =>
         // The first sixteen, plus the disabled Caution package above — the
         // plan has to carry a row whose verdict the wizard must still resolve
-        // even though it proposes no action on it.
-        index < 16 || entry.package === "com.android.providers.tv",
+        // even though it proposes no action on it — plus one enabled
+        // medium-risk app, so the plan has a Caution row that is actionable
+        // and "Select all safe" has something it must leave alone — plus one
+        // uninstall-method app with no store listing, which Optimize must
+        // offer Disable for and never Uninstall.
+        index < 16
+        || entry.package === "com.android.providers.tv"
+        || entry.package === "com.nvidia.tegrazone3"
+        || entry.package === "com.philo.philo",
     )
     .map((entry) => {
       const state = MISSING.has(entry.package)

@@ -1,7 +1,6 @@
 // The Optimize wizard is the product's headline feature, and it was silently
-// recommending nothing: every row sat on "Checking safety", which forces Skip,
-// so the summary read "0 of 16 items will be acted on" and Run Optimize did
-// nothing at all.
+// recommending nothing: every row sat on "Checking safety", which forces Keep,
+// so the plan reported zero actions and running it did nothing at all.
 //
 // Cause: `optimizePlan !== plan` compared a Svelte $state deep proxy against
 // the raw object returned by the API. Always true, so the guard meant to drop a
@@ -40,44 +39,54 @@ async function exercise({ browser, base }) {
   await page.goto(base, { waitUntil: "networkidle" });
   await page.getByText("NVIDIA SHIELD", { exact: false }).first().click();
   await page.getByRole("tab", { name: "Optimize" }).click();
-  await page.getByRole("button", { name: "Optimize", exact: true }).click();
+  const panel = page.locator("#tabpanel-optimize");
+  // The Mode toggle's Optimize side loads the plan.
+  await panel.locator(".mode-box").getByRole("button", { name: "Optimize", exact: true }).click();
+  await panel.locator("table.optimize-table tbody tr").first().waitFor();
 
   // Every safety lookup must actually resolve.
   await page.waitForFunction(
-    () => !document.body.innerText.includes("Checking safety"),
+    () => {
+      const cells = [...document.querySelectorAll("#tabpanel-optimize td.verdict-cell")];
+      return cells.length > 0 && cells.every((c) => c.dataset.verdict !== "checking");
+    },
     null,
     { timeout: 15000 },
   );
 
-  const selects = page.locator("tbody select");
-  const count = await selects.count();
-  assert.ok(count > 0, "the plan has rows");
-
-  const actions = [];
-  for (let i = 0; i < count; i++) actions.push(await selects.nth(i).inputValue());
-  const acted = actions.filter((a) => a !== "skip");
-
+  const rows = await panel.evaluate((root) =>
+    [...root.querySelectorAll("table.optimize-table tbody tr")]
+      .filter((tr) => tr.querySelector("td.verdict-cell"))
+      .map((tr) => ({
+        pkg: tr.querySelector(".pkg-id")?.textContent?.trim() ?? "",
+        verdict: tr.querySelector("td.verdict-cell")?.getAttribute("data-verdict"),
+        pills: tr.querySelectorAll(".action-radio .radio-pill").length,
+        armed: tr.querySelector(".action-radio .radio-pill.active .radio-label")?.textContent?.trim() ?? null,
+      })),
+  );
+  assert.ok(rows.length > 0, "the plan has rows");
+  const acted = rows.filter((r) => r.armed && r.armed !== "Keep");
   assert.ok(
     acted.length > 0,
-    `the wizard must recommend something; every row defaulted to skip: ${JSON.stringify(actions)}`,
+    `the wizard must recommend something; every row defaulted to Keep: ${JSON.stringify(rows)}`,
   );
 
-  // And the summary has to agree with the rows, not report zero over a full plan.
-  const summary = await page.getByText(/items will be acted on/).innerText();
-  const [, stated] = summary.match(/^(\d+) of \d+ items/) ?? [];
+  // The Run button has to agree with the rows, not report zero over a full plan.
+  const run = await panel.getByRole("button", { name: /^Run plan/ }).innerText();
+  const [, stated] = run.match(/Run plan · (\d+) item/) ?? [];
   assert.equal(
     Number(stated),
     acted.length,
-    `summary says ${stated} but ${acted.length} rows are set to act: ${summary}`,
+    `Run button says ${stated} but ${acted.length} rows are armed: ${run}`,
   );
-  assert.notEqual(Number(stated), 0, `a full plan must not report zero actions: ${summary}`);
+  assert.notEqual(Number(stated), 0, `a full plan must not report zero actions: ${run}`);
 
-  // A protected package must never be selectable, however the plan is built.
-  const disabledSkips = await page.locator("tbody select[disabled]").count();
-  assert.ok(disabledSkips >= 0);
+  // A protected package must never be armable, however the plan is built.
+  const armedProtected = rows.filter((r) => r.verdict === "never_disable" && r.pills > 0);
+  assert.deepEqual(armedProtected, [], `protected rows must offer no action: ${JSON.stringify(armedProtected)}`);
 
   console.log(
-    `Optimize plan passed: ${count} rows, ${acted.length} recommended, summary agrees, no row left Checking.`,
+    `Optimize plan passed: ${rows.length} rows, ${acted.length} recommended, Run button agrees, no row left Checking.`,
   );
 }
 

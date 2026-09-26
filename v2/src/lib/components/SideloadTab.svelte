@@ -55,11 +55,22 @@
     }
   }
   let unlistenDrop: (() => void) | null = null;
+  // Every opened tab stays mounted, hidden, and the webview's drop stream is
+  // window-wide — without this a file dropped on Files was also staged here.
+  let rootEl = $state<HTMLElement | undefined>(undefined);
+
+  function isShowing(): boolean {
+    return !!rootEl && rootEl.closest("[hidden]") === null;
+  }
 
   onMount(async () => {
     try {
       const { getCurrentWebview } = await import("@tauri-apps/api/webview");
       unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+        if (!isShowing()) {
+          dragging = false;
+          return;
+        }
         if (event.payload.type === "over") {
           dragging = true;
           return;
@@ -210,7 +221,7 @@
   });
 </script>
 
-<div class="card" role="tabpanel" tabindex={0} id="tabpanel-sideload" aria-labelledby="tab-sideload">
+<div class="card" role="tabpanel" tabindex={0} id="tabpanel-sideload" aria-labelledby="tab-sideload" bind:this={rootEl}>
   <div class="card-header">
     <div class="header-title">
       <h2><Icon name="download" size={20} /> Install APK</h2>
@@ -710,6 +721,7 @@
   }
   .staged-actions {
     display: flex;
+    align-items: center;
     gap: 0.6rem;
     flex-wrap: wrap;
   }
