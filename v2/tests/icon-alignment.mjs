@@ -12,6 +12,13 @@
 // bounding-box centre-Y against the centre-Y of the element's own text.
 // Anything off by more than MAX_DELTA px is printed and fails the run.
 //
+// It also runs a sibling check. For every horizontal flex row that holds a
+// button, the direct children that are controls (a button, a field, a
+// wrapper around one, or an icon on its own) must share a centre line. That
+// is the Forget-vs-chevron case on the Devices list: `align-self: flex-start`
+// on the actions wrapper parked Forget above the chevron beside it, and the
+// icon-vs-label check never looked across siblings.
+//
 // Run via `npm run test:icon-alignment` from v2/.
 
 import assert from "node:assert/strict";
@@ -115,6 +122,74 @@ const COLLECT = () => {
   return results;
 };
 
+// Runs in the page. Returns one record per pair of sibling controls in the
+// same flex row whose centre lines differ by more than `max` px.
+const COLLECT_SIBLINGS = (max) => {
+  const describe = (el) => {
+    const id = el.id ? `#${el.id}` : "";
+    const cls = el.classList.length ? `.${Array.from(el.classList).join(".")}` : "";
+    return `${el.tagName.toLowerCase()}${id}${cls}`;
+  };
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return false;
+    const st = getComputedStyle(el);
+    return st.visibility !== "hidden" && st.display !== "none";
+  };
+  // Text a reader sees, without the icon font's ligature names.
+  const words = (el) => {
+    const clone = el.cloneNode(true);
+    for (const icon of clone.querySelectorAll(".msr")) icon.remove();
+    return clone.textContent.trim();
+  };
+  // A textarea is a multi-line field whose top edge is the deliberate anchor
+  // (ShellTab's Run button), so it is not a single-line control here.
+  const CONTROL = "button, input:not([type=hidden]), select, [role=button]";
+  const isControl = (el) =>
+    el.matches(CONTROL) ||
+    el.querySelector(CONTROL) !== null ||
+    (el.matches(".msr") || (el.querySelector(".msr") && !words(el)));
+
+  const results = [];
+  for (const row of document.querySelectorAll("*")) {
+    const st = getComputedStyle(row);
+    if (st.display !== "flex" && st.display !== "inline-flex") continue;
+    if (st.flexDirection !== "row" && st.flexDirection !== "row-reverse") continue;
+    // A row that asks for top or baseline alignment has said its children
+    // are not meant to share a centre line.
+    if (/start|end|baseline/.test(st.alignItems)) continue;
+    if (!row.querySelector("button") || !visible(row)) continue;
+    const controls = Array.from(row.children).filter((c) => visible(c) && isControl(c));
+    if (controls.length < 2) continue;
+    const boxes = controls.map((c) => ({ el: c, rect: c.getBoundingClientRect() }));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i].rect;
+        const b = boxes[j].rect;
+        // Different lines of a wrapped row do not share a centre line.
+        if (a.bottom <= b.top || b.bottom <= a.top) continue;
+        // One control more than twice the other's height is a block beside a
+        // control, not two controls in a line.
+        if (Math.max(a.height, b.height) > 2 * Math.min(a.height, b.height)) continue;
+        const delta = a.top + a.height / 2 - (b.top + b.height / 2);
+        if (Math.abs(delta) <= max) continue;
+        results.push({
+          selector: describe(row),
+          text: `${describe(boxes[i].el)} vs ${describe(boxes[j].el)}`,
+          delta,
+          source: "sibling",
+        });
+      }
+    }
+  }
+  return results;
+};
+
+async function collectSiblings(page, screen, offenders) {
+  const records = await page.evaluate(COLLECT_SIBLINGS, MAX_DELTA);
+  for (const record of records) offenders.push({ screen, ...record });
+}
+
 async function collect(page, screen, offenders, seen) {
   const records = await page.evaluate(COLLECT);
   assert.ok(records.length > 0, `${screen}: found no icon-bearing buttons or headings to check`);
@@ -152,6 +227,7 @@ async function main() {
     // The icon font has to be loaded before any glyph box means anything.
     await page.evaluate(() => document.fonts.ready);
     await collect(page, "devices", offenders, seen);
+    await collectSiblings(page, "devices", offenders);
 
     await page.goto(`${base}/devices/${encodeURIComponent(SERIAL)}`, { waitUntil: "networkidle" });
     await page.locator("#tab-overview").waitFor();
@@ -167,15 +243,17 @@ async function main() {
       }
       await page.waitForTimeout(300);
       await collect(page, `device/${tab}`, offenders, seen);
+      await collectSiblings(page, `device/${tab}`, offenders);
     }
 
     await page.goto(`${base}/snapshots`, { waitUntil: "networkidle" });
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(300);
     await collect(page, "snapshots", offenders, seen);
+    await collectSiblings(page, "snapshots", offenders);
 
     if (offenders.length) {
-      console.error(`\n${offenders.length} misaligned icon/label pair(s):\n`);
+      console.error(`\n${offenders.length} misaligned icon/label or sibling pair(s):\n`);
       for (const o of offenders) {
         console.error(
           `  [${o.screen}] ${o.selector}  Δ=${o.delta.toFixed(2)}px (label via ${o.source})\n` +
@@ -187,11 +265,12 @@ async function main() {
     assert.equal(
       offenders.length,
       0,
-      `icon glyphs must sit within ${MAX_DELTA}px of their label's centre`,
+      `icon glyphs and sibling controls must sit within ${MAX_DELTA}px of a shared centre`,
     );
     console.log(
       `Icon alignment passed: ${seen.count} icon-bearing buttons and headings across ` +
-        `${DEVICE_TABS.length + 2} screens are centred within ${MAX_DELTA}px.`,
+        `${DEVICE_TABS.length + 2} screens are centred within ${MAX_DELTA}px, and sibling ` +
+        `controls in every flex row share a centre line.`,
     );
     await page.close();
   } finally {

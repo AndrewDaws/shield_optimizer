@@ -174,14 +174,36 @@
 
   // ---- Report a bug -------------------------------------------------
   //
-  // Everything here is text the user reads and then chooses to paste. The app
-  // sends nothing: there is no upload path, and the GitHub issue opens with an
-  // empty body because a URL cannot carry the bundle anyway.
+  // Everything here is text the user reads before anything leaves the
+  // machine. The app has no upload path: the only way out is the issue URL,
+  // which the user opens and GitHub shows as a form they still have to submit.
 
-  const ISSUE_URL =
+  const ISSUE_BASE =
     "https://github.com/bryanroscoe/shield_optimizer/issues/new" +
-    `?title=${encodeURIComponent("Bug: ")}` +
-    `&body=${encodeURIComponent("Paste the diagnostics from Report a bug below:\n\n")}`;
+    `?template=bug_report.yml&title=${encodeURIComponent("Bug: ")}`;
+  /// Well under the ~8 KB GitHub accepts in a URL. Past it the form opens with
+  /// Diagnostics empty and the dialog asks for a paste instead.
+  const PREFILL_LIMIT = 6000;
+
+  /// `diagnostics` is the field id in .github/ISSUE_TEMPLATE/bug_report.yml;
+  /// issue forms prefill a field from the query parameter of the same id.
+  function issueUrl(bundle: string): { url: string; prefilled: boolean } {
+    if (bundle) {
+      const url = `${ISSUE_BASE}&diagnostics=${encodeURIComponent(bundle)}`;
+      if (url.length <= PREFILL_LIMIT) return { url, prefilled: true };
+    }
+    return { url: ISSUE_BASE, prefilled: false };
+  }
+
+  function openIssue() {
+    const { url, prefilled } = issueUrl(bugBusy ? "" : bugBundle);
+    if (!prefilled) {
+      bugMessage = bugBundle
+        ? "The diagnostics are too long to fill in for you. Click Copy, then paste them into the Diagnostics field on GitHub."
+        : "Paste the diagnostics into the Diagnostics field on GitHub once they have been collected.";
+    }
+    void openUrl(url);
+  }
 
   let bugOpen = $state(false);
   let bugBundle = $state("");
@@ -417,7 +439,8 @@
   <div class="notes-dialog" role="dialog" aria-modal="true" aria-labelledby="bug-title">
     <h2 id="bug-title">Report a bug</h2>
     <p class="notes-current muted">
-      Nothing here is sent anywhere. Copy the text below and paste it into a GitHub issue.
+      The app sends nothing on its own. Open GitHub issue fills the text below into a new
+      issue, which you review and submit yourself.
     </p>
     <label class="bug-toggle">
       <input type="checkbox" checked={debugLogging} onchange={toggleDebugLogging} />
@@ -444,7 +467,7 @@
       </button>
       <span class="spacer"></span>
       <button onclick={() => (bugOpen = false)}>Close</button>
-      <button class="primary" onclick={() => openUrl(ISSUE_URL)}>
+      <button class="primary" onclick={openIssue}>
         Open GitHub issue <Icon name="open_in_new" size={14} />
       </button>
     </div>
@@ -668,6 +691,7 @@
   }
   nav {
     display: flex;
+    align-items: center;
     gap: 1.2rem;
   }
   nav a {
@@ -695,6 +719,7 @@
   }
   .theme-toggle {
     display: flex;
+    align-items: stretch;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     overflow: hidden;

@@ -434,6 +434,7 @@
   }
   .meta-actions {
     display: flex;
+    align-items: center;
     gap: 0.4rem;
     margin-left: auto;
   }
@@ -511,6 +512,7 @@
   .rail-go {
     flex: none;
     display: inline-flex;
+    align-items: center;
     color: var(--accent);
   }
   .rail-item:hover {

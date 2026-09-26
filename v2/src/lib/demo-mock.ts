@@ -505,11 +505,11 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       ];
     case "list_other_packages":
       return [
-        { package: "com.teamsmart.videomanager.tv", system: false, enabled: true, name: "SmartTube" },
-        { package: "ca.devmesh.overseerrtv", system: false, enabled: true, name: "Overseerr (TV)" },
-        { package: "org.fdroid.fdroid", system: false, enabled: true, name: "F-Droid" },
-        { package: "com.android.vending", system: true, enabled: true, name: null },
-        { package: "com.android.providers.media", system: true, enabled: true, name: null },
+        { package: "com.teamsmart.videomanager.tv", system: false, enabled: true, name: "SmartTube", description: "An open-source YouTube client for Android TV." },
+        { package: "ca.devmesh.overseerrtv", system: false, enabled: true, name: "Overseerr (TV)", description: "Browse and request movies and shows from an Overseerr server." },
+        { package: "org.fdroid.fdroid", system: false, enabled: true, name: "F-Droid", description: "A catalog of free and open-source Android apps." },
+        { package: "com.android.vending", system: true, enabled: true, name: "Google Play Store", description: "Google's app store." },
+        { package: "com.android.providers.media", system: true, enabled: true, name: "Media Storage", description: "Indexes photos, music and video for apps." },
         { package: "com.nvidia.ota", system: true, enabled: false, name: null },
       ];
     // Covers the rows the App List actually shows first, so the RAM and
@@ -649,6 +649,15 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return tweaks;
     case "list_dir":
       return demoFiles(args.path as string);
+    // The real command refuses anything that is not a regular file. The demo
+    // cannot stat a path, so a last segment with no extension stands in for a
+    // dropped folder.
+    case "push_file": {
+      const local = String(args.localPath ?? "");
+      const name = local.split(/[\\/]/).filter(Boolean).pop() ?? local;
+      if (!name.includes(".")) throw `Not a file: ${local}`;
+      return { ok: true, message: `Uploaded ${name} to ${args.remoteDir}.`, local_path: null };
+    }
     case "get_display_scaling":
       return { size: "1920x1080 (default)", density: "320 (default)" };
     case "get_private_dns":

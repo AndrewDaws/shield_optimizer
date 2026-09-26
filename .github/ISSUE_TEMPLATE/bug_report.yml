@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in ATV Optimizer didn't work the way it should.
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. In the app, **Report a bug** collects diagnostics for the TV you had open. When it fits, it fills in the Diagnostics field below for you. Otherwise, use Copy in that dialog and paste it here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, including any error message word for word.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you clicked, in order, starting from the Devices screen.
+      placeholder: |
+        1. Open the TV
+        2. Go to App List
+        3. Click ...
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: false
+  - type: input
+    id: tv-model
+    attributes:
+      label: TV model
+      description: The make and model, for example "NVIDIA SHIELD TV Pro (2019)" or "Chromecast with Google TV (4K)".
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version and OS
+      description: The version in the app's footer, and your computer's OS, for example "2.2.0 on macOS 15".
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: From Report a bug in the app. It lists what the TV reported about itself, not which apps are installed.
+    validations:
+      required: false

@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use serde::Deserialize;
+
 use crate::engine::{AppListBundle, LauncherCatalog};
 
 /// Embedded JSON for the three default app lists. Loaded at compile time so
@@ -53,10 +55,58 @@ pub fn launchers() -> &'static LauncherCatalog {
     &CATALOG
 }
 
+/// One entry of `known-names.json`: a friendly name and, optionally, a
+/// one-line description of what the app is. Display only — it never feeds a
+/// safety verdict, so a described package still reads Unknown until a
+/// reviewed list says otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "KnownNameEntry")]
+pub struct KnownName {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// The JSON accepts either a bare name string or `{ name, description }`, so
+/// entries without a description stay one line.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum KnownNameEntry {
+    Name(String),
+    Full {
+        name: String,
+        #[serde(default)]
+        description: Option<String>,
+    },
+}
+
+impl From<KnownNameEntry> for KnownName {
+    fn from(entry: KnownNameEntry) -> Self {
+        match entry {
+            KnownNameEntry::Name(name) => KnownName {
+                name,
+                description: None,
+            },
+            KnownNameEntry::Full { name, description } => KnownName {
+                name,
+                description: description.filter(|d| !d.trim().is_empty()),
+            },
+        }
+    }
+}
+
+impl From<String> for KnownName {
+    fn from(name: String) -> Self {
+        KnownName {
+            name,
+            description: None,
+        }
+    }
+}
+
 /// Load the curated package→friendly-name map for popular sideloads. Display
 /// only, so a parse error is non-fatal — log it and carry on with an empty map
 /// (rows just fall back to showing the package id).
-pub fn load_known_names() -> HashMap<String, String> {
+pub fn load_known_names() -> HashMap<String, KnownName> {
     match serde_json::from_str(KNOWN_NAMES_JSON) {
         Ok(map) => map,
         Err(e) => {
@@ -275,10 +325,46 @@ mod tests {
         let names = load_known_names();
         assert!(!names.is_empty(), "known-names map should not be empty");
         assert_eq!(
-            names.get("ca.devmesh.overseerrtv").map(String::as_str),
+            names.get("ca.devmesh.overseerrtv").map(|k| k.name.as_str()),
             Some("Overseerr (TV)"),
             "a known non-catalog sideload must map to its friendly name"
         );
+    }
+
+    #[test]
+    fn known_names_accept_a_bare_name_or_a_described_entry() {
+        let parsed: HashMap<String, KnownName> = serde_json::from_str(
+            r#"{
+                "a.bare": "Bare",
+                "a.full": { "name": "Full", "description": "Does a thing" },
+                "a.blank": { "name": "Blank", "description": "  " }
+            }"#,
+        )
+        .expect("both shapes parse");
+        assert_eq!(parsed["a.bare"].description, None);
+        assert_eq!(parsed["a.full"].name, "Full");
+        assert_eq!(
+            parsed["a.full"].description.as_deref(),
+            Some("Does a thing")
+        );
+        assert_eq!(parsed["a.blank"].description, None);
+    }
+
+    #[test]
+    fn shipped_known_names_are_display_only() {
+        // Descriptions say what an app is, never whether it is safe to remove.
+        for (pkg, known) in load_known_names() {
+            assert!(!known.name.trim().is_empty(), "{pkg} has an empty name");
+            if let Some(desc) = &known.description {
+                let lower = desc.to_lowercase();
+                for claim in ["safe to", "harmless", "bloat", "can be removed", "remove"] {
+                    assert!(
+                        !lower.contains(claim),
+                        "{pkg}'s description makes a removal claim ({claim:?}): {desc}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

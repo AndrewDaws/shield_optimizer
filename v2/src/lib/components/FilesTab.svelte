@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { api } from "$lib/api";
   import Icon from "$lib/components/Icon.svelte";
@@ -184,6 +184,81 @@
 
   onMount(() => loadFiles(filesPath));
 
+  /// Files dropped from this computer upload into the folder on screen. The
+  /// same Tauri drag-drop stream as Install APK (HTML5 drag events carry no
+  /// real path in a webview). Every tab that has been opened stays mounted,
+  /// hidden, so this listens only while its own panel is the one showing.
+  let rootEl = $state<HTMLElement | undefined>(undefined);
+  let dragging = $state(false);
+  let unlistenDrop: (() => void) | null = null;
+
+  function isShowing(): boolean {
+    return !!rootEl && rootEl.closest("[hidden]") === null;
+  }
+
+  function baseName(path: string): string {
+    return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+  }
+
+  async function uploadDropped(paths: string[]) {
+    if (filesBusy !== null) {
+      filesMessage = "Wait for the current transfer to finish, then drop again.";
+      return;
+    }
+    const dir = filesPath;
+    const allowSystem = powerUserPaths;
+    filesBusy = "__upload__";
+    const lines: string[] = [];
+    let uploaded = 0;
+    try {
+      for (const path of paths) {
+        filesMessage = `Uploading ${baseName(path)} to ${dir}…`;
+        try {
+          const r = await api.pushFile(serial, path, dir, allowSystem);
+          lines.push(r.message);
+          if (r.ok) uploaded += 1;
+        } catch (e) {
+          // push_file refuses anything that is not a regular file.
+          lines.push(
+            String(e).startsWith("Not a file:")
+              ? `${baseName(path)} is a folder. Drop files, not folders.`
+              : String(e),
+          );
+        }
+      }
+    } finally {
+      filesBusy = null;
+    }
+    if (uploaded > 0) await loadFiles(dir);
+    filesMessage = lines.join(" ");
+  }
+
+  onMount(async () => {
+    try {
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+        if (!isShowing()) {
+          dragging = false;
+          return;
+        }
+        if (event.payload.type === "over" || event.payload.type === "enter") {
+          dragging = true;
+          return;
+        }
+        if (event.payload.type === "leave") {
+          dragging = false;
+          return;
+        }
+        dragging = false;
+        if (event.payload.paths.length > 0) void uploadDropped(event.payload.paths);
+      });
+    } catch {
+      /* not running inside the app shell — no drop target, Upload here still works */
+    }
+  });
+
+  onDestroy(() => unlistenDrop?.());
+
   /// Board 11.8 gives each row a glyph for what the file is. Extension-based,
   /// because that is all `ls` tells us — an unrecognised extension falls back
   /// to the generic document rather than guessing.
@@ -196,7 +271,7 @@
   }
 </script>
 
-<div class="card" role="tabpanel" tabindex={0} id="tabpanel-files" aria-labelledby="tab-files">
+<div class="card" role="tabpanel" tabindex={0} id="tabpanel-files" aria-labelledby="tab-files" bind:this={rootEl}>
   <div class="card-header">
     <div class="header-title">
       <h2><Icon name="folder" size={20} /> Files</h2>
@@ -330,6 +405,12 @@
       </button>
     </div>
   {/if}
+  <div class="files-drop" class:dragging>
+  {#if dragging}
+    <div class="drop-overlay" role="status">
+      <Icon name="upload" size={20} /> Drop files to upload to <code>{filesPath}</code>
+    </div>
+  {/if}
   {#if filesErr}
     <div class="error">{filesErr}</div>
   {:else if filesEntries === null}
@@ -407,9 +488,31 @@
       <span><Icon name="delete" size={14} /> delete from TV</span>
     </p>
   {/if}
+  </div>
 </div>
 
 <style>
+  .files-drop {
+    position: relative;
+  }
+  .files-drop.dragging {
+    min-height: 8rem;
+  }
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+    color: var(--fg-primary);
+    font-weight: 500;
+    pointer-events: none;
+  }
   /* --- Shared scoped utilities, duplicated from the page (see CLAUDE.md note
          on component CSS). Global rules (.muted, button, input) live in the
          layout and are inherited. --- */
@@ -498,6 +601,7 @@
   }
   .tool-legend {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 1rem;
     margin-top: 0.5rem;

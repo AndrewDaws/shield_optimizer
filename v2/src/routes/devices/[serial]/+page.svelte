@@ -1120,6 +1120,19 @@
 
   const ISSUES_URL = "https://github.com/bryanroscoe/shield_optimizer/issues/new";
 
+  /// The launcher-request form, with the package prefilled when the Advanced
+  /// picker holds an app the list doesn't know as a launcher.
+  function launcherRequestUrl(): string {
+    const url = new URL(ISSUES_URL);
+    url.searchParams.set("template", "launcher_request.yml");
+    const picked = homePickerPackages.find((p) => p.package === homePickerChoice);
+    if (picked && !launchers.some((l) => l.entry.package === picked.package)) {
+      url.searchParams.set("package", picked.package);
+      if (picked.name) url.searchParams.set("launcher-name", picked.name);
+    }
+    return url.toString();
+  }
+
   /// Open a page in the desktop browser. Nothing is downloaded or installed —
   /// the launcher catalog's "Get" links and the issue tracker both land here.
   async function openInBrowser(url: string) {
@@ -2297,7 +2310,7 @@
           <h2><Icon name="home" size={20} /> Launcher</h2>
           <p class="muted small header-sub launcher-sub">
             <span class="mono">home app resolution · {launchers.length} known launcher{launchers.length === 1 ? "" : "s"}</span>
-            <button class="link-button" onclick={() => openInBrowser(ISSUES_URL)}>
+            <button class="link-button" onclick={() => openInBrowser(launcherRequestUrl())}>
               Want another launcher listed? Open an issue
             </button>
           </p>
@@ -3842,6 +3855,7 @@
   }
   .tool-legend {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 1rem;
     margin-top: 0.5rem;

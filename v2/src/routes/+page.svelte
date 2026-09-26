@@ -694,7 +694,6 @@
     gap: 0.4rem;
     flex: none;
     margin-left: auto;
-    align-self: flex-start;
   }
   .row-action {
     flex: none;
@@ -708,6 +707,7 @@
   }
   .device-go {
     display: inline-flex;
+    align-items: center;
     flex: none;
     margin-left: 0.6rem;
     color: var(--accent);

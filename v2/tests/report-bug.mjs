@@ -78,8 +78,9 @@ async function exercise({ browser, base }) {
   assert.match(hostOnly, /ATV Optimizer diagnostics/, hostOnly);
   assert.match(hostOnly, /No device selected/, hostOnly);
 
-  // Nothing leaves the machine, and the dialog says so.
-  assert.match(await dialog.innerText(), /Nothing here is sent anywhere/);
+  // Nothing leaves the machine unless the user opens the issue, and the
+  // dialog says so.
+  assert.match(await dialog.innerText(), /sends nothing on its own/);
 
   // Debug logging is a real switch, not a label.
   const checkbox = dialog.getByRole("checkbox");
@@ -101,17 +102,25 @@ async function exercise({ browser, base }) {
   // The log path is shown, so someone can find the file without the app.
   assert.match(await page.getByRole("dialog").innerText(), /Logs: .*logs/);
 
-  // The GitHub issue opens with a prompt to paste, and nothing more — the
-  // bundle is too long to ride in a URL.
+  // The GitHub issue opens the bug form with the Diagnostics field (id
+  // `diagnostics` in .github/ISSUE_TEMPLATE/bug_report.yml) prefilled with
+  // exactly the bundle shown, since it fits in a URL.
+  await page.waitForFunction(
+    () => !document.querySelector("textarea")?.value.includes("Collecting…"),
+  );
+  const shown = await page.getByRole("dialog").getByLabel("Diagnostics").inputValue();
   await page.getByRole("dialog").getByRole("button", { name: /Open GitHub issue/ }).click();
   const opened = await page.evaluate(() => window.__OPENED__);
   assert.equal(opened.length, 1, JSON.stringify(opened));
-  assert.match(opened[0], /^https:\/\/github\.com\/bryanroscoe\/shield_optimizer\/issues\/new\?/);
-  assert.match(decodeURIComponent(opened[0]), /Paste the diagnostics from Report a bug below/);
+  const url = new URL(opened[0]);
+  assert.equal(`${url.origin}${url.pathname}`, "https://github.com/bryanroscoe/shield_optimizer/issues/new");
+  assert.equal(url.searchParams.get("template"), "bug_report.yml");
+  assert.equal(url.searchParams.get("diagnostics"), shown, "the form carries the bundle verbatim");
+  assert.ok(opened[0].length <= 6000, `prefilled URL stays under the limit (${opened[0].length})`);
 
   await page.close();
   console.log(
-    "Report a bug passed (host): the bundle renders, says nothing is sent, shows the log folder, toggles debug logging through the backend, and opens an empty issue to paste into.",
+    "Report a bug passed (host): the bundle renders, says the app sends nothing on its own, shows the log folder, toggles debug logging through the backend, and opens the bug form with Diagnostics prefilled.",
   );
 }
 
