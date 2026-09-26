@@ -186,6 +186,21 @@ export interface OtherPackage {
   enabled: boolean;
   /// Friendly name for recognized sideloads (Artemis, Overseerr, …); null otherwise.
   name?: string | null;
+  /// One line on what the app is, from known-names.json. Display only: the
+  /// verdict for these packages stays Unknown.
+  description?: string | null;
+}
+
+/// `set_home_any` — the Advanced picker. It never disables anything.
+export interface SetHomeAnyResult {
+  ok: boolean;
+  current_launcher: string | null;
+  /// null when the device can't answer (query-activities is Android 9+).
+  declares_home: boolean | null;
+  /// Stock still holds Home; only the separate "Disable stock launcher" step hands it over.
+  stock_holds_home: boolean;
+  message: string;
+  diagnostics: string[];
 }
 
 export interface SetLauncherResult {
@@ -331,6 +346,12 @@ export interface SnapshotApplyPlan {
   settings_to_write: Record<string, string>;
   settings_to_delete: string[];
   settings_already_set: string[];
+  /// Device values for every setting the snapshot mentions; a missing key is unset.
+  current_values: Record<string, string>;
+  /// Home app when the plan was computed; null means the device couldn't say.
+  current_launcher: string | null;
+  /// The snapshot's launcher when it isn't installed here, so it's skipped.
+  launcher_not_installed: string | null;
   cross_device_warning: string | null;
 }
 

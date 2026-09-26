@@ -80,7 +80,7 @@
       Object.keys(plan.settings_to_write).length +
       plan.settings_to_delete.length +
       (plan.launcher_to_set ? 1 : 0);
-    if (!confirm(`Apply ${snap.filename} to ${previewState.deviceName}?\n\n${total} change(s). Disabled packages can be re-enabled via Emergency Recovery.`)) return;
+    if (!confirm(`Restore ${snap.filename} to ${previewState.deviceName}?\n\n${total} change(s). Disabled packages can be re-enabled via Emergency Recovery.`)) return;
     applyBusy = true;
     applyErr = null;
     try {
@@ -130,7 +130,7 @@
 
 <section class="header-row">
   <div class="header-title">
-    <h1>Snapshots</h1>
+    <h1>Snapshots <span class="beta-tag">Beta</span></h1>
     <p class="muted small mono header-sub">
       all devices · {snapshots.length} saved
     </p>
@@ -146,9 +146,10 @@
 </section>
 
 <p class="muted">
-  Snapshots capture a device's disabled packages, current launcher, and tracked settings.
-  Apply them to the same device (rollback) or a different one (cross-device clone).
-  Files live at <code>{snapshotDir || "(unknown)"}</code> — copy them anywhere to share.
+  A snapshot records which apps are disabled, your Home app and 11 system settings.
+  Restoring it disables those apps again and puts the settings back. It never
+  re-enables anything or reinstalls apps. Restore to the same device, or to another
+  one to copy its setup. Files live at <code>{snapshotDir || "(unknown)"}</code> — copy them anywhere to share.
 </p>
 
 {#if actionMsg}
@@ -158,10 +159,13 @@
 {#if previewState}
   {@const plan = previewState.plan}
   {@const settingKeys = Object.keys(plan.settings_to_write)}
+  {@const nowValues = plan.current_values ?? {}}
+  {@const launcherUnchanged =
+    !plan.launcher_to_set && !plan.launcher_not_installed && previewState.snap.launcher !== null}
   <div class="preview-panel">
     <div class="preview-head">
       <div>
-        <h2>Apply to {previewState.deviceName}</h2>
+        <h2>Restore to {previewState.deviceName}</h2>
         <p class="muted small mono">{previewState.snap.filename} → {previewState.serial}</p>
       </div>
       <button onclick={cancelPreview}>Close</button>
@@ -177,36 +181,44 @@
       {plan.packages_not_installed.length} not on device ·
       <strong>{settingKeys.length}</strong> setting{settingKeys.length === 1 ? "" : "s"}
       to write · <strong>{plan.settings_to_delete.length}</strong> to reset
-      {#if plan.launcher_to_set}· launcher{/if}
+      {#if plan.launcher_to_set}· Home app{/if}
     </div>
 
     <table class="plan-table">
-      <thead><tr><th>Package</th><th>What happens</th></tr></thead>
+      <thead><tr><th>Item</th><th>Now</th><th>What happens</th></tr></thead>
       <tbody>
         {#each plan.packages_to_disable as pkg (pkg)}
-          <tr class="acting"><td class="mono small">{pkg}</td><td><span class="plan-act disable">Disable</span></td></tr>
+          <tr class="acting"><td class="mono small">{pkg}</td><td class="mono small">enabled</td><td><span class="plan-act disable">Disable</span></td></tr>
         {/each}
         {#if plan.launcher_to_set}
-          <tr class="acting"><td class="mono small">{plan.launcher_to_set}</td><td><span class="plan-act launcher">Set as launcher</span></td></tr>
+          <tr class="acting"><td class="mono small">Home app</td><td class="mono small">{plan.current_launcher ?? "—"}</td><td><span class="plan-act launcher">Set Home → {plan.launcher_to_set}</span></td></tr>
         {/if}
         {#each settingKeys as k (k)}
-          <tr class="acting"><td class="mono small">{k}</td><td><span class="plan-act setting">Set → {plan.settings_to_write[k]}</span></td></tr>
+          <tr class="acting"><td class="mono small">{k}</td><td class="mono small">{nowValues[k] ?? "unset"}</td><td><span class="plan-act setting">Set → {plan.settings_to_write[k]}</span></td></tr>
         {/each}
         {#each plan.settings_to_delete as k (k)}
-          <tr class="acting"><td class="mono small">{k}</td><td><span class="plan-act setting">Reset → device default (delete override)</span></td></tr>
+          <tr class="acting"><td class="mono small">{k}</td><td class="mono small">{nowValues[k] ?? "—"}</td><td><span class="plan-act setting">Reset → device default (delete override)</span></td></tr>
+        {/each}
+        {#if launcherUnchanged}
+          <tr class="dim"><td class="mono small">Home app</td><td class="mono small">{plan.current_launcher ?? "—"}</td><td><span class="terminal-reason">Already Home</span></td></tr>
+        {:else if plan.launcher_not_installed}
+          <tr class="dim"><td class="mono small">Home app</td><td class="mono small">{plan.current_launcher ?? "—"}</td><td><span class="terminal-reason">{plan.launcher_not_installed} isn't installed; skipped</span></td></tr>
+        {/if}
+        {#each plan.settings_already_set as k (k)}
+          <tr class="dim"><td class="mono small">{k}</td><td class="mono small">{nowValues[k] ?? "unset"}</td><td><span class="terminal-reason">Already set</span></td></tr>
         {/each}
         {#each plan.packages_already_disabled as pkg (pkg)}
-          <tr class="dim"><td class="mono small">{pkg}</td><td><span class="terminal-reason">Already disabled</span></td></tr>
+          <tr class="dim"><td class="mono small">{pkg}</td><td class="mono small">disabled</td><td><span class="terminal-reason">Already disabled</span></td></tr>
         {/each}
         {#each plan.packages_not_installed as pkg (pkg)}
-          <tr class="dim"><td class="mono small">{pkg}</td><td><span class="terminal-reason">Not on device</span></td></tr>
+          <tr class="dim"><td class="mono small">{pkg}</td><td class="mono small">not installed</td><td><span class="terminal-reason">Not on device</span></td></tr>
         {/each}
       </tbody>
     </table>
 
     <div class="apply-row">
       <button class="primary" onclick={confirmApply} disabled={applyBusy || applyResult !== null}>
-        {applyBusy ? "Applying…" : applyResult ? "Applied" : "Apply snapshot"}
+        {applyBusy ? "Restoring…" : applyResult ? "Restored" : "Restore snapshot"}
       </button>
       <span class="muted small">Disable is reversible via Emergency Recovery on the device.</span>
     </div>
@@ -265,11 +277,12 @@
               </div>
             </td>
             <td class="right mono nowrap">{formatTimestamp(s.saved_at)}</td>
-            <td class="right snap-actions">
+            <td class="right">
+              <div class="snap-actions">
               {#if authorizedDevices().length > 0}
                 <select
                   disabled={actionBusy === s.path}
-                  aria-label={`Apply ${s.label ?? s.device_name} to a device`}
+                  aria-label={`Restore ${s.label ?? s.device_name} to a device`}
                   onchange={(e) => {
                     const target = e.target as HTMLSelectElement;
                     const serial = target.value;
@@ -277,9 +290,9 @@
                     target.value = "";
                   }}
                 >
-                  <option value="">Apply to device…</option>
+                  <option value="">Restore to device…</option>
                   {#each authorizedDevices() as d}
-                    <option value={d.serial}>Preview → {d.name}</option>
+                    <option value={d.serial}>Preview restore → {d.name}</option>
                   {/each}
                 </select>
               {/if}
@@ -289,6 +302,7 @@
                 title="Delete this snapshot file from disk"
                 aria-label={`Delete ${s.filename}`}
               ><Icon name="delete" size={16} /></button>
+              </div>
             </td>
           </tr>
         {/each}
@@ -298,7 +312,7 @@
   <div class="callout snapshots-note">
     <Icon name="content_copy" size={16} />
     <span>
-      Applying a snapshot from a different device is a clone — the apply plan names
+      Restoring a snapshot to a different device is a clone — the restore plan names
       every package the target is missing before anything runs.
     </span>
   </div>
@@ -410,17 +424,32 @@
   }
   .header-actions {
     display: flex;
+    align-items: center;
     gap: 0.5rem;
   }
   h1 {
     margin: 0;
     font-size: 1.4rem;
   }
+  .beta-tag {
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--radius-sm);
+    background: var(--warn-surface-2);
+    color: var(--warn);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
+  /* A wrapper, not the cell itself: display:flex on a <td> takes it out of
+     table layout, and its row border stopped short of the table edge. */
   .snap-actions {
     display: flex;
+    justify-content: flex-end;
     gap: 0.4rem;
     align-items: center;
-    flex-shrink: 0;
   }
   .empty {
     text-align: center;

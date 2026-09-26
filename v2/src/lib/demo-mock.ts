@@ -486,6 +486,10 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         })),
         { package: "com.netflix.ninja", system: false, enabled: true, name: "Netflix" },
         { package: "com.plexapp.android", system: false, enabled: true, name: "Plex" },
+        // The installed launchers from `launchers` above, so the Launcher tab's
+        // Advanced picker can offer them (tests/launcher-rows.mjs).
+        { package: "com.spocky.projengmenu", system: false, enabled: true, name: "Projectivy Launcher" },
+        { package: "me.efesser.flauncher", system: false, enabled: true, name: "FLauncher" },
         { package: "com.disney.disneyplus", system: false, enabled: true, name: "Disney+" },
         { package: "com.spotify.tv.android", system: false, enabled: true, name: "Spotify" },
         { package: "tv.twitch.android.app", system: false, enabled: true, name: "Twitch" },
@@ -659,7 +663,22 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return { hits: [], unsearched: [] };
     case "list_apks_in_folder":
       return [];
-    case "preview_apply":
+    case "preview_apply": {
+      // Mirrors the engine: the launcher is a change only when the snapshot's
+      // differs from the one holding Home now (Projectivy, per current_launcher
+      // above), and "Now" carries the device's value for every key mentioned.
+      const snap = snapshots.find((s) => s.path === args.snapshotPath) ?? snapshots[0];
+      const homeNow = "com.spocky.projengmenu";
+      const now = Object.fromEntries(
+        Object.entries({
+          "global.hdmi_control_enabled": tweaks.hdmi_control_enabled,
+          "secure.match_content_frame_rate": tweaks.match_content_frame_rate,
+          "global.window_animation_scale": tweaks.window_animation_scale,
+          "global.transition_animation_scale": tweaks.transition_animation_scale,
+          "global.animator_duration_scale": tweaks.animator_duration_scale,
+          "global.encoded_surround_output": tweaks.encoded_surround_output,
+        }).filter((entry): entry is [string, string] => entry[1] != null),
+      );
       return {
         packages_to_disable: [
           "com.google.android.feedback",
@@ -669,15 +688,44 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         ],
         packages_already_disabled: ["com.amazon.amazonvideo.livingroom", "com.facebook.katana"],
         packages_not_installed: ["com.disney.disneyplus", "com.quibi.qlient"],
-        launcher_to_set: "com.spocky.projengmenu",
+        launcher_to_set: snap.launcher && snap.launcher !== homeNow ? snap.launcher : null,
+        current_launcher: homeNow,
+        launcher_not_installed: null,
         settings_to_write: {
-          "global.hdmi_control_enabled": "1",
-          "secure.match_content_frame_rate": "2",
-          "global.window_animation_scale": "0.5",
+          "global.hdmi_control_enabled": "0",
+          "secure.match_content_frame_rate": "1",
+          "global.window_animation_scale": "1.0",
         },
         settings_to_delete: ["global.encoded_surround_output"],
         settings_already_set: ["global.transition_animation_scale", "global.animator_duration_scale"],
+        current_values: now,
         cross_device_warning: null,
+      };
+    }
+    case "set_home_any": {
+      // Only real Home apps are accepted; anything else gets the honest refusal
+      // the command gives on a device.
+      const pkg = String(args.package ?? "");
+      const home = launchers.some((l) => l.entry.package === pkg && l.installed);
+      return home
+        ? { ok: true, current_launcher: pkg, declares_home: true, stock_holds_home: false, message: `${pkg} is now the Home app.`, diagnostics: [] }
+        : {
+            ok: false,
+            current_launcher: "com.spocky.projengmenu",
+            declares_home: false,
+            stock_holds_home: false,
+            message: `Android didn't accept ${pkg} as Home; it doesn't declare a Home screen. Nothing was disabled. Home is still com.spocky.projengmenu.`,
+            diagnostics: [],
+          };
+    }
+    case "disable_stock_launcher":
+      return {
+        ok: true,
+        strategy: "disable_stock_takeover",
+        current_launcher: String(args.target ?? ""),
+        last_error: null,
+        stock_takeover_available: false,
+        diagnostics: [],
       };
     case "apply_snapshot":
       return {

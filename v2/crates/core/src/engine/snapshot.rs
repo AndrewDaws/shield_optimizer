@@ -119,8 +119,19 @@ pub struct SnapshotApplyPlan {
     pub packages_already_disabled: Vec<String>,
     /// Packages on the snapshot list but not present on the target device.
     pub packages_not_installed: Vec<String>,
-    /// The launcher to set as default (None = no launcher change).
+    /// The launcher to set as default. `None` when the snapshot's launcher is
+    /// already the device's Home app, when the snapshot recorded none, or when
+    /// it isn't installed here — so a fresh snapshot previews no launcher
+    /// change and applying it never re-runs the launcher switch.
     pub launcher_to_set: Option<String>,
+    /// The device's Home app when the plan was computed. `None` means the
+    /// device couldn't say, not that there is no Home app.
+    #[serde(default)]
+    pub current_launcher: Option<String>,
+    /// The snapshot's launcher when it isn't installed on this device, so the
+    /// preview can say why it's skipped instead of silently dropping it.
+    #[serde(default)]
+    pub launcher_not_installed: Option<String>,
     /// Settings whose current device value differs from the snapshot —
     /// these will be written. Same key format as `Snapshot::settings`.
     pub settings_to_write: BTreeMap<String, String>,
@@ -128,6 +139,11 @@ pub struct SnapshotApplyPlan {
     /// Settings already at the snapshot's value on the device — no-op, counted
     /// so the preview doesn't overstate the work.
     pub settings_already_set: Vec<String>,
+    /// The device's current value for every setting the snapshot mentions,
+    /// so the preview's "Now" column shows what's there. A key missing here
+    /// is unset on the device.
+    #[serde(default)]
+    pub current_values: BTreeMap<String, String>,
     /// Set when the snapshot's device type doesn't match the target's.
     pub cross_device_warning: Option<String>,
 }
@@ -142,6 +158,9 @@ pub struct ApplyPlanInputs<'a> {
     /// Successfully read current tracked values. Missing keys are absent;
     /// callers must not substitute an empty map for a failed read.
     pub current_settings: &'a BTreeMap<String, String>,
+    /// The package HOME resolves to now, or `None` when the device couldn't
+    /// say. Unknown is treated as "may differ", so the launcher is still set.
+    pub current_launcher: Option<&'a str>,
 }
 
 /// Compute the plan for applying `snap` to a device in `inputs`' state.
@@ -203,14 +222,39 @@ pub fn compute_apply_plan(snap: &Snapshot, inputs: &ApplyPlanInputs<'_>) -> Snap
         }
     }
 
+    let current_values = snap
+        .settings
+        .keys()
+        .chain(snap.absent_settings.iter())
+        .filter_map(|key| {
+            inputs
+                .current_settings
+                .get(key)
+                .map(|value| (key.clone(), value.clone()))
+        })
+        .collect();
+
+    let mut launcher_to_set = None;
+    let mut launcher_not_installed = None;
+    if let Some(wanted) = snap.current_launcher.as_deref() {
+        if !installed_set.contains(wanted) {
+            launcher_not_installed = Some(wanted.to_string());
+        } else if inputs.current_launcher != Some(wanted) {
+            launcher_to_set = Some(wanted.to_string());
+        }
+    }
+
     SnapshotApplyPlan {
         packages_to_disable: to_disable,
         packages_already_disabled: already_disabled,
         packages_not_installed: not_installed,
-        launcher_to_set: snap.current_launcher.clone(),
+        launcher_to_set,
+        current_launcher: inputs.current_launcher.map(str::to_string),
+        launcher_not_installed,
         settings_to_write,
         settings_to_delete,
         settings_already_set,
+        current_values,
         cross_device_warning,
     }
 }
@@ -298,6 +342,7 @@ mod tests {
                 currently_disabled: &[],
                 currently_installed: &[],
                 current_settings: &current,
+                current_launcher: None,
             },
         );
         assert_eq!(plan.settings_to_delete, [absent_key]);
@@ -311,6 +356,7 @@ mod tests {
                 currently_disabled: &[],
                 currently_installed: &[],
                 current_settings: &absent,
+                current_launcher: None,
             },
         );
         assert!(unchanged.settings_to_delete.is_empty());
@@ -337,6 +383,7 @@ mod tests {
                     currently_disabled: &[],
                     currently_installed: &[],
                     current_settings: &current,
+                    current_launcher: None,
                 },
             );
             assert!(plan.settings_to_delete.is_empty());
@@ -425,6 +472,7 @@ mod tests {
             currently_disabled: &disabled,
             currently_installed: &installed,
             current_settings: &no_settings,
+            current_launcher: None,
         };
         let plan = compute_apply_plan(&snap, &inputs);
         assert_eq!(plan.packages_to_disable, vec!["com.foo"]);
@@ -455,6 +503,7 @@ mod tests {
                 currently_disabled: &disabled,
                 currently_installed: &installed,
                 current_settings: &matched,
+                current_launcher: None,
             },
         );
         assert!(plan.settings_to_write.is_empty());
@@ -472,6 +521,7 @@ mod tests {
                 currently_disabled: &disabled,
                 currently_installed: &installed,
                 current_settings: &differs,
+                current_launcher: None,
             },
         );
         assert_eq!(plan.settings_to_write.len(), 1);
@@ -489,9 +539,126 @@ mod tests {
             currently_disabled: &disabled,
             currently_installed: &installed,
             current_settings: &no_settings,
+            current_launcher: None,
         };
         let plan = compute_apply_plan(&snap, &inputs);
         assert!(plan.cross_device_warning.is_some());
         assert!(plan.cross_device_warning.unwrap().contains("Nvidia Shield"));
+    }
+
+    fn launcher_inputs<'a>(
+        installed: &'a [String],
+        settings: &'a BTreeMap<String, String>,
+        current_launcher: Option<&'a str>,
+    ) -> ApplyPlanInputs<'a> {
+        ApplyPlanInputs {
+            target_device_type: DeviceType::Shield,
+            currently_disabled: &[],
+            currently_installed: installed,
+            current_settings: settings,
+            current_launcher,
+        }
+    }
+
+    #[test]
+    fn launcher_already_home_is_not_a_change() {
+        // A snapshot taken a moment ago records the launcher that is Home now.
+        // Previewing it must not list the launcher as a change, and applying it
+        // must not re-run the launcher switch.
+        let snap = sample_snapshot();
+        let installed = vec!["com.spocky.projengmenu".to_string()];
+        let settings = BTreeMap::new();
+        let plan = compute_apply_plan(
+            &snap,
+            &launcher_inputs(&installed, &settings, Some("com.spocky.projengmenu")),
+        );
+        assert_eq!(plan.launcher_to_set, None);
+        assert_eq!(
+            plan.current_launcher.as_deref(),
+            Some("com.spocky.projengmenu")
+        );
+        assert_eq!(plan.launcher_not_installed, None);
+    }
+
+    #[test]
+    fn launcher_that_differs_or_is_unknown_is_set() {
+        let snap = sample_snapshot();
+        let installed = vec!["com.spocky.projengmenu".to_string()];
+        let settings = BTreeMap::new();
+        let differs = compute_apply_plan(
+            &snap,
+            &launcher_inputs(&installed, &settings, Some("com.google.android.tvlauncher")),
+        );
+        assert_eq!(
+            differs.launcher_to_set.as_deref(),
+            Some("com.spocky.projengmenu")
+        );
+        // Unknown is not "the same": the switch still runs, and verifies.
+        let unknown = compute_apply_plan(&snap, &launcher_inputs(&installed, &settings, None));
+        assert_eq!(
+            unknown.launcher_to_set.as_deref(),
+            Some("com.spocky.projengmenu")
+        );
+        assert_eq!(unknown.current_launcher, None);
+    }
+
+    #[test]
+    fn launcher_not_installed_is_skipped_and_named() {
+        let snap = sample_snapshot();
+        let settings = BTreeMap::new();
+        let plan = compute_apply_plan(
+            &snap,
+            &launcher_inputs(&[], &settings, Some("com.google.android.tvlauncher")),
+        );
+        assert_eq!(plan.launcher_to_set, None);
+        assert_eq!(
+            plan.launcher_not_installed.as_deref(),
+            Some("com.spocky.projengmenu")
+        );
+    }
+
+    #[test]
+    fn current_values_cover_every_setting_the_snapshot_mentions() {
+        // The preview's "Now" column: changed keys and unchanged keys both
+        // carry the device's value, and a key unset on the device is absent
+        // rather than invented.
+        let mut snap = sample_snapshot();
+        snap.settings
+            .insert("secure.long_press_timeout".into(), "400".into());
+        snap.absent_settings
+            .push("global.encoded_surround_output".into());
+        let settings = BTreeMap::from([
+            (
+                "global.window_animation_scale".to_string(),
+                "1.0".to_string(),
+            ),
+            ("secure.long_press_timeout".to_string(), "400".to_string()),
+            (
+                "global.encoded_surround_output".to_string(),
+                "3".to_string(),
+            ),
+            ("global.unrelated".to_string(), "x".to_string()),
+        ]);
+        let plan = compute_apply_plan(&snap, &launcher_inputs(&[], &settings, None));
+        assert_eq!(
+            plan.current_values,
+            BTreeMap::from([
+                (
+                    "global.encoded_surround_output".to_string(),
+                    "3".to_string()
+                ),
+                (
+                    "global.window_animation_scale".to_string(),
+                    "1.0".to_string()
+                ),
+                ("secure.long_press_timeout".to_string(), "400".to_string()),
+            ])
+        );
+        assert!(plan
+            .settings_already_set
+            .contains(&"secure.long_press_timeout".to_string()));
+        assert!(plan
+            .settings_to_write
+            .contains_key("global.window_animation_scale"));
     }
 }

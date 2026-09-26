@@ -123,6 +123,8 @@ pub fn run() {
             launcher::channel_provider_disabled,
             launcher::set_default_launcher,
             launcher::disable_launcher,
+            launcher::set_home_any,
+            launcher::disable_stock_launcher,
             apps::disable_package,
             apps::enable_package,
             apps::force_stop,

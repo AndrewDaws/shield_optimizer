@@ -174,6 +174,20 @@
   let launcherDiagnostics = $state<string[]>([]);
   let launcherDiagnosticsCopied = $state(false);
   let launcherProgress = $state(""); // live per-step status while a switch is in flight
+  /// "Open Play Store on TV" worked; the list re-polls until the app shows up.
+  let storeOpened = $state<{ pkg: string; name: string } | null>(null);
+  let storePollTimer: ReturnType<typeof setInterval> | null = null;
+  /// Advanced "Set another app as Home…": every installed app, not just the
+  /// ones that declare a Home screen. Taking over from stock is its own step.
+  let homePickerPackages = $state<OtherPackage[]>([]);
+  let homePickerLoading = $state(false);
+  let homePickerErr = $state<string | null>(null);
+  let homePickerChoice = $state("");
+  let homePickerActivity = $state("");
+  let homePickerBusy = $state<"set" | "stock" | null>(null);
+  let homePickerMessage = $state("");
+  let homePickerOk = $state(false);
+  let stockConfirmOpen = $state(false);
 
   let apps = $state<AppEntry[]>([]);
   let appsLoaded = $state(false);
@@ -518,6 +532,7 @@
     mutationRequest++;
     if (liveRefreshTimer) clearInterval(liveRefreshTimer);
     if (nowTicker) clearInterval(nowTicker);
+    stopStorePoll();
   });
 
   async function loadLauncher() {
@@ -1118,15 +1133,115 @@
   async function installLauncherFromStore(pkg: string) {
     launcherActionBusy = pkg;
     launcherActionMessage = "";
+    stopStorePoll();
+    storeOpened = null;
     try {
       const r = await api.openPlayStore(serial, pkg);
-      launcherActionMessage = r.ok
-        ? `Opened Play Store on device for ${pkg} — confirm install on the TV, then click Refresh.`
-        : `${pkg}: ${r.message.trim()}`;
+      if (r.ok) {
+        storeOpened = { pkg, name: launchers.find((l) => l.entry.package === pkg)?.entry.name ?? pkg };
+        startStorePoll(pkg);
+      } else {
+        launcherActionMessage = `${pkg}: ${r.message.trim()}`;
+      }
     } catch (e) {
       launcherActionMessage = String(e);
     } finally {
       launcherActionBusy = null;
+    }
+  }
+
+  function stopStorePoll() {
+    if (storePollTimer) clearInterval(storePollTimer);
+    storePollTimer = null;
+  }
+
+  /// The install happens on the TV, out of our sight, so look again every 5 s
+  /// for a minute and stop as soon as the app shows up.
+  function startStorePoll(pkg: string) {
+    const deadline = Date.now() + 60_000;
+    storePollTimer = setInterval(async () => {
+      if (Date.now() > deadline) return stopStorePoll();
+      if (launcherLoading || launcherActionBusy !== null) return;
+      await loadLauncher();
+      if (launchers.some((l) => l.entry.package === pkg && l.installed)) {
+        stopStorePoll();
+        storeOpened = null;
+        launcherActionMessage = `${launchers.find((l) => l.entry.package === pkg)?.entry.name ?? pkg} is installed.`;
+      }
+    }, 5_000);
+  }
+
+  async function loadHomePicker() {
+    if (homePickerLoading || homePickerPackages.length > 0) return;
+    homePickerLoading = true;
+    homePickerErr = null;
+    try {
+      const list = await api.listInstalledPackages(serial);
+      const unique = new Map(list.map((p) => [p.package, p]));
+      homePickerPackages = [...unique.values()].sort((a, b) =>
+        (a.name ?? a.package).localeCompare(b.name ?? b.package),
+      );
+    } catch (e) {
+      homePickerErr = String(e);
+    } finally {
+      homePickerLoading = false;
+    }
+  }
+
+  /// Last `set_home_any` said the stock launcher is what's in the way.
+  let stockHoldsHomeFor = $state<string | null>(null);
+
+  async function setHomeFromPicker() {
+    const pkg = homePickerChoice;
+    if (!pkg) return;
+    homePickerBusy = "set";
+    homePickerMessage = "";
+    stockConfirmOpen = false;
+    try {
+      const r = await api.setHomeAny(serial, pkg, homePickerActivity.trim() || null);
+      homePickerOk = r.ok;
+      homePickerMessage = r.message;
+      stockHoldsHomeFor = r.stock_holds_home ? pkg : null;
+      launcherDiagnostics = r.ok ? [] : (r.diagnostics ?? []);
+      await loadLauncher();
+      invalidateDeviceCaches();
+    } catch (e) {
+      homePickerOk = false;
+      homePickerMessage = String(e);
+    } finally {
+      homePickerBusy = null;
+    }
+  }
+
+  async function disableStockFromPicker(saveFirst: boolean) {
+    const pkg = homePickerChoice;
+    if (!pkg) return;
+    stockConfirmOpen = false;
+    if (saveFirst) {
+      await saveSnapshot();
+      if (!saveResult.startsWith("Saved")) {
+        homePickerOk = false;
+        homePickerMessage = "The snapshot wasn't saved, so the stock launcher was left alone.";
+        return;
+      }
+    }
+    homePickerBusy = "stock";
+    homePickerMessage = "";
+    try {
+      const r = await api.disableStockLauncher(serial, pkg);
+      homePickerOk = r.ok;
+      homePickerMessage = r.ok
+        ? `The stock launcher is disabled and ${pkg} is Home. Re-enable stock from the list above any time.`
+        : (r.last_error ?? "The stock launcher was left alone.");
+      launcherDiagnostics = r.ok ? [] : (r.diagnostics ?? []);
+      stockHoldsHomeFor = null;
+      await loadLauncher();
+      invalidateDeviceCaches();
+    } catch (e) {
+      homePickerOk = false;
+      homePickerMessage = String(e);
+    } finally {
+      homePickerBusy = null;
     }
   }
 
@@ -1347,7 +1462,7 @@
       Object.keys(preview.settings_to_write).length +
       preview.settings_to_delete.length +
       (preview.launcher_to_set ? 1 : 0);
-    if (!confirm(`Apply this snapshot? ${total} change(s) will be made to the device. Disabled packages can be re-enabled later via Recovery.`)) return;
+    if (!confirm(`Restore this snapshot? ${total} change(s) will be made to the device. Disabled packages can be re-enabled later via Recovery.`)) return;
     applyBusy = true;
     applyErr = null;
     applyResult = null;
@@ -1542,6 +1657,9 @@
     memoryConfirmed = new Set();
     launchers = []; launchersLoaded = false; currentLauncher = null; channelDisabled = null;
     launcherErr = null; launcherActionMessage = "";
+    stopStorePoll(); storeOpened = null;
+    homePickerPackages = []; homePickerErr = null; homePickerChoice = ""; homePickerActivity = "";
+    homePickerMessage = ""; homePickerOk = false; stockConfirmOpen = false; stockHoldsHomeFor = null;
     apps = []; appsLoaded = false; appsErr = null; appStates = {}; packageSafety = {}; appActionBusy = null; appActionMessage = "";
     otherPackages = []; othersLoaded = false; othersErr = null; appMemory = {}; appUsage = {}; appSearch = ""; hideNotInstalled = true; showSystemOthers = false;
     clonePkg = null; cloneTargets = [];
@@ -1710,7 +1828,7 @@
         class:far={t.far}
         onclick={() => (activeTab = t.id as Tab)}
       >
-        {t.label}
+        {t.label}{#if t.id === "snapshot"}<span class="beta-tag">Beta</span>{/if}
       </button>
     {/each}
   </div>
@@ -2242,11 +2360,11 @@
                       class="small-action"
                       onclick={() => installLauncherFromStore(l.entry.package)}
                       disabled={launcherActionBusy !== null}
-                      title="Open the Play Store on the device to install {l.entry.name}"
+                      title="Opens {l.entry.name}'s Play Store page on the TV; you confirm the install there"
                     >
-                      {busy ? "Opening…" : "Install"}
+                      {busy ? "Opening…" : "Open Play Store on TV"}
                     </button>
-                    <!-- The Install button drives the TV's own Play Store, which
+                    <!-- The Play Store button drives the TV's own store, which
                          is no help for a launcher that store doesn't carry. This
                          opens the launcher's official page here instead; it
                          downloads and installs nothing. -->
@@ -2254,10 +2372,10 @@
                       <button
                         class="small-action subtle launcher-get"
                         onclick={() => openInBrowser(l.entry.source_url ?? "")}
-                        data-tip="Open its official page in your browser"
+                        data-tip="Opens the developer's page in your browser, for launchers the TV's Play Store doesn't carry"
                         data-tip-align="end"
-                        aria-label="Open the official page for {l.entry.name}"
-                      ><Icon name="open_in_new" size={14} /> <span>Get</span></button>
+                        aria-label="Open the developer's page for {l.entry.name} in your browser"
+                      ><Icon name="open_in_new" size={14} /> <span>Source site</span></button>
                     {/if}
                   {:else}
                     {#if !l.enabled}
@@ -2334,6 +2452,103 @@
               </span>
             </div>
           </div>
+          {#if storeOpened}
+            <div class="callout callout-ok launcher-store-callout" role="status">
+              <Icon name="check_circle" size={16} />
+              <span>
+                Opened the Play Store on the TV. Confirm the install there.
+                <span class="muted">Checking for {storeOpened.name} every few seconds.</span>
+              </span>
+              <button class="callout-link" onclick={() => { stopStorePoll(); storeOpened = null; }}>
+                Dismiss
+              </button>
+            </div>
+          {/if}
+          {@const pickedStock = launchers.some((l) => l.stock && l.entry.package === homePickerChoice)}
+          {@const enabledStock = launchers.some((l) => l.stock && l.enabled)}
+          {@const pickedIsHome = homePickerChoice !== "" && currentLauncher?.package === homePickerChoice}
+          {@const stockBlocks = homePickerChoice !== "" && stockHoldsHomeFor === homePickerChoice}
+          {@const canDisableStock =
+            homePickerChoice !== "" && !pickedStock && enabledStock && (pickedIsHome || stockBlocks)}
+          <details
+            class="home-picker"
+            ontoggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) void loadHomePicker(); }}
+          >
+            <summary>Advanced: set another app as Home…</summary>
+            <div class="home-picker-body">
+              <p class="muted small">
+                Any installed app can be tried. Android only accepts an app that declares a
+                Home screen, and this says so when it doesn't. Setting an app never disables
+                anything; taking over from the stock launcher is the separate step below.
+              </p>
+              {#if homePickerErr}
+                <div class="error">{homePickerErr}</div>
+              {/if}
+              <div class="home-picker-row">
+                <label class="home-picker-field">
+                  <span class="foot-label">App</span>
+                  <select
+                    bind:value={homePickerChoice}
+                    disabled={homePickerLoading || homePickerBusy !== null}
+                    aria-label="App to set as Home"
+                    onchange={() => { homePickerMessage = ""; stockConfirmOpen = false; }}
+                  >
+                    <option value="">{homePickerLoading ? "Loading apps…" : "Choose an installed app"}</option>
+                    {#each homePickerPackages as p (p.package)}
+                      <option value={p.package}>{p.name ? `${p.name} — ${p.package}` : p.package}</option>
+                    {/each}
+                  </select>
+                </label>
+                <label class="home-picker-field home-picker-activity">
+                  <span class="foot-label">Activity (optional)</span>
+                  <input
+                    class="mono"
+                    placeholder=".MainActivity"
+                    bind:value={homePickerActivity}
+                    disabled={homePickerBusy !== null}
+                    aria-label="Activity to register as Home (optional)"
+                  />
+                </label>
+                <button
+                  class="small-action"
+                  onclick={setHomeFromPicker}
+                  disabled={homePickerChoice === "" || homePickerBusy !== null || launcherActionBusy !== null}
+                >{homePickerBusy === "set" ? "Setting…" : "Set as Home"}</button>
+                <button
+                  class="small-action subtle danger"
+                  onclick={() => (stockConfirmOpen = true)}
+                  disabled={!canDisableStock || homePickerBusy !== null || launcherActionBusy !== null}
+                  title={canDisableStock
+                    ? "Disable the stock launcher so Home goes to the app you picked"
+                    : !enabledStock
+                      ? "No enabled stock launcher on this TV"
+                      : pickedStock
+                        ? "Pick the app that should take over, not the stock launcher"
+                        : "Set the app as Home first. This stays off until it's Home, or until Android says the stock launcher is what's in the way."}
+                >{homePickerBusy === "stock" ? "Disabling…" : "Disable stock launcher"}</button>
+              </div>
+              {#if stockConfirmOpen}
+                <div class="callout callout-warn home-picker-confirm" role="alertdialog" aria-label="Confirm disabling the stock launcher">
+                  <Icon name="warning" size={16} />
+                  <span>
+                    Disable the stock launcher and hand Home to <span class="mono">{homePickerChoice}</span>?
+                    If Home doesn't land on it, the stock launcher is re-enabled straight away. You can
+                    re-enable it from the list above at any time.
+                  </span>
+                  <span class="home-picker-confirm-actions">
+                    <button class="small-action" onclick={() => disableStockFromPicker(true)}>Save snapshot first</button>
+                    <button class="small-action subtle danger" onclick={() => disableStockFromPicker(false)}>Disable stock launcher</button>
+                    <button class="small-action subtle" onclick={() => (stockConfirmOpen = false)}>Cancel</button>
+                  </span>
+                </div>
+              {/if}
+              {#if homePickerMessage}
+                <p class="small action-message home-picker-result" class:ok={homePickerOk} role="status">
+                  {homePickerMessage}
+                </p>
+              {/if}
+            </div>
+          </details>
           {#if launcherActionMessage}
             <p class="muted small mono action-message">{launcherActionMessage}</p>
           {/if}
@@ -2717,15 +2932,20 @@
     <div class="card" role="tabpanel" tabindex={0} id="tabpanel-snapshot" aria-labelledby="tab-snapshot">
       <div class="card-header">
         <div class="header-title">
-          <h2><Icon name="history" size={20} /> Snapshot</h2>
+          <h2><Icon name="history" size={20} /> Snapshot <span class="beta-tag">Beta</span></h2>
           <p class="muted small mono header-sub">
-            package states, launcher &amp; tweak values for this device
+            disabled apps, Home app &amp; system settings for this device
           </p>
         </div>
         <button class="primary" onclick={saveSnapshot} disabled={saveBusy}>
           <Icon name="save" size={16} /> {saveBusy ? "Saving…" : "Save snapshot"}
         </button>
       </div>
+      <p class="muted small snap-explainer">
+        A snapshot records which apps are disabled, your Home app and 11 system settings.
+        Restoring it disables those apps again and puts the settings back. It never
+        re-enables anything or reinstalls apps.
+      </p>
       {#if saveResult}<p class="muted small">{saveResult}</p>{/if}
       {#if snapshotsErr}<div class="error">{snapshotsErr}</div>{/if}
 
@@ -2751,7 +2971,7 @@
                     {#if selected}
                       <span class="tag installed">SELECTED</span>
                     {:else}
-                      <button class="small-action" onclick={() => previewSnapshot(s.path)}>Preview apply</button>
+                      <button class="small-action" onclick={() => previewSnapshot(s.path)}>Preview restore</button>
                     {/if}
                   </span>
                 </div>
@@ -2772,7 +2992,7 @@
           <div class="foot-card snap-contents">
             <span class="foot-label">Contents of selection</span>
             <dl class="snap-contents-list">
-              <dt>Package states</dt><dd class="mono">{chosen.disabled_count}</dd>
+              <dt>Disabled apps</dt><dd class="mono">{chosen.disabled_count}</dd>
               <dt>Launcher</dt><dd class="mono">{chosen.launcher ?? "—"}</dd>
               <dt>Tweak values</dt><dd class="mono">{chosen.settings_count}</dd>
             </dl>
@@ -2788,17 +3008,21 @@
         <div class="error">{previewErr}</div>
       {:else if preview && previewPath}
         {@const settingsToWrite = Object.entries(preview.settings_to_write)}
-        {@const alreadySet = new Set(preview.settings_already_set)}
+        {@const nowValues = preview.current_values ?? {}}
+        {@const snapLauncher = snapshots.find((s) => s.path === previewPath)?.launcher ?? null}
+        {@const launcherUnchanged =
+          !preview.launcher_to_set && !preview.launcher_not_installed && snapLauncher !== null}
         {@const willChange =
           preview.packages_to_disable.length +
-          settingsToWrite.filter(([k]) => !alreadySet.has(k)).length +
+          settingsToWrite.length +
           preview.settings_to_delete.length +
           (preview.launcher_to_set ? 1 : 0)}
         {@const unchanged =
           preview.packages_already_disabled.length +
           preview.packages_not_installed.length +
-          preview.settings_already_set.length}
-        <p class="rail-label">Apply plan — preview before running</p>
+          preview.settings_already_set.length +
+          (launcherUnchanged || preview.launcher_not_installed ? 1 : 0)}
+        <p class="rail-label">Restore plan — preview before running</p>
         {#if preview.cross_device_warning}
           <div class="warning">{preview.cross_device_warning}</div>
         {/if}
@@ -2816,26 +3040,44 @@
                 <tr><td class="mono">{pkg}</td><td class="plan-now">ENABLED</td><td class="plan-next change">→ DISABLED</td></tr>
               {/each}
               {#if preview.launcher_to_set}
-                <tr>
-                  <td class="mono">launcher</td>
-                  <td class="plan-now">{currentLauncher?.package ?? "—"}</td>
+                <tr data-plan-item="launcher">
+                  <td class="mono">Home app</td>
+                  <td class="plan-now mono">{preview.current_launcher ?? "—"}</td>
                   <td class="plan-next change mono">→ {preview.launcher_to_set}</td>
                 </tr>
               {/if}
               {#each settingsToWrite as [key, value] (key)}
                 <tr>
                   <td class="mono">{key}</td>
-                  <td class="plan-now mono">{alreadySet.has(key) ? value : "—"}</td>
-                  <td class="plan-next mono" class:change={!alreadySet.has(key)}>
-                    → {value}{alreadySet.has(key) ? " (no change)" : ""}
-                  </td>
+                  <td class="plan-now mono">{nowValues[key] ?? "UNSET"}</td>
+                  <td class="plan-next mono change">→ {value}</td>
                 </tr>
               {/each}
               {#each preview.settings_to_delete as key (key)}
                 <tr>
                   <td class="mono">{key}</td>
-                  <td class="plan-now mono">—</td>
+                  <td class="plan-now mono">{nowValues[key] ?? "—"}</td>
                   <td class="plan-next change">→ DEVICE DEFAULT</td>
+                </tr>
+              {/each}
+              {#if launcherUnchanged}
+                <tr class="plan-noop" data-plan-item="launcher">
+                  <td class="mono">Home app</td>
+                  <td class="plan-now mono">{preview.current_launcher ?? "—"}</td>
+                  <td class="plan-next">→ {snapLauncher} (no change)</td>
+                </tr>
+              {:else if preview.launcher_not_installed}
+                <tr class="plan-noop" data-plan-item="launcher">
+                  <td class="mono">Home app</td>
+                  <td class="plan-now mono">{preview.current_launcher ?? "—"}</td>
+                  <td class="plan-next">→ skipped ({preview.launcher_not_installed} isn't installed)</td>
+                </tr>
+              {/if}
+              {#each preview.settings_already_set as key (key)}
+                <tr class="plan-noop">
+                  <td class="mono">{key}</td>
+                  <td class="plan-now mono">{nowValues[key] ?? "UNSET"}</td>
+                  <td class="plan-next mono">→ {nowValues[key] ?? "DEVICE DEFAULT"} (no change)</td>
                 </tr>
               {/each}
               {#each preview.packages_already_disabled as pkg (pkg)}
@@ -2863,12 +3105,13 @@
             onclick={applySnapshot}
             disabled={applyBusy || applyResult !== null}
           >
-            {applyBusy ? "Applying…" : applyResult ? "Applied" : "Apply this snapshot"}
+            {applyBusy ? "Restoring…" : applyResult ? "Restored" : "Restore this snapshot"}
           </button>
           <span class="muted small">
             Disable is reversible via Emergency Recovery on the Overview tab.
           </span>
         </div>
+        {#if applyErr || applyResult}
         <div class="preview-box">
           {#if applyErr}
             <div class="error">{applyErr}</div>
@@ -2892,8 +3135,9 @@
             </div>
           {/if}
         </div>
+        {/if}
       {:else}
-        <p class="rail-label">Apply plan — preview before running</p>
+        <p class="rail-label">Restore plan — preview before running</p>
         <div class="plan-empty">
           <Icon name="history" size={28} />
           <strong>No snapshot selected</strong>
@@ -3423,6 +3667,9 @@
   }
   .tabs {
     display: flex;
+    /* Stretch, not centre: every tab takes the tallest tab's height, so the
+       active underline stays on one line even when a tab carries a tag. */
+    align-items: stretch;
     gap: 0.4rem;
     margin-bottom: 1rem;
     border-bottom: 1px solid var(--border);
@@ -3715,6 +3962,79 @@
     gap: 1rem;
     margin-top: 1rem;
   }
+  .launcher-store-callout {
+    margin-top: 1rem;
+    align-items: center;
+  }
+  .home-picker {
+    margin-top: 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+  }
+  .home-picker summary {
+    padding: 0.7rem 0.9rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--fg-secondary);
+  }
+  .home-picker-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0 0.9rem 0.9rem;
+  }
+  .home-picker-body > p {
+    margin: 0;
+  }
+  .home-picker-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.6rem;
+  }
+  .home-picker-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    flex: 1 1 18rem;
+    min-width: 0;
+  }
+  .home-picker-field select {
+    width: 100%;
+  }
+  /* One height for the select, the input and both buttons: the row aligns
+     bottoms, so a taller select lifted its label off the Activity label and the
+     short buttons sat below the fields' centre line. */
+  .home-picker-field select,
+  .home-picker-field input,
+  .home-picker-row > button {
+    box-sizing: border-box;
+    height: 2.25rem;
+  }
+  .home-picker-activity {
+    flex: 0 1 11rem;
+  }
+  .home-picker-confirm {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .home-picker-confirm > span:not(.home-picker-confirm-actions) {
+    flex: 1 1 20rem;
+  }
+  .home-picker-confirm-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .home-picker-result {
+    margin: 0;
+    color: var(--fg-secondary);
+  }
+  .home-picker-result.ok {
+    color: var(--ok);
+  }
   /* Keeps the Get link on the row rather than below it when the actions wrap. */
   .launcher-get {
     white-space: nowrap;
@@ -3773,6 +4093,18 @@
   .tag.stock { background: var(--bg-muted); color: var(--accent); }
   .tag.missing { background: var(--bg-muted); color: var(--fg-faint); }
   .tag.disabled { background: var(--warn-surface-2); color: var(--warn); }
+  .beta-tag {
+    margin-left: 0.35rem;
+    padding: 0.05rem 0.35rem;
+    border-radius: var(--radius-sm);
+    background: var(--warn-surface-2);
+    color: var(--warn);
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
   .warning {
     background: var(--warn-surface);
     border: 1px solid var(--warn-border);
@@ -3798,6 +4130,11 @@
   /* What you have on the left, what applying it would do on the right —
      board 11.10. The plan used to sit under the list, so choosing a snapshot
      scrolled the thing you were choosing out of view. */
+  .snap-explainer {
+    margin: 0.25rem 0 0;
+    max-width: 44rem;
+    line-height: 1.5;
+  }
   .snap-layout {
     display: grid;
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);

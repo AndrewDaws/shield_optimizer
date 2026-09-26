@@ -43,6 +43,7 @@ import type {
   ScanResult,
   ScreenshotResult,
   SendTextResult,
+  SetHomeAnyResult,
   SetLauncherResult,
   SettingNamespace,
   ShellRunResult,
@@ -101,6 +102,10 @@ export const api = {
     }),
   disableLauncher: (serial: string, pkg: string) =>
     invoke<ActionResult>("disable_launcher", { serial, package: pkg }),
+  setHomeAny: (serial: string, pkg: string, activity: string | null = null) =>
+    invoke<SetHomeAnyResult>("set_home_any", { serial, package: pkg, activity }),
+  disableStockLauncher: (serial: string, target: string) =>
+    invoke<SetLauncherResult>("disable_stock_launcher", { serial, target }),
 
   takeScreenshot: (serial: string) =>
     invoke<ScreenshotResult>("take_screenshot", { serial }),

@@ -323,6 +323,7 @@ pub async fn preview_apply(
 
     let device = crate::commands::devices::device_profile_impl(state.inner(), &serial).await?;
     let current_settings = current_settings_map(adb.as_ref(), &serial).await?;
+    let current_launcher = crate::commands::launcher::active_launcher(adb.as_ref(), &serial).await;
 
     let plan = compute_apply_plan(
         &snap,
@@ -331,6 +332,7 @@ pub async fn preview_apply(
             currently_installed: &installed_pkgs,
             currently_disabled: &disabled_pkgs,
             current_settings: &current_settings,
+            current_launcher: current_launcher.as_deref(),
         },
     );
     Ok(plan)
@@ -411,6 +413,7 @@ pub async fn apply_snapshot(
 
     let device = crate::commands::devices::device_profile_impl(state.inner(), &serial).await?;
     let current_settings = current_settings_map(adb.as_ref(), &serial).await?;
+    let current_launcher = crate::commands::launcher::active_launcher(adb.as_ref(), &serial).await;
     let plan = compute_apply_plan(
         &snap,
         &ApplyPlanInputs {
@@ -418,6 +421,7 @@ pub async fn apply_snapshot(
             currently_installed: &installed_pkgs,
             currently_disabled: &disabled_pkgs,
             current_settings: &current_settings,
+            current_launcher: current_launcher.as_deref(),
         },
     );
 
@@ -425,7 +429,8 @@ pub async fn apply_snapshot(
     let (packages_disabled, packages_failed) =
         disable_from_plan(adb.as_ref(), &serial, &plan.packages_to_disable).await;
 
-    // 2. Set launcher if requested.
+    // 2. Set launcher only when the plan says Home differs from the snapshot's;
+    // `None` skips the whole switch ladder.
     let mut launcher_set = false;
     let mut launcher_message = None;
     if let Some(launcher_pkg) = &plan.launcher_to_set {
@@ -663,8 +668,11 @@ mod tests {
             packages_already_disabled: vec![],
             packages_not_installed: vec![],
             launcher_to_set: None,
+            current_launcher: None,
+            launcher_not_installed: None,
             cross_device_warning: None,
             settings_already_set: vec![],
+            current_values: Default::default(),
             settings_to_write: [("global.empty".into(), String::new())].into(),
             settings_to_delete: vec![
                 "global.unset".into(),
