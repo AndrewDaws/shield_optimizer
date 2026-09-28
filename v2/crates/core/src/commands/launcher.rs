@@ -1183,7 +1183,13 @@ async fn discover_home_activity(
 /// Each Activity block exposes one packageName line. Strict regex (real
 /// package names start with a letter and only contain `[a-zA-Z0-9_.]`)
 /// avoids matching anything that happens to contain the string.
-pub(crate) fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
+///
+/// Public so desktop's diagnostics bundle (`commands::diagnostics` in the
+/// `shield-optimizer-v2` crate) reuses this parser instead of assuming
+/// `HOME_HANDLER_QUERY`'s `name=` field is a flattened `pkg/activity`
+/// component — it isn't; `name=` is the bare class and `packageName=` is the
+/// separate field this parses.
+pub fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"^\s*packageName=([a-zA-Z][a-zA-Z0-9_.]+)\s*$").unwrap()
     });
