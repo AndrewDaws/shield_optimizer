@@ -279,19 +279,18 @@
   // tells the tab to drop that stale plan and reload fresh next run.
   let optimizeResetToken = $state(0);
   let mediaResetToken = $state(0);
-  /// Remembered per TV, by hardware id where we have one. Resolved once per
-  /// identity and written back on every change — never re-read over live
-  /// state. It used to be re-read inside `loadApps`, after an await, so the
-  /// tick vanished the moment the App List or Health refreshed underneath it:
-  /// with no hardware id yet resolved `getShellAcknowledged` answered false and
-  /// overwrote a consent the user had just given.
+  /// Remembered per TV by hardware id, and only in this page's state for a TV
+  /// without one. Resolved once per identity and written back on every change —
+  /// never re-read over live state. It used to be re-read inside `loadApps`,
+  /// after an await, so the tick vanished the moment the App List or Health
+  /// refreshed underneath it.
   let shellAcknowledged = $state(false);
   let shellAckResolvedFor: string | null = null;
   $effect(() => {
     const identity = hardwareId ?? serial;
     if (identity === shellAckResolvedFor) return;
     shellAckResolvedFor = identity;
-    shellAcknowledged = getShellAcknowledged(hardwareId, serial);
+    shellAcknowledged = getShellAcknowledged(hardwareId);
   });
 
   async function loadDevice() {
@@ -3200,7 +3199,7 @@
         acknowledged={shellAcknowledged}
         onacknowledge={(next) => {
           shellAcknowledged = next;
-          setShellAcknowledged(hardwareId, serial, next);
+          setShellAcknowledged(hardwareId, next);
         }}
         onexecuted={shellExecuted}
       />

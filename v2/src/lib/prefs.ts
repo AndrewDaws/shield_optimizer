@@ -148,44 +148,28 @@ function readAckSet(): Set<string> {
   }
 }
 
-/// The key this TV's shell consent is filed under.
-///
-/// Hardware id wherever we have one — the same rule the keep decisions follow.
-/// Consenting to arbitrary shell on the living-room Shield must not silently
-/// consent for whatever else later answers on that IP.
-///
-/// The fallback is the one case where the address is the only key we have: an
-/// unauthorised or not-yet-profiled transport reports no `ro.serialno`, so the
-/// consent is remembered per address and claims nothing about which device is
-/// on it. It is prefixed so an address can never collide with a hardware id.
-/// Refusing to key at all was worse in practice — `setShellAcknowledged` then
-/// silently discarded the tick, and Run stayed disabled with the box visibly
-/// ticked.
-function shellAckKey(
-  hardwareId: string | null | undefined,
-  serial?: string | null,
-): string | null {
-  if (hardwareId) return hardwareId;
-  const address = serial?.trim();
-  return address ? `addr:${address}` : null;
+/// The key this TV's shell consent is filed under: its hardware id, the same
+/// rule the keep decisions follow. Consenting to arbitrary shell on the
+/// living-room Shield must not silently consent for whatever else later
+/// answers on that IP, so a TV with no readable `ro.serialno` gets no key at
+/// all. Its tick lives only in the device page's state and is asked again
+/// next time.
+function shellAckKey(hardwareId: string | null | undefined): string | null {
+  return hardwareId || null;
 }
 
 /// Whether expert shell has been acknowledged for this TV before.
-export function getShellAcknowledged(
-  hardwareId: string | null | undefined,
-  serial?: string | null,
-): boolean {
-  const key = shellAckKey(hardwareId, serial);
+export function getShellAcknowledged(hardwareId: string | null | undefined): boolean {
+  const key = shellAckKey(hardwareId);
   if (!key) return false;
   return readAckSet().has(key);
 }
 
 export function setShellAcknowledged(
   hardwareId: string | null | undefined,
-  serial: string | null | undefined,
   acknowledged: boolean,
 ): void {
-  const key = shellAckKey(hardwareId, serial);
+  const key = shellAckKey(hardwareId);
   if (!key) return;
   const set = readAckSet();
   if (acknowledged) set.add(key);
