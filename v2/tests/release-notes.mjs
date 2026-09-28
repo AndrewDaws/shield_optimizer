@@ -24,14 +24,24 @@ const manifest = JSON.parse(
 );
 const real = parseReleaseNotes(manifest.notes);
 
+// Expectations come from the manifest itself, which every release replaces.
+const firstHeading = manifest.notes.match(/^###\s+(.+)$/m)?.[1].trim();
+const firstItemWords = manifest.notes
+  .match(/^- (.+)$/m)?.[1]
+  .replace(/[*`]/g, "")
+  .split(/\s+/)
+  .slice(0, 4)
+  .join(" ");
+assert.ok(firstHeading && firstItemWords, "fixture has a heading and a list item");
+
 assert.ok(real.length > 10, "the real notes parse into many blocks");
 assert.ok(
-  real.some((b) => b.kind === "heading" && text(b) === "Launchers"),
-  "section headings survive",
+  real.some((b) => b.kind === "heading" && text(b) === firstHeading),
+  `section headings survive: ${firstHeading}`,
 );
 assert.ok(
-  real.some((b) => b.kind === "item" && text(b).includes("Set as default")),
-  "list items survive",
+  real.some((b) => b.kind === "item" && text(b).includes(firstItemWords)),
+  `list items survive: ${firstItemWords}`,
 );
 // The workflow appends Gatekeeper/SmartScreen boilerplate after a --- rule.
 // Useful on the releases page, noise inside a running app.
