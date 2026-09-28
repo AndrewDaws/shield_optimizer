@@ -2256,7 +2256,7 @@
                     title={safetyReason(lookup)}
                   >
                     {#if suggestion.kind === "recommendation"}
-                      {@const kept = keptPackages.has(m.package) && !["act", "review", "restore"].includes(suggestion.rec.kind)}
+                      {@const kept = keptPackages.has(m.package) && suggestion.rec.kind !== "restore"}
                       <span class={`suggestion suggestion--${kept ? "keep" : suggestion.rec.kind}`}>{kept ? "Kept" : suggestion.rec.label}</span>
                     {:else if suggestion.kind === "process"}
                       <span class="suggestion suggestion--keep">Not an app</span>
@@ -2661,6 +2661,7 @@
               {@const state = appStates[a.package] ?? null}
               {@const safety = packageSafety[a.package]}
               {@const rec = recommendation(a, state, safety)}
+              {@const kept = keptPackages.has(a.package) && rec.kind !== "restore"}
               {@const canRemove = (state === "enabled" || state === "disabled") && safety?.status === "ready" && !isBlocked(safety.verdict)}
               <AppRow
                 name={a.name}
@@ -2674,7 +2675,7 @@
                 safety={safety?.status === "ready" ? safety.verdict : null}
                 safetyStatus={safety?.status ?? "unavailable"}
                 safetyUnavailableReason={safety?.status === "unavailable" ? safety.reason : undefined}
-                rowClass={rec.kind === "review" ? "review-flag" : undefined}
+                rowClass={rec.kind === "review" && !kept ? "review-flag" : undefined}
                 detailOpen={expandedSafety === a.package}
                 onToggleDetail={() =>
                   (expandedSafety = expandedSafety === a.package ? null : a.package)}
@@ -2683,7 +2684,17 @@
                 <td class="rec-cell controls-start">
                   <div class="actions-cell">
                     <div class="row-verbs">
-                  {#if rec.kind === "act"}
+                  {#if kept}
+                    <!-- The user's own decision, shown exactly like "already
+                         disabled": grey, because a decided row should recede.
+                         Never teal or lime — those mean verdict and action. -->
+                    <span class="muted small done" data-rec="Kept"><Icon name="check" size={14} /> Kept</span>
+                    <button
+                      class="small-action subtle change-keep"
+                      onclick={() => toggleKept(a.package)}
+                      data-tip="Undo keeping this app"
+                    >Change</button>
+                  {:else if rec.kind === "act"}
                     <button
                       class="small-action recommended"
                       class:danger={rec.action === "uninstall"}
@@ -2715,16 +2726,6 @@
                     >
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
-                  {:else if keptPackages.has(a.package)}
-                    <!-- The user's own decision, shown exactly like "already
-                         disabled": grey, because a decided row should recede.
-                         Never teal or lime — those mean verdict and action. -->
-                    <span class="muted small done" data-rec="Kept"><Icon name="check" size={14} /> Kept</span>
-                    <button
-                      class="small-action subtle change-keep"
-                      onclick={() => toggleKept(a.package)}
-                      data-tip="Undo keeping this app"
-                    >Change</button>
                   {:else if rec.kind === "done"}
                     <span class="muted small done" data-rec={rec.label}><Icon name="check" size={14} /> {rec.label}</span>
                   {:else if rec.kind === "unavailable"}
