@@ -110,7 +110,33 @@ const usbDevice: Device = {
   },
 };
 
-const allDevices = [device, unconfirmedDevice, usbDevice];
+/// A device that positively said it is not a TV: a phone characteristic and
+/// no leanback feature. Listed, labelled, and only opened after "Open anyway"
+/// (#120). Behind the `notTv` demo flag so the gallery is unchanged.
+const phoneDevice: Device = {
+  id: 4,
+  serial: "192.168.1.88:37015",
+  name: "Pixel Tablet",
+  model: "Pixel Tablet",
+  device_type: "unknown",
+  tv_evidence: "not_tv",
+  status: "device",
+  connection: "network",
+  properties: {
+    friendly_name: "Pixel Tablet",
+    brand: "google",
+    model: "Pixel Tablet",
+    device_codename: "tangorpro",
+    manufacturer: "Google",
+    android_release: "15",
+    sdk_level: "35",
+    build_id: "AP4A.250105.002",
+    board_platform: "gs201",
+    characteristics: "nosdcard,tablet",
+    serial_number: "3A171FDJH00ZX4",
+    leanback: false,
+  },
+};
 
 /// Opt-in demo switches, set from a test's init script. Off by default so the
 /// generated gallery keeps showing the ordinary state of the app.
@@ -122,6 +148,12 @@ function demoFlag(name: string): boolean {
   }
 }
 
+function demoDevices(): Device[] {
+  const list = [device, unconfirmedDevice, usbDevice];
+  if (demoFlag("notTv")) list.push(phoneDevice);
+  return list;
+}
+
 let debugLogging = false;
 const LOG_DIR = "/Users/you/Library/Application Support/ShieldOptimizer/logs";
 
@@ -129,7 +161,7 @@ const LOG_DIR = "/Users/you/Library/Application Support/ShieldOptimizer/logs";
 /// then one device's identity and TV evidence, then a log tail. No package
 /// inventory, here or there.
 function demoDiagnostics(serial: string | null): string {
-  const target = serial ? allDevices.find((d) => d.serial === serial) : null;
+  const target = serial ? demoDevices().find((d) => d.serial === serial) : null;
   const lines = [
     "## ATV Optimizer diagnostics",
     "",
@@ -456,9 +488,9 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
           "- It opens the new launcher on the TV the moment the switch succeeds.",
       };
     case "list_devices":
-      return allDevices;
+      return demoDevices();
     case "device_profile":
-      return allDevices.find((d) => d.serial === String(args.serial ?? "")) ?? device;
+      return demoDevices().find((d) => d.serial === String(args.serial ?? "")) ?? device;
     case "collect_diagnostics":
       return demoDiagnostics((args.serial as string | null) ?? null);
     case "get_debug_logging":

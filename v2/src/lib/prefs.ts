@@ -196,3 +196,37 @@ export function setShellAcknowledged(
     /* storage unavailable — the box just has to be ticked again next time */
   }
 }
+
+const OPEN_NON_TV_KEY = "shieldopt.openNonTv";
+
+/// Devices that reported they are not an Android TV, but that the user chose
+/// to open anyway (#120).
+///
+/// Hardware id only, with no address fallback: the choice is only offered to a
+/// device that answered the TV question, so it always had an id to answer
+/// with. Whatever answers on the same IP later has to earn its own.
+export function getOpenNonTvIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(OPEN_NON_TV_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((v): v is string => typeof v === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function setOpenNonTv(hardwareId: string | null | undefined, open: boolean): Set<string> {
+  const set = getOpenNonTvIds();
+  if (!hardwareId) return set;
+  if (open) set.add(hardwareId);
+  else set.delete(hardwareId);
+  try {
+    localStorage.setItem(OPEN_NON_TV_KEY, JSON.stringify([...set].sort()));
+  } catch {
+    /* storage unavailable — the choice lasts until the app restarts */
+  }
+  return set;
+}
