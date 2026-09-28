@@ -21,6 +21,7 @@
   } from "$lib/prefs";
   import { api } from "$lib/api";
   import { parseReleaseNotes, type NoteBlock } from "$lib/release-notes";
+  import { isNewerVersion } from "$lib/version";
   import type { UpdateInfo } from "$lib/types";
 
   let { children } = $props();
@@ -52,30 +53,6 @@
   const arrivedNotes = $derived<NoteBlock[]>(
     update?.current_notes ? parseReleaseNotes(update.current_notes) : [],
   );
-
-  /// Compare `MAJOR.MINOR.PATCH[-pre]`. The same rule as `is_newer` in
-  /// `src-tauri/src/commands/update.rs`, for the one question asked here.
-  function isNewerVersion(a: string, b: string): boolean {
-    const parse = (v: string) => {
-      const dash = v.indexOf("-");
-      const core = dash === -1 ? v : v.slice(0, dash);
-      const parts = core.split(".").map((n) => Number.parseInt(n, 10) || 0);
-      return {
-        core: [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0],
-        pre: dash === -1 ? null : v.slice(dash + 1),
-      };
-    };
-    const x = parse(a);
-    const y = parse(b);
-    for (let i = 0; i < 3; i++) {
-      if (x.core[i] !== y.core[i]) return x.core[i] > y.core[i];
-    }
-    if (x.pre === y.pre) return false;
-    // A stable build beats a pre-release of the same core version.
-    if (x.pre === null) return true;
-    if (y.pre === null) return false;
-    return x.pre > y.pre;
-  }
 
   /// GitHub has published a tag the updater manifest has not caught up with.
   ///
