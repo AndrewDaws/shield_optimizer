@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { api } from "$lib/api";
   import type { Device, DeviceReport } from "$lib/types";
   import { deviceTypeLabel } from "$lib/types";
@@ -98,6 +98,7 @@
       connectMessage = r.message.trim();
       if (r.ok) {
         connectAddress = "";
+        pairNextStep = false;
         await refresh();
       }
     } catch (e) {
@@ -105,6 +106,23 @@
     } finally {
       connectBusy = false;
     }
+  }
+
+  let connectInput = $state<HTMLInputElement | null>(null);
+  /// Set after a successful pair: the connect box holds the paired host and
+  /// is waiting for the separate connect port (#88).
+  let pairNextStep = $state(false);
+
+  /// The host part of a pairing address, without its port. The connect port
+  /// is a different one, so only the host carries over.
+  function pairedHost(address: string): string {
+    const a = address.trim();
+    if (a.startsWith("[")) {
+      const end = a.indexOf("]");
+      return end > 0 ? a.slice(0, end + 1) : a;
+    }
+    const m = /^([^:]+):\d+$/.exec(a);
+    return m ? m[1] : a;
   }
 
   async function scan() {
@@ -231,7 +249,16 @@
       const r = await api.pairDevice(pairAddress.trim(), pairPin.trim());
       pairMessage = r.message;
       if (r.ok) {
+        const host = pairedHost(pairAddress);
         pairAddress = "";
+        if (host) {
+          connectAddress = `${host}:`;
+          pairNextStep = true;
+          await tick();
+          connectInput?.focus();
+          const end = connectAddress.length;
+          connectInput?.setSelectionRange(end, end);
+        }
         await refresh();
       }
     } catch (e) {
@@ -332,6 +359,7 @@
   <input
     placeholder="IP[:port] — e.g. 192.168.42.71"
     bind:value={connectAddress}
+    bind:this={connectInput}
     onkeydown={(e) => e.key === "Enter" && connect()}
   />
   <button class="primary" onclick={connect} disabled={connectBusy || !connectAddress.trim()}>
@@ -346,6 +374,11 @@
   <button onclick={reportAll} disabled={reportBusy || adbMissing} title="Run a health report against every connected device">
     {reportBusy ? "Reporting…" : "Report All"}
   </button>
+  {#if pairNextStep}
+    <p class="connect-message pair-next">
+      Now enter the port shown on the TV's main Wireless debugging screen, then Add by IP.
+    </p>
+  {/if}
   {#if connectMessage}
     <p class="connect-message muted">{connectMessage}</p>
   {/if}
@@ -367,7 +400,7 @@
     <p class="pair-note small">
       <strong>Pairing and connecting use different ports.</strong>
       After pairing, return to the main Wireless debugging screen and enter the IP address and port
-      shown there in <strong>Connect IP</strong> above. Do not reuse the pairing port.
+      shown there in the box above, then click <strong>Add by IP</strong>. Do not reuse the pairing port.
     </p>
     <div class="pair-row">
       <input

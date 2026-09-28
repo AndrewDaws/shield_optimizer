@@ -202,7 +202,7 @@ pub async fn scan_network(state: State<'_, AppState>) -> Result<ScanResult, Stri
             failed: vec![],
             needs_pairing: vec![],
             message: "Could not detect default gateway. Set SHIELD_OPTIMIZER_SUBNET=\"a.b.c\" \
-                      to override, or use Connect IP."
+                      to override, or use Add by IP."
                 .to_string(),
         });
     };
@@ -282,7 +282,7 @@ fn summary_message(
     if found == 0 {
         return format!(
             "No devices on {subnet_label}.x answered on the ADB port. Make sure Network \
-             Debugging is enabled on your TV, or use Connect IP for newer Google TVs that \
+             Debugging is enabled on your TV, or use Add by IP for newer Google TVs that \
              need PIN pairing first."
         );
     }

@@ -298,7 +298,7 @@ async fn pair_device_impl(
 
     Ok(ConnectResult {
         ok: true,
-        message: "Paired successfully. Pairing established trust; to connect, enter the separate IP:port shown on the TV's main Wireless debugging screen in Connect IP."
+        message: "Paired successfully. Pairing established trust; connecting is a separate step on a different port."
             .to_string(),
     })
 }
@@ -1024,7 +1024,7 @@ mod tests {
         assert!(result.ok);
         assert_eq!(
             result.message,
-            "Paired successfully. Pairing established trust; to connect, enter the separate IP:port shown on the TV's main Wireless debugging screen in Connect IP."
+            "Paired successfully. Pairing established trust; connecting is a separate step on a different port."
         );
         assert_eq!(
             *raw_log.lock().unwrap(),

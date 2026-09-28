@@ -793,7 +793,7 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
     case "pair_device":
       return {
         ok: true,
-        message: "Paired successfully. Pairing established trust; to connect, enter the separate IP:port shown on the TV's main Wireless debugging screen in Connect IP.",
+        message: "Paired successfully. Pairing established trust; connecting is a separate step on a different port.",
       };
     case "connect_device":
       return { ok: true, message: `connected to ${String(args.address)}` };
