@@ -132,8 +132,14 @@ fn from_catalog(entry: CatalogVerdict<'_>) -> Safety {
         format!(" {description}")
     };
     match entry.risk {
+        // The label already says "Safe to remove", so the reason is the
+        // catalog's own sentence about the app rather than a restatement.
         RiskTier::Safe => Safety::Safe {
-            reason: format!("Reviewed for Android TV and rated safe to remove.{detail}"),
+            reason: if description.is_empty() {
+                "Reviewed for Android TV.".to_string()
+            } else {
+                description.to_string()
+            },
             source: SafetySource::ReviewedCatalog,
         },
         RiskTier::Medium => Safety::Caution {
@@ -671,9 +677,9 @@ mod tests {
         match verdict {
             Safety::Safe { reason, source } => {
                 assert_eq!(source, SafetySource::ReviewedCatalog);
-                assert!(reason.contains("rated safe to remove"), "{reason}");
-                // The curated sentence leads, rather than being replaced.
-                assert!(reason.contains("Photo gallery"), "{reason}");
+                // The curated sentence is the whole reason; the label carries
+                // "Safe to remove", so repeating it here said it twice.
+                assert_eq!(reason, "Photo gallery — rarely used on TV.");
             }
             other => panic!("expected Safe, got {other:?}"),
         }
@@ -775,7 +781,7 @@ mod tests {
             classify_with_catalog("com.example.app", Some(catalog(RiskTier::Safe, "   ")));
         match verdict {
             Safety::Safe { reason, .. } => {
-                assert_eq!(reason, "Reviewed for Android TV and rated safe to remove.");
+                assert_eq!(reason, "Reviewed for Android TV.");
                 assert!(
                     !reason.contains("  "),
                     "no double space from an empty detail"

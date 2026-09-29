@@ -1,10 +1,18 @@
 <script lang="ts">
+  import "../app.css";
+  import Icon from "$lib/components/Icon.svelte";
+  import BrandMark from "$lib/components/BrandMark.svelte";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { check, type Update } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
-  import { getThemePref, setThemePref, type ThemePref } from "$lib/theme";
+  import {
+    getThemePref,
+    setThemePref,
+    watchOsTheme,
+    type ThemePref,
+  } from "$lib/theme";
   import {
     getAutoUpdate,
     getLastSeenVersion,
@@ -13,6 +21,7 @@
   } from "$lib/prefs";
   import { api } from "$lib/api";
   import { parseReleaseNotes, type NoteBlock } from "$lib/release-notes";
+  import { isNewerVersion } from "$lib/version";
   import type { UpdateInfo } from "$lib/types";
 
   let { children } = $props();
@@ -45,9 +54,25 @@
     update?.current_notes ? parseReleaseNotes(update.current_notes) : [],
   );
 
+  /// GitHub has published a tag the updater manifest has not caught up with.
+  ///
+  /// There is a real window between a tag push and `latest.json` propagating,
+  /// and the app used to fill it with a second clickable "Update available"
+  /// badge sourced from the GitHub API — which could only open a release page,
+  /// because the updater had nothing to install. Two badges, one of them a
+  /// dead end. Only `pendingUpdate` is clickable now; this says the true thing
+  /// instead, and says it inertly.
+  const rollingOut = $derived(
+    update?.update_available && update.latest
+      ? !pendingUpdate || isNewerVersion(update.latest, pendingUpdate.version)
+      : false,
+  );
+
   onMount(() => {
     theme = getThemePref();
     autoUpdate = getAutoUpdate();
+    // Keep Auto honest while the app is open, not just at launch.
+    watchOsTheme();
 
     api
       .checkForUpdate()
@@ -124,6 +149,106 @@
     await installUpdate();
   }
 
+  // ---- Report a bug -------------------------------------------------
+  //
+  // Everything here is text the user reads before anything leaves the
+  // machine. The app has no upload path: the only way out is the issue URL,
+  // which the user opens and GitHub shows as a form they still have to submit.
+
+  const ISSUE_BASE =
+    "https://github.com/bryanroscoe/shield_optimizer/issues/new" +
+    `?template=bug_report.yml&title=${encodeURIComponent("Bug: ")}`;
+  /// Well under the ~8 KB GitHub accepts in a URL. Past it the form opens with
+  /// Diagnostics empty and the dialog asks for a paste instead.
+  const PREFILL_LIMIT = 6000;
+
+  /// `diagnostics` is the field id in .github/ISSUE_TEMPLATE/bug_report.yml;
+  /// issue forms prefill a field from the query parameter of the same id.
+  function issueUrl(bundle: string): { url: string; prefilled: boolean } {
+    if (bundle) {
+      const url = `${ISSUE_BASE}&diagnostics=${encodeURIComponent(bundle)}`;
+      if (url.length <= PREFILL_LIMIT) return { url, prefilled: true };
+    }
+    return { url: ISSUE_BASE, prefilled: false };
+  }
+
+  function openIssue() {
+    const { url, prefilled } = issueUrl(bugBusy ? "" : bugBundle);
+    if (!prefilled) {
+      bugMessage = bugBundle
+        ? "The diagnostics are too long to fill in for you. Click Copy, then paste them into the Diagnostics field on GitHub."
+        : "Paste the diagnostics into the Diagnostics field on GitHub once they have been collected.";
+    }
+    void openUrl(url);
+  }
+
+  let bugOpen = $state(false);
+  let bugBundle = $state("");
+  let bugBusy = $state(false);
+  let bugMessage = $state("");
+  let bugCopied = $state(false);
+  let debugLogging = $state(false);
+  let logPath = $state("");
+
+  /// The device the user is looking at, if they are looking at one. Its
+  /// properties are usually the whole answer to "why won't this open?".
+  const currentSerial = $derived.by(() => {
+    const match = /^\/devices\/([^/]+)/.exec($page.url.pathname);
+    return match ? decodeURIComponent(match[1]) : null;
+  });
+
+  async function openBugReport() {
+    bugOpen = true;
+    bugBusy = true;
+    bugCopied = false;
+    bugMessage = "";
+    bugBundle = "";
+    try {
+      const [bundle, debug, dir] = await Promise.all([
+        api.collectDiagnostics(currentSerial),
+        api.getDebugLogging(),
+        api.logDirPath(),
+      ]);
+      bugBundle = bundle;
+      debugLogging = debug;
+      logPath = dir;
+    } catch (e) {
+      bugMessage = String(e);
+    } finally {
+      bugBusy = false;
+    }
+  }
+
+  async function toggleDebugLogging(e: Event) {
+    const wanted = (e.currentTarget as HTMLInputElement).checked;
+    try {
+      // Believe the backend, not the click: a failed reload must not leave
+      // the checkbox claiming a level that isn't running.
+      debugLogging = await api.setDebugLogging(wanted);
+    } catch (err) {
+      bugMessage = String(err);
+      debugLogging = await api.getDebugLogging().catch(() => debugLogging);
+    }
+  }
+
+  async function copyBugBundle() {
+    try {
+      await navigator.clipboard.writeText(bugBundle);
+      bugCopied = true;
+    } catch (e) {
+      // Clipboard access can be refused; the textarea is still selectable.
+      bugMessage = `Couldn't reach the clipboard (${e}) — select the text above and copy it.`;
+    }
+  }
+
+  async function openLogsFolder() {
+    try {
+      await api.openLogDir();
+    } catch (e) {
+      bugMessage = String(e);
+    }
+  }
+
   function toggleAutoUpdate() {
     autoUpdate = !autoUpdate;
     setAutoUpdate(autoUpdate);
@@ -144,8 +269,8 @@
 <div class="app">
   <header>
     <div class="brand">
-      <span class="logo-dot"></span>
-      <span class="title">Shield Optimizer</span>
+      <BrandMark size={22} />
+      <span class="title">ATV Optimizer</span>
       {#if update}
         <button
           class="version"
@@ -157,7 +282,7 @@
         {#if pendingUpdate}
           {#if updateInstalled}
             <button class="update-badge installed" onclick={restartApp} title="Relaunch to finish updating">
-              Update installed — Restart now ↻
+              Update installed — Restart now <Icon name="restart_alt" size={16} />
             </button>
           {:else if updateBusy}
             <span class="update-badge updating">{updateProgress}</span>
@@ -166,10 +291,16 @@
               Update now → v{pendingVersion}
             </button>
           {/if}
-        {:else if update.update_available}
-          <button class="update-badge" onclick={() => openUrl(update!.url)} title="Open the release page">
-            Update available → v{update.latest}
-          </button>
+        {/if}
+        {#if rollingOut}
+          <!-- Not a button: there is nothing useful to click yet. -->
+          <span
+            class="update-badge rolling"
+            data-tip="The in-app updater will offer it within a few minutes"
+            data-tip-side="bottom"
+          >
+            v{update.latest} rolling out
+          </span>
         {/if}
       {:else}
         <span class="version">v2</span>
@@ -182,6 +313,15 @@
           Snapshots
         </a>
       </nav>
+      <button
+        class="bug-btn"
+        onclick={openBugReport}
+        aria-label="Report a bug"
+        data-tip="Report a bug"
+        data-tip-side="bottom"
+      >
+        <Icon name="bug_report" size={18} />
+      </button>
       <label class="auto-update-toggle" title="Automatically download and install updates on launch">
         <input type="checkbox" checked={autoUpdate} onchange={toggleAutoUpdate} />
         Auto-update
@@ -205,7 +345,7 @@
   </main>
   <footer>
     <button class="kofi" onclick={() => openUrl("https://ko-fi.com/bryanroscoe")}>
-      ☕ Enjoying Shield Optimizer? Support it on Ko-fi
+      <Icon name="local_cafe" size={16} /> Enjoying ATV Optimizer? Support it on Ko-fi
     </button>
   </footer>
 </div>
@@ -258,7 +398,7 @@
     </div>
     <div class="notes-actions">
       <button class="notes-history" onclick={() => openUrl(update!.url)}>
-        All releases ↗
+        All releases <Icon name="open_in_new" size={14} />
       </button>
       <span class="spacer"></span>
       {#if arrived}
@@ -271,187 +411,47 @@
   </div>
 {/if}
 
+{#if bugOpen}
+  <div class="notes-backdrop" role="presentation" onclick={() => (bugOpen = false)}></div>
+  <div class="notes-dialog" role="dialog" aria-modal="true" aria-labelledby="bug-title">
+    <h2 id="bug-title">Report a bug</h2>
+    <p class="notes-current muted">
+      The app sends nothing on its own. Open GitHub issue fills the text below into a new
+      issue, which you review and submit yourself.
+    </p>
+    <label class="bug-toggle">
+      <input type="checkbox" checked={debugLogging} onchange={toggleDebugLogging} />
+      Debug logging
+    </label>
+    <p class="bug-path muted mono">
+      {logPath ? `Logs: ${logPath}` : "Logs: (no log folder)"}
+    </p>
+    <textarea
+      class="bug-bundle mono"
+      readonly
+      aria-label="Diagnostics"
+      value={bugBusy ? "Collecting…" : bugBundle}
+    ></textarea>
+    {#if bugMessage}
+      <p class="bug-message muted">{bugMessage}</p>
+    {/if}
+    <div class="notes-actions">
+      <button onclick={copyBugBundle} disabled={bugBusy || !bugBundle}>
+        <Icon name="content_copy" size={14} /> {bugCopied ? "Copied" : "Copy"}
+      </button>
+      <button onclick={openLogsFolder}>
+        <Icon name="folder_open" size={14} /> Open logs folder
+      </button>
+      <span class="spacer"></span>
+      <button onclick={() => (bugOpen = false)}>Close</button>
+      <button class="primary" onclick={openIssue}>
+        Open GitHub issue <Icon name="open_in_new" size={14} />
+      </button>
+    </div>
+  </div>
+{/if}
+
 <style>
-  /* Semantic color tokens. Dark is the default (in :root); light values are
-     applied either by an explicit data-theme="light" or, when no preference is
-     set, by the OS via prefers-color-scheme. Dark values are unchanged from the
-     original design — only light values are new. */
-  :global(:root) {
-    color-scheme: dark;
-    --bg-page: #0e1116;
-    --bg-surface: #161b22;
-    --bg-surface-2: #1c2128;
-    --bg-button: #21262d;
-    --bg-button-hover: #30363d;
-    --bg-input: #0d1117;
-    --bg-inset: #0d1117;
-    --bg-muted: #3d3d3d;
-    --bg-nav-active: #1f2937;
-    --border: #30363d;
-    --fg-primary: #e6edf3;
-    --fg-secondary: #c9d1d9;
-    --fg-muted: #7d8590;
-    --fg-faint: #aaaaaa;
-    --accent: #58a6ff;
-    --accent-strong: #1f6feb;
-    --accent-strong-hover: #388bfd;
-    --accent-glow: #58a6ff80;
-    --danger: #da3633;
-    --danger-strong: #f85149;
-    --danger-surface: #5d1b1b;
-    --danger-border: #8b3030;
-    --danger-text: #ff8a80;
-    --danger-surface-text: #ffffff;
-    --ok: #3fb950;
-    --ok-surface: #1b3d2c;
-    --warn: #d29922;
-    --warn-surface: #3d2f00;
-    --warn-border: #5d4a00;
-    --warn-surface-2: #5d3b1b;
-    --advanced: #a371f7;
-  }
-
-  /* Light values — shared by explicit light and OS-light-when-unset. */
-  :global(:root[data-theme="light"]) {
-    color-scheme: light;
-    --bg-page: #f6f8fa;
-    --bg-surface: #ffffff;
-    --bg-surface-2: #f0f3f6;
-    --bg-button: #f1f3f5;
-    --bg-button-hover: #e7ebef;
-    --bg-input: #ffffff;
-    --bg-inset: #eef1f4;
-    --bg-muted: #e4e8ec;
-    --bg-nav-active: #ddeaff;
-    --border: #d0d7de;
-    --fg-primary: #1f2328;
-    --fg-secondary: #424a53;
-    --fg-muted: #656d76;
-    --fg-faint: #6e7781;
-    --accent: #0969da;
-    --accent-strong: #0969da;
-    --accent-strong-hover: #0860ca;
-    --accent-glow: #0969da55;
-    --danger: #cf222e;
-    --danger-strong: #cf222e;
-    --danger-surface: #ffebe9;
-    --danger-border: #ff9492;
-    --danger-text: #cf222e;
-    --danger-surface-text: #cf222e;
-    --ok: #1a7f37;
-    --ok-surface: #dafbe1;
-    --warn: #9a6700;
-    --warn-surface: #fff8c5;
-    --warn-border: #d4a72c;
-    --warn-surface-2: #fff1e5;
-    --advanced: #8250df;
-  }
-  @media (prefers-color-scheme: light) {
-    :global(:root:not([data-theme])) {
-      color-scheme: light;
-      --bg-page: #f6f8fa;
-      --bg-surface: #ffffff;
-      --bg-surface-2: #f0f3f6;
-      --bg-button: #f1f3f5;
-      --bg-button-hover: #e7ebef;
-      --bg-input: #ffffff;
-      --bg-inset: #eef1f4;
-      --bg-muted: #e4e8ec;
-      --bg-nav-active: #ddeaff;
-      --border: #d0d7de;
-      --fg-primary: #1f2328;
-      --fg-secondary: #424a53;
-      --fg-muted: #656d76;
-      --fg-faint: #6e7781;
-      --accent: #0969da;
-      --accent-strong: #0969da;
-      --accent-strong-hover: #0860ca;
-      --accent-glow: #0969da55;
-      --danger: #cf222e;
-      --danger-strong: #cf222e;
-      --danger-surface: #ffebe9;
-      --danger-border: #ff9492;
-      --danger-text: #cf222e;
-      --danger-surface-text: #cf222e;
-      --ok: #1a7f37;
-      --ok-surface: #dafbe1;
-      --warn: #9a6700;
-      --warn-surface: #fff8c5;
-      --warn-border: #d4a72c;
-      --warn-surface-2: #fff1e5;
-      --advanced: #8250df;
-    }
-  }
-
-  :global(html, body) {
-    margin: 0;
-    padding: 0;
-    height: 100vh;
-    font-family:
-      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
-      Cantarell, sans-serif;
-    background: var(--bg-page);
-    color: var(--fg-primary);
-  }
-  :global(*) {
-    box-sizing: border-box;
-  }
-  :global(a) {
-    color: var(--accent);
-    text-decoration: none;
-  }
-  :global(a:hover) {
-    text-decoration: underline;
-  }
-  :global(button) {
-    background: var(--bg-button);
-    color: var(--fg-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.4rem 0.9rem;
-    cursor: pointer;
-    font-size: 0.9rem;
-    font-family: inherit;
-  }
-  :global(button:hover) {
-    background: var(--bg-button-hover);
-  }
-  :global(button.primary) {
-    background: var(--accent-strong);
-    border-color: var(--accent-strong);
-    color: #fff;
-  }
-  :global(button.primary:hover) {
-    background: var(--accent-strong-hover);
-  }
-  :global(button.danger) {
-    background: var(--danger);
-    border-color: var(--danger);
-    color: #fff;
-  }
-  :global(button.danger:hover) {
-    background: var(--danger-strong);
-  }
-  :global(input, select) {
-    background: var(--bg-input);
-    color: var(--fg-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.45rem 0.7rem;
-    font-size: 0.9rem;
-    font-family: inherit;
-  }
-  :global(.muted) {
-    color: var(--fg-secondary);
-    opacity: 0.8;
-  }
-  :global(.risk-safe) { color: var(--ok); }
-  :global(.risk-medium) { color: var(--warn); }
-  :global(.risk-high) { color: var(--danger-strong); }
-  :global(.risk-advanced) { color: var(--advanced); }
-  :global(.risk-unknown) { color: var(--warn); font-weight: 500; }
-  :global(.risk-blocked) { color: var(--fg-muted); font-weight: 500; }
-
   .app {
     display: grid;
     grid-template-rows: auto 1fr auto;
@@ -471,13 +471,6 @@
     gap: 0.6rem;
     font-weight: 600;
   }
-  .logo-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 8px var(--accent-glow);
-  }
   .title {
     font-size: 1.05rem;
   }
@@ -485,7 +478,7 @@
     color: var(--fg-muted);
     font-weight: 500;
     font-size: 0.9rem;
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
   }
   button.version {
     background: none;
@@ -494,14 +487,14 @@
     cursor: pointer;
   }
   button.version:hover {
-    color: var(--fg);
+    color: var(--fg-primary);
     text-decoration: underline;
   }
 
   .notes-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--scrim);
     z-index: 10;
   }
   .notes-dialog {
@@ -518,8 +511,8 @@
     padding: 1.25rem;
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-modal);
   }
   .notes-dialog h2 {
     margin: 0;
@@ -557,15 +550,18 @@
     flex: none;
   }
   .notes-body code {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
     font-size: 0.85em;
     background: var(--bg-muted);
     padding: 0.05rem 0.3rem;
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
   }
   /* A button, not an anchor: these open in the system browser via the opener
      plugin, and the href is remote text we only partly trust. */
   .notes-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
     background: none;
     border: none;
     padding: 0;
@@ -587,11 +583,54 @@
   .notes-history {
     font-size: 0.85rem;
   }
+  /* Same shell as the release-notes dialog above; only the body differs. */
+  .bug-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.88rem;
+    cursor: pointer;
+  }
+  .bug-toggle input {
+    accent-color: var(--accent-strong);
+    cursor: pointer;
+  }
+  .bug-path {
+    margin: 0;
+    font-size: 0.76rem;
+    word-break: break-all;
+  }
+  .bug-bundle {
+    flex: 1;
+    min-height: 12rem;
+    resize: vertical;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    white-space: pre;
+    overflow: auto;
+  }
+  .bug-message {
+    margin: 0;
+    font-size: 0.8rem;
+  }
+  .bug-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.3rem;
+    color: var(--fg-secondary);
+  }
+  .bug-btn:hover {
+    color: var(--fg-primary);
+  }
   .update-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
     margin-left: 0.6rem;
     padding: 0.15rem 0.6rem;
     border: 1px solid var(--accent);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--accent-surface, transparent);
     color: var(--accent);
     font-size: 0.78rem;
@@ -599,14 +638,25 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  .update-badge:hover { background: var(--accent); color: #fff; }
+  .update-badge:hover {
+    background: var(--accent-strong);
+    color: var(--accent-ink);
+  }
   .update-badge.updating {
     cursor: default;
     opacity: 0.8;
   }
+  /* Muted and inert: it is news, not an action. */
+  .update-badge.rolling {
+    cursor: default;
+    border-color: var(--border);
+    background: var(--bg-muted);
+    color: var(--fg-muted);
+    font-weight: 500;
+  }
   .update-badge.installed {
-    background: var(--accent);
-    color: #fff;
+    background: var(--accent-strong);
+    color: var(--accent-ink);
   }
   .update-badge.installed:hover {
     background: var(--accent-strong-hover);
@@ -618,13 +668,14 @@
   }
   nav {
     display: flex;
+    align-items: center;
     gap: 1.2rem;
   }
   nav a {
     color: var(--fg-secondary);
     font-size: 0.92rem;
     padding: 0.3rem 0.5rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
   }
   nav a.active {
     color: var(--accent);
@@ -640,13 +691,14 @@
     white-space: nowrap;
   }
   .auto-update-toggle input {
-    accent-color: var(--accent);
+    accent-color: var(--accent-strong);
     cursor: pointer;
   }
   .theme-toggle {
     display: flex;
+    align-items: stretch;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     overflow: hidden;
   }
   .theme-toggle button {
@@ -662,7 +714,7 @@
   }
   .theme-toggle button.active {
     background: var(--accent-strong);
-    color: #fff;
+    color: var(--accent-ink);
   }
   .theme-toggle button:hover:not(.active) {
     background: var(--bg-button-hover);
@@ -682,6 +734,9 @@
   /* Link-styled button: external URLs must go through the opener plugin
      (a plain <a target="_blank"> doesn't reach the system browser in Tauri). */
   .kofi {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
     background: none;
     border: none;
     padding: 0;

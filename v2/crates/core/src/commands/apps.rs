@@ -139,29 +139,18 @@ pub async fn package_states_impl(
 #[derive(Serialize)]
 pub struct OtherPackage {
     pub package: String,
-    /// Preinstalled (not in `pm list packages -3`).
+    /// Preinstalled: not in `pm list packages -3`, and nothing else. A
+    /// Play-installed Amazon or Google app is third-party, whatever its
+    /// package prefix says.
     pub system: bool,
     pub enabled: bool,
     /// Friendly name from the known-names map or, for an all-installed read,
     /// the app catalog. Lets the UI search by a real name instead of only the
     /// package id. `None` for unrecognized packages.
     pub name: Option<String>,
-}
-
-/// Package-name prefixes that belong to the device vendor / OS, not the user.
-/// Android flags some of these as third-party (a preinstalled Google language
-/// IME updated into `/data` shows up in `pm list packages -3`), which would
-/// otherwise mislabel them and bury genuinely-sideloaded apps. Treating these
-/// as system keeps the default view focused on what the user actually added.
-fn is_first_party_package(pkg: &str) -> bool {
-    const PREFIXES: &[&str] = &[
-        "com.google.",
-        "com.android.",
-        "com.nvidia.",
-        "com.amazon.",
-        "org.chromium.",
-    ];
-    pkg == "android" || PREFIXES.iter().any(|p| pkg.starts_with(p))
+    /// One line on what the app is, from the known-names map. Display only:
+    /// it never changes the verdict, which stays Unknown for these packages.
+    pub description: Option<String>,
 }
 
 /// `list_other_packages` — every installed package that is NOT in the curated
@@ -253,15 +242,21 @@ async fn list_packages_impl(
         .into_iter()
         .filter(|p| include_curated || !catalog_names.contains_key(p.as_str()))
         .map(|package| OtherPackage {
-            // System if Android says so OR it's a vendor/OS package Android
-            // happens to flag third-party (updated Google IMEs, etc.).
-            system: !third.contains(&package) || is_first_party_package(&package),
+            system: !third.contains(&package),
             enabled: !disabled.contains(&package),
-            name: state.known_names.get(&package).cloned().or_else(|| {
-                catalog_names
-                    .get(package.as_str())
-                    .map(|name| (*name).to_string())
-            }),
+            name: state
+                .known_names
+                .get(&package)
+                .map(|known| known.name.clone())
+                .or_else(|| {
+                    catalog_names
+                        .get(package.as_str())
+                        .map(|name| (*name).to_string())
+                }),
+            description: state
+                .known_names
+                .get(&package)
+                .and_then(|known| known.description.clone()),
             package,
         })
         .collect();
@@ -924,20 +919,49 @@ mod tests {
     }
 
     #[test]
-    fn first_party_packages_classified_as_system() {
-        // Vendor/OS packages — system even when Android flags them third-party.
-        assert!(is_first_party_package(
-            "com.google.android.apps.inputmethod.hindi"
-        ));
-        assert!(is_first_party_package("com.android.vending"));
-        assert!(is_first_party_package("com.nvidia.ota"));
-        assert!(is_first_party_package("android"));
-        // Genuinely-sideloaded apps stay third-party.
-        assert!(!is_first_party_package("com.teamsmart.videomanager.tv"));
-        assert!(!is_first_party_package("ca.devmesh.overseerrtv"));
-        assert!(!is_first_party_package("air.com.shirogames.evoland12"));
-        // Not fooled by a prefix appearing mid-string.
-        assert!(!is_first_party_package("org.evil.com.google.fake"));
+    fn known_names_never_change_a_verdict() {
+        let lists = crate::commands::loader::load_embedded_app_lists().expect("lists parse");
+        let known = crate::commands::loader::load_known_names();
+        let bare = AppState::new(
+            std::sync::Arc::new(crate::commands::test_support::MockAdb::default()),
+            lists.clone(),
+            std::env::temp_dir(),
+        );
+        let named = AppState::new(
+            std::sync::Arc::new(crate::commands::test_support::MockAdb::default()),
+            lists,
+            std::env::temp_dir(),
+        )
+        .with_known_names(known.clone());
+        for pkg in known.keys() {
+            assert_eq!(
+                safety_for(&named, pkg),
+                safety_for(&bare, pkg),
+                "{pkg}: a name or description must not move the verdict"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn play_installed_vendor_packages_read_as_third_party() {
+        use crate::commands::test_support::{state_with, MockAdb};
+        // Amazon Music from the Play Store sits in `-3`; its prefix no longer
+        // overrides that. A preinstalled Google app outside `-3` stays system.
+        let all = "package:com.amazon.music.tv\npackage:com.google.android.youtube.tv";
+        let third = "package:com.amazon.music.tv";
+        let state =
+            state_with(MockAdb::default().on_shell(BATCH_SEPARATOR, &batched(&[all, third, ""])));
+        let others = list_other_packages_impl(&state, "serial").await.unwrap();
+        let music = others
+            .iter()
+            .find(|o| o.package == "com.amazon.music.tv")
+            .expect("amazon music listed");
+        assert!(!music.system, "a Play-installed Amazon app is third-party");
+        let youtube = others
+            .iter()
+            .find(|o| o.package == "com.google.android.youtube.tv")
+            .expect("youtube listed");
+        assert!(youtube.system, "not in `-3` means system");
     }
 
     #[test]

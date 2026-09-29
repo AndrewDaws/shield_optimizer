@@ -4,6 +4,7 @@
   import { api } from "$lib/api";
   import type { Device, DeviceReport } from "$lib/types";
   import { deviceTypeLabel } from "$lib/types";
+  import Icon from "$lib/components/Icon.svelte";
 
   let devices = $state<Device[]>([]);
 
@@ -133,14 +134,19 @@
 
   /// Do we positively know this is not an Android TV?
   ///
-  /// `detect_device_type` only falls through to Unknown when the device did
-  /// *not* report the `tv` characteristic — a TV we don't recognise still
-  /// self-reports and classifies as Google TV. So Unknown plus readable
-  /// properties means "definitely something else", such as a phone.
-  /// Properties we could not read (an unauthorized device) mean we don't know
-  /// yet, and we say nothing.
+  /// Only when the device said so: a `phone`/`tablet`/`watch` characteristic,
+  /// or a flat "no" to the leanback feature. This used to be inferred from
+  /// `device_type === "unknown"`, which answers a different question — "no
+  /// catalog match" — and so locked people out of perfectly ordinary TV boxes
+  /// that report something unusual (#120).
   function isNotATv(d: Device): boolean {
-    return d.device_type === "unknown" && d.properties !== null;
+    return d.tv_evidence === "not_tv";
+  }
+
+  /// Readable, and it never said either way. The tools open; the row is honest
+  /// about not knowing. A device we could not read at all claims nothing.
+  function isUnconfirmedTv(d: Device): boolean {
+    return d.tv_evidence === "unknown" && d.properties !== null;
   }
 
   function deviceHref(d: Device): string | null {
@@ -148,6 +154,37 @@
     // is at best useless. Still listed, just not opened.
     if (isNotATv(d)) return null;
     return d.status === "device" ? `/devices/${encodeURIComponent(d.serial)}` : null;
+  }
+
+  /// A control inside the row link. The row is the link, so its own actions
+  /// have to say so explicitly or every click navigates instead.
+  function rowAction(e: MouseEvent, run: () => void) {
+    e.preventDefault();
+    e.stopPropagation();
+    run();
+  }
+
+  let diagnosticsBusy = $state<string | null>(null);
+  let diagnosticsCopied = $state<string | null>(null);
+
+  /// Copy the bug-report bundle for one device. Offered exactly where it is
+  /// needed: a row the app cannot open, or one it is not sure about. Nothing
+  /// is sent anywhere — it goes to the clipboard and no further.
+  async function copyDiagnostics(d: Device) {
+    diagnosticsBusy = d.serial;
+    diagnosticsCopied = null;
+    connectMessage = "";
+    try {
+      const report = await api.collectDiagnostics(d.serial);
+      await navigator.clipboard.writeText(report);
+      diagnosticsCopied = d.serial;
+    } catch (e) {
+      // The clipboard can be refused; say so rather than silently doing
+      // nothing.
+      connectMessage = `Couldn't copy diagnostics for ${d.serial}: ${e}`;
+    } finally {
+      diagnosticsBusy = null;
+    }
   }
 
   /// What the authorization prompt is called on this device.
@@ -209,6 +246,25 @@
   // Best-effort discovery on boot: if no devices show up after the initial
   // refresh and adb is available, kick off a scan so users with already-paired
   // devices don't have to click anything. v1 behaved similarly.
+  let forgetBusy = $state<string | null>(null);
+
+  /// Drop a network transport so the row stops appearing. Only offered for
+  /// network devices: `adb disconnect` is the only thing "forget" can mean
+  /// here, and it has nothing to drop for a USB one. Not a delete — the TV is
+  /// untouched and reconnects the moment you add it again.
+  async function forgetDevice(d: Device) {
+    if (d.connection !== "network") return;
+    forgetBusy = d.serial;
+    try {
+      await api.disconnectDevice(d.serial);
+      await refresh();
+    } catch (e) {
+      connectMessage = `Could not disconnect ${d.serial}: ${e}`;
+    } finally {
+      forgetBusy = null;
+    }
+  }
+
   async function bootDiscovery() {
     await refresh();
     if (adbMissing) return;
@@ -220,12 +276,31 @@
 </script>
 
 <section class="header-row">
-  <h1>Devices</h1>
-  <button onclick={refresh} disabled={loading}>
-    {loading ? "Refreshing…" : "Refresh"}
-  </button>
+  <div class="header-title">
+    <h1>Devices</h1>
+    <p class="muted small mono header-sub">
+      {#if adbMissing}
+        adb not found
+      {:else if devices.length === 0}
+        no TV connected
+      {:else}
+        {devices.length} connected · {devices.filter((d) => d.status === "device").length} ready
+      {/if}
+    </p>
+  </div>
+  <div class="header-actions">
+    <button onclick={scan} disabled={scanBusy || adbMissing} title="Scan the local /24 subnet for ADB-listening devices">
+      <Icon name="wifi_tethering" size={16} /> {scanBusy ? "Scanning…" : "Scan LAN"}
+    </button>
+    <button onclick={refresh} disabled={loading} title="Re-read the list of connected devices">
+      {loading ? "Refreshing…" : "Refresh"}
+    </button>
+  </div>
 </section>
 
+<!-- The board leads with Scan LAN and Add by IP. The other four are still
+     here, one row down, because every one of them is the only way to do the
+     thing it does. -->
 <section class="connect-form">
   <input
     placeholder="IP[:port] — e.g. 192.168.42.71"
@@ -233,10 +308,7 @@
     onkeydown={(e) => e.key === "Enter" && connect()}
   />
   <button class="primary" onclick={connect} disabled={connectBusy || !connectAddress.trim()}>
-    {connectBusy ? "Connecting…" : "Connect IP"}
-  </button>
-  <button onclick={scan} disabled={scanBusy || adbMissing} title="Scan the local /24 subnet for ADB-listening devices">
-    {scanBusy ? "Scanning…" : "Scan Network"}
+    <Icon name="add" size={16} /> {connectBusy ? "Connecting…" : "Add by IP"}
   </button>
   <button onclick={() => (pairOpen = !pairOpen)} disabled={adbMissing} title="Android 11+ PIN pairing flow">
     {pairOpen ? "Cancel Pair" : "Pair PIN"}
@@ -336,7 +408,7 @@
   <div class="install-pane">
     <h2>ADB not found on this system</h2>
     <p>
-      Shield Optimizer needs Android's <code>adb</code> binary to talk to your TV.
+      ATV Optimizer needs Android's <code>adb</code> binary to talk to your TV.
       We can download Google's official platform-tools and install them locally —
       no system-wide changes, just a self-contained copy under your app-data folder.
     </p>
@@ -368,24 +440,72 @@
       <li>
         {#if href}
           <a class="device-row clickable" href={href}>
+            <span class="device-icon" aria-hidden="true">
+              <Icon name={d.connection === "network" ? "cast_connected" : "tv"} size={20} />
+            </span>
             <div class="device-main">
               <div class="device-name">
-                <span class="conn-tag">[{d.connection === "network" ? "NET" : "USB"}]</span>
                 <span>{d.name}</span>
+                <!-- Whether it is reachable belongs with the name, not stranded
+                     at the far edge: it qualifies the device, and reading it
+                     meant crossing the address line to get there. -->
+                <span class="device-status online">
+                  <span class="status-dot" aria-hidden="true"></span> Online
+                </span>
+                {#if isUnconfirmedTv(d)}
+                  <span
+                    class="status-tag unconfirmed"
+                    data-tip="Didn't report itself as an Android TV; tools may not apply"
+                  >UNCONFIRMED TV</span>
+                {/if}
               </div>
-              <div class="device-meta muted">
-                {deviceTypeLabel(d.device_type)}
+              <div class="device-meta muted mono">
+                {d.serial} · {deviceTypeLabel(d.device_type)}
                 {#if d.model}· {d.model}{/if}
-                · {d.serial}
+                · {d.connection === "network" ? "network" : "usb"}
               </div>
             </div>
-            <span class="chevron">›</span>
+            <!-- Row actions. They live inside the link, so each one has to
+                 stop the click reaching it — otherwise Forget would navigate
+                 to the device it just disconnected. -->
+            <span class="row-actions">
+              {#if isUnconfirmedTv(d)}
+                <button
+                  class="row-action"
+                  onclick={(e) => rowAction(e, () => copyDiagnostics(d))}
+                  disabled={diagnosticsBusy === d.serial}
+                  data-tip="Copies what this device reported — paste it into a bug report"
+                >
+                  {diagnosticsBusy === d.serial
+                    ? "Copying…"
+                    : diagnosticsCopied === d.serial
+                      ? "Copied"
+                      : "Copy diagnostics"}
+                </button>
+              {/if}
+              {#if d.connection === "network"}
+                <button
+                  class="row-action forget-btn"
+                  onclick={(e) => rowAction(e, () => forgetDevice(d))}
+                  disabled={forgetBusy === d.serial}
+                  data-tip="adb disconnect · removes this row, the TV is untouched"
+                  data-tip-align="end"
+                >
+                  {forgetBusy === d.serial ? "Forgetting…" : "Forget"}
+                </button>
+              {/if}
+            </span>
+            <!-- A chevron says "this opens" without pretending to be
+                 separately clickable. -->
+            <span class="device-go" aria-hidden="true"><Icon name="chevron_right" size={28} /></span>
           </a>
         {:else}
-          <div class="device-row" class:unauthorized={d.status === "unauthorized"}>
+          <div class="device-row not-clickable" class:unauthorized={d.status === "unauthorized"}>
+            <span class="device-icon" aria-hidden="true">
+              <Icon name={d.status === "offline" ? "tv_off" : d.connection === "network" ? "cast" : "tv"} size={20} />
+            </span>
             <div class="device-main">
               <div class="device-name">
-                <span class="conn-tag">[{d.connection === "network" ? "NET" : "USB"}]</span>
                 <span>{d.name}</span>
                 {#if d.status === "unauthorized"}
                   <span class="status-tag unauthorized">UNAUTHORIZED</span>
@@ -394,9 +514,14 @@
                 {/if}
                 {#if isNotATv(d)}
                   <span class="status-tag not-a-tv">NOT AN ANDROID TV</span>
+                {:else if isUnconfirmedTv(d)}
+                  <span
+                    class="status-tag unconfirmed"
+                    data-tip="Didn't report itself as an Android TV; tools may not apply"
+                  >UNCONFIRMED TV</span>
                 {/if}
               </div>
-              <div class="device-meta muted">
+              <div class="device-meta muted mono">
                 {deviceTypeLabel(d.device_type)}
                 {#if d.model}· {d.model}{/if}
                 · {d.serial}
@@ -424,11 +549,52 @@
                 </div>
               {/if}
             </div>
+            <!-- A row the app will not open is exactly the row someone needs
+                 to report, so the bundle is one click away from it. "Forget"
+                 is `adb disconnect`: only for network transports, because
+                 there is nothing to disconnect on USB. It removes the row,
+                 not the device — adding the address back brings it straight
+                 home. -->
+            <span class="row-actions">
+              <button
+                class="row-action"
+                onclick={() => copyDiagnostics(d)}
+                disabled={diagnosticsBusy === d.serial}
+                data-tip="Copies what this device reported — paste it into a bug report"
+              >
+                {diagnosticsBusy === d.serial
+                  ? "Copying…"
+                  : diagnosticsCopied === d.serial
+                    ? "Copied"
+                    : "Copy diagnostics"}
+              </button>
+              {#if d.connection === "network"}
+                <button
+                  class="row-action forget-btn"
+                  onclick={() => forgetDevice(d)}
+                  disabled={forgetBusy === d.serial}
+                  data-tip="adb disconnect · removes this row, the TV is untouched"
+                  data-tip-align="end"
+                >
+                  {forgetBusy === d.serial ? "Forgetting…" : "Forget"}
+                </button>
+              {/if}
+            </span>
           </div>
         {/if}
       </li>
     {/each}
   </ul>
+{/if}
+
+{#if !adbMissing}
+  <div class="callout devices-note">
+    <Icon name="info" size={16} />
+    <span>
+      Click a TV to open its tools. Everything runs over ADB from this computer;
+      nothing is sent anywhere else.
+    </span>
+  </div>
 {/if}
 
 <style>
@@ -457,25 +623,100 @@
     flex-basis: 100%;
     margin: 0.4rem 0 0;
     font-size: 0.85rem;
-    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-family: var(--mono);
   }
   .device-list {
     list-style: none;
     padding: 0;
     margin: 0;
   }
+  /* Board 11.12's row: a glyph for what it is, the name, the address in mono,
+     whether it is reachable, and the one thing to do about it. The [NET] tag
+     folded into the meta line — a bracketed word beside the name read as part
+     of the name. */
   .device-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 1rem;
     padding: 0.9rem 1rem;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     background: var(--bg-surface);
     margin-bottom: 0.6rem;
     transition: background 0.1s;
     text-decoration: none;
     color: inherit;
+  }
+  .device-row.not-clickable {
+    align-items: flex-start;
+  }
+  .device-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 2.8rem;
+    height: 2.8rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-inset);
+    color: var(--fg-muted);
+  }
+  a.device-row .device-icon {
+    color: var(--fg-secondary);
+  }
+  .device-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex: none;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--fg-muted);
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--fg-muted);
+  }
+  .device-status.online {
+    color: var(--ok);
+  }
+  .device-status.online .status-dot {
+    background: var(--ok);
+  }
+  /* The row's own controls, pushed to the far end and kept clear of the
+     chevron. Secondary by design: the row itself is the primary action. */
+  .row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex: none;
+    margin-left: auto;
+  }
+  .row-action {
+    flex: none;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.82rem;
+  }
+  .forget-btn {
+    flex: none;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.82rem;
+  }
+  .device-go {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    margin-left: 0.6rem;
+    color: var(--accent);
+  }
+  a.device-row:hover .device-go {
+    transform: translateX(2px);
+  }
+  .devices-note {
+    margin-top: 1rem;
   }
   a.device-row {
     color: inherit;
@@ -493,15 +734,27 @@
     gap: 0.5rem;
     font-weight: 500;
   }
-  .conn-tag {
-    color: var(--fg-muted);
-    font-size: 0.78rem;
-    font-family: ui-monospace, monospace;
+  .header-title {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+  .header-title h1 {
+    margin: 0;
+  }
+  .header-sub {
+    margin: 0;
+  }
+  .header-actions {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
   }
   .status-tag {
     font-size: 0.72rem;
     padding: 0.1rem 0.4rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
   }
   .status-tag.unauthorized {
     background: var(--danger-surface);
@@ -517,13 +770,16 @@
     background: var(--bg-muted);
     color: var(--fg-faint);
   }
+  /* Amber: a caveat, not a refusal. The row still opens — this says only that
+     the device never confirmed what it is, so a tool may not land. */
+  .status-tag.unconfirmed {
+    background: var(--warn-surface-2);
+    color: var(--warn);
+    white-space: nowrap;
+  }
   .device-meta {
     font-size: 0.82rem;
     margin-top: 0.2rem;
-  }
-  .chevron {
-    color: var(--fg-muted);
-    font-size: 1.4rem;
   }
   .empty {
     text-align: center;
@@ -537,7 +793,7 @@
   .pair-form {
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     padding: 1rem 1.2rem;
     margin-bottom: 1rem;
   }
@@ -547,7 +803,7 @@
   }
   .pair-note {
     padding: 0.65rem 0.75rem;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: var(--bg-inset);
     color: var(--fg-secondary);
   }
@@ -567,7 +823,7 @@
   .report-all {
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     padding: 1rem 1.2rem;
     margin-bottom: 1rem;
   }
@@ -578,7 +834,7 @@
   .report-row {
     margin: 0.7rem 0;
     padding-bottom: 0.7rem;
-    border-bottom: 1px solid var(--bg-button);
+    border-bottom: 1px solid var(--border);
   }
   .report-row:last-child {
     border-bottom: none;
@@ -596,7 +852,7 @@
     padding: 0.6rem 0.8rem;
     background: var(--bg-inset);
     border: 1px solid var(--danger-surface);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-size: 0.85rem;
   }
   .unauthorized-help strong {
@@ -615,7 +871,7 @@
   .install-pane {
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     padding: 1.5rem;
   }
   .install-pane h2 {
@@ -629,7 +885,7 @@
   }
   .install-message {
     margin-top: 0.8rem;
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
   }
   .small {
     font-size: 0.82rem;
@@ -638,16 +894,16 @@
     background: var(--danger-surface);
     color: var(--danger-text);
     padding: 0.7rem 1rem;
-    border-radius: 6px;
-    font-family: ui-monospace, monospace;
+    border-radius: var(--radius-md);
+    font-family: var(--mono);
     font-size: 0.85rem;
   }
   code {
     background: var(--bg-inset);
     border: 1px solid var(--border);
     padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    font-family: ui-monospace, monospace;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
     font-size: 0.85em;
   }
 </style>

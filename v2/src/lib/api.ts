@@ -43,6 +43,7 @@ import type {
   ScanResult,
   ScreenshotResult,
   SendTextResult,
+  SetHomeAnyResult,
   SetLauncherResult,
   SettingNamespace,
   ShellRunResult,
@@ -101,6 +102,10 @@ export const api = {
     }),
   disableLauncher: (serial: string, pkg: string) =>
     invoke<ActionResult>("disable_launcher", { serial, package: pkg }),
+  setHomeAny: (serial: string, pkg: string, activity: string | null = null) =>
+    invoke<SetHomeAnyResult>("set_home_any", { serial, package: pkg, activity }),
+  disableStockLauncher: (serial: string, target: string) =>
+    invoke<SetLauncherResult>("disable_stock_launcher", { serial, target }),
 
   takeScreenshot: (serial: string) =>
     invoke<ScreenshotResult>("take_screenshot", { serial }),
@@ -141,6 +146,11 @@ export const api = {
     invoke<string>("get_app_op", { serial, package: pkg, op }),
   listOtherPackages: (serial: string) =>
     invoke<OtherPackage[]>("list_other_packages", { serial }),
+  /// Every installed package, catalogued ones included. Used to confirm that a
+  /// process name from a memory report really is an installed package before
+  /// the catalog's verdict is applied to it.
+  listInstalledPackages: (serial: string) =>
+    invoke<OtherPackage[]>("list_installed_packages", { serial }),
   appMemoryMap: (serial: string) =>
     invoke<Record<string, number>>("app_memory_map", { serial }),
   appUsageMap: (serial: string) =>
@@ -178,6 +188,8 @@ export const api = {
     invoke<FindResult>("find_files", { serial, dirs, pattern }),
   copyFileToDevice: (sourceSerial: string, remotePath: string, targetSerial: string, targetDir: string) =>
     invoke<FileTransferResult>("copy_file_to_device", { sourceSerial, remotePath, targetSerial, targetDir }),
+  inspectApk: (serial: string, path: string) =>
+    invoke<import("$lib/types").ApkInspection>("inspect_apk", { serial, path }),
   listApksInFolder: (folder: string) =>
     invoke<DiscoveredApk[]>("list_apks_in_folder", { folder }),
 
@@ -218,6 +230,15 @@ export const api = {
     invoke<PrivateDnsState>("get_private_dns", { serial }),
   setPrivateDns: (serial: string, mode: string, hostname: string | null = null) =>
     invoke<PrivateDnsResult>("set_private_dns", { serial, mode, hostname }),
+
+  /// The bug-report bundle. Returns text; nothing is sent anywhere.
+  collectDiagnostics: (serial: string | null = null) =>
+    invoke<string>("collect_diagnostics", { serial }),
+  getDebugLogging: () => invoke<boolean>("get_debug_logging"),
+  setDebugLogging: (enabled: boolean) =>
+    invoke<boolean>("set_debug_logging", { enabled }),
+  logDirPath: () => invoke<string>("log_dir_path"),
+  openLogDir: () => invoke<void>("open_log_dir"),
 
   prepareOptimize: (serial: string, deviceType: DeviceType, mode: OptimizeMode) =>
     invoke<OptimizePlan>("prepare_optimize", { serial, deviceType, mode }),

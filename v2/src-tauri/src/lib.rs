@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use adb::SubprocessAdb;
-use commands::{backup, files, install, scan, sideload, update, AppState};
+use commands::{backup, diagnostics, files, install, scan, sideload, update, AppState};
 use shield_optimizer_core::adb::{AdbDriver, AdbError, AdbOutput, AdbResult};
 use shield_optimizer_core::commands::{
     apps, devices, health, input, launcher, loader, optimize, reboot, recovery, screenshot, shell,
@@ -74,13 +74,11 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    // Best-effort tracing setup; fall back silently if EnvFilter parse fails.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init();
+    // stdout *and* a rolling daily file under the data dir. A packaged app has
+    // nowhere for stdout to go, so the file is the only copy that survives on
+    // the machines where a bug actually happens.
+    let data_dir = default_data_dir();
+    let log_control = diagnostics::init_logging(&data_dir);
 
     let app_lists = match loader::load_embedded_app_lists() {
         Ok(lists) => {
@@ -95,8 +93,7 @@ pub fn run() {
         }
     };
 
-    let state =
-        default_state(app_lists, default_data_dir()).with_known_names(loader::load_known_names());
+    let state = default_state(app_lists, data_dir).with_known_names(loader::load_known_names());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -104,6 +101,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(state)
+        .manage(log_control)
         .invoke_handler(tauri::generate_handler![
             devices::list_devices,
             devices::device_profile,
@@ -125,6 +123,8 @@ pub fn run() {
             launcher::channel_provider_disabled,
             launcher::set_default_launcher,
             launcher::disable_launcher,
+            launcher::set_home_any,
+            launcher::disable_stock_launcher,
             apps::disable_package,
             apps::enable_package,
             apps::force_stop,
@@ -134,6 +134,7 @@ pub fn run() {
             apps::open_play_store,
             apps::package_states,
             apps::list_other_packages,
+            apps::list_installed_packages,
             apps::app_memory_map,
             apps::app_usage_map,
             apps::safety_info,
@@ -148,6 +149,7 @@ pub fn run() {
             input::open_settings,
             sideload::install_apk,
             sideload::list_apks_in_folder,
+            sideload::inspect_apk,
             backup::backup_apk,
             backup::clone_app,
             files::list_dir,
@@ -174,6 +176,11 @@ pub fn run() {
             optimize::prepare_optimize,
             optimize::apply_performance_settings,
             update::check_for_update,
+            diagnostics::collect_diagnostics,
+            diagnostics::set_debug_logging,
+            diagnostics::get_debug_logging,
+            diagnostics::log_dir_path,
+            diagnostics::open_log_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -64,6 +64,14 @@ pub struct DeviceProperties {
     /// the same TV when its IP or ADB port changes. Empty when unreadable.
     #[serde(default)]
     pub serial_number: String,
+    /// `pm has-feature android.software.leanback` — the platform's own answer
+    /// to "is this a TV?". A second, independent signal from
+    /// `characteristics`: plenty of shipping boxes (the Xiaomi TV Box S 3rd
+    /// gen among them) report something else entirely there while still being
+    /// leanback devices. `None` when the device did not answer `true` or
+    /// `false` — an unreadable answer is not a "no".
+    #[serde(default)]
+    pub leanback: Option<bool>,
 }
 
 /// A connected device — what the device list shows and what every action targets.
@@ -79,6 +87,13 @@ pub struct Device {
     pub model: String,
     /// Detected device type.
     pub device_type: super::detection::DeviceType,
+    /// What the device actually told us about being a TV. Distinct from
+    /// `device_type`: `Unknown` there means "no catalog match", which is not
+    /// the same claim as "this is not a TV". Computed by
+    /// [`super::detection::tv_evidence`] from the harvested properties, and
+    /// `Unknown` whenever `properties` is `None`.
+    #[serde(default)]
+    pub tv_evidence: super::detection::TvEvidence,
     /// Current ADB state.
     pub status: DeviceStatus,
     /// USB vs Network.

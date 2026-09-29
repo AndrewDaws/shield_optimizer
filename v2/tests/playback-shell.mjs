@@ -78,7 +78,7 @@ async function exerciseFeatures(browser, base) {
   assert.equal((await calls("run_shell")).length, 0, "keyboard shortcut must respect acknowledgment");
   await shell.getByRole("checkbox", { name: /I understand these risks/ }).check();
   await shell.getByRole("textbox", { name: "Bookmark name" }).fill("Saved uptime");
-  await shell.getByRole("button", { name: "Save bookmark", exact: true }).click();
+  await shell.getByRole("button", { name: "Bookmark current command", exact: true }).click();
   await editor.fill("different command");
   await shell.getByRole("button", { name: "Saved uptime", exact: true }).click();
   assert.equal(await editor.inputValue(), "uptime");
@@ -184,14 +184,14 @@ async function exerciseFeatures(browser, base) {
   await page.getByRole("tab", { name: "Health", exact: true }).click();
   await waitPending("resource_sample");
   const health = page.locator("#tabpanel-health");
-  await health.getByRole("heading", { name: "Vitals", exact: true }).waitFor();
+  await health.getByRole("heading", { name: "Health", exact: true }).waitFor();
   const sampleCount = (await calls("resource_sample")).length;
   await health.getByRole("button", { name: "Refresh", exact: true }).click();
   await health.getByRole("button", { name: "Refresh", exact: true }).waitFor();
   assert.equal((await calls("resource_sample")).length, sampleCount, "health refresh cannot overlap resource samples");
   await settle("resource_sample", "sample unavailable");
   await health.getByText("Resource sample: sample unavailable", { exact: true }).waitFor();
-  assert.equal(await health.getByRole("heading", { name: "Vitals", exact: true }).isVisible(), true);
+  assert.equal(await health.getByRole("heading", { name: "Health", exact: true }).isVisible(), true);
   assert.equal(await health.getByText("Temperature", { exact: true }).isVisible(), true, "resource error preserves health report");
   await hold("resource_sample", false);
   await health.getByRole("button", { name: "Refresh", exact: true }).click();
@@ -204,8 +204,17 @@ async function exerciseFeatures(browser, base) {
   await page.getByRole("link", { name: "Devices", exact: true }).click();
   await page.getByText("NVIDIA SHIELD", { exact: false }).first().click();
   await page.getByRole("tab", { name: "Shell", exact: true }).click();
-  assert.equal(await shell.getByRole("checkbox", { name: /I understand these risks/ }).isChecked(), false,
-    "expert acknowledgment must not leak into a new device-page session");
+  // The checkbox says "Remembered for this TV until you untick it", and it is
+  // keyed on the hardware id, so leaving and re-entering this TV's page brings
+  // it back. This assertion used to read `false` — not because the consent was
+  // scoped to the session, but because the only code that read it back lived
+  // inside `loadApps`, so the stored tick reappeared if and only if you happened
+  // to open the App List. The page now resolves it once per identity, which is
+  // what the label has always promised. What must still never happen is the tick
+  // following the *address* onto a different device; that is enforced by the key
+  // (see getShellAcknowledged in src/lib/prefs.ts) and by tests/shell-acknowledge.mjs.
+  assert.equal(await shell.getByRole("checkbox", { name: /I understand these risks/ }).isChecked(), true,
+    "expert acknowledgment is remembered for this TV, as its label says");
   await page.getByRole("tab", { name: "Health", exact: true }).click();
   await page.waitForFunction(() => window.__REGRESSION__.pending.resource_sample?.length === 2);
   await settle("resource_sample", "stale sample failure");

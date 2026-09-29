@@ -1,0 +1,500 @@
+/* Global styles: design tokens, element resets and shared utility classes.
+   Component-scoped rules stay in their own .svelte files; anything here is
+   deliberately app-wide. Imported once from src/routes/+layout.svelte. */
+
+/* Offline-bundled fonts — see src/fonts/README.md. No CDN: a desktop app has
+   no network guarantee, and these also keep rendering identical across
+   macOS, Windows and Linux. */
+@font-face {
+  font-family: "Geist";
+  src: url("./fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("./fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+/* block, not swap: these ligatures are literal words, so a fallback face would
+   paint "settings" where a gear belongs. Better briefly blank than wrong. */
+@font-face {
+  font-family: "Material Symbols Rounded";
+  src: url("./fonts/material-symbols-rounded.woff2") format("woff2");
+  font-weight: 100 700;
+  font-display: block;
+}
+
+/* Semantic color tokens, one block per theme. $lib/theme.ts resolves the
+   "system" preference to a concrete data-theme, so each palette is written
+   exactly once here — an earlier version repeated the light values under a
+   prefers-color-scheme query, where they could drift from this copy. The
+   bare :root keeps dark as the fallback if the attribute is ever missing. */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-page: #0b0d10;
+  --bg-surface: #16191e;
+  --bg-surface-2: #1e2229;
+  --bg-button: #1e2229;
+  --bg-button-hover: #262b33;
+  --bg-input: #0b0d10;
+  --bg-inset: #101317;
+  --bg-muted: #262b33;
+  --bg-nav-active: color-mix(in srgb, var(--accent) 14%, transparent);
+  --border: rgba(255, 255, 255, 0.09);
+  /* Form controls need a visible edge; the hairline above is too faint. */
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --fg-primary: #f2f5f8;
+  --fg-secondary: #c7cdd6;
+  --fg-muted: #8a929e;
+  --fg-faint: #868e9a;
+  /* --accent is text, links, borders and focus. --accent-strong is the fill
+     you put --accent-ink on top of. In dark they are the same lime; in light
+     they must differ, because lime is unreadable as text on white. */
+  --accent: #c9f24e;
+  --accent-strong: #c9f24e;
+  --accent-strong-hover: #d8f871;
+  --accent-ink: #0b0d10;
+  --accent-glow: rgba(201, 242, 78, 0.45);
+  --accent-surface: color-mix(in srgb, var(--accent) 14%, transparent);
+  --danger: #fb6b5f;
+  --danger-ink: #0b0d10;
+  --danger-strong: #ff8b80;
+  --danger-text: #fb6b5f;
+  --danger-surface: color-mix(in srgb, var(--danger) 14%, transparent);
+  --danger-surface-text: #ffb5ae;
+  --danger-border: color-mix(in srgb, var(--danger) 30%, transparent);
+  --ok: #35d6a5;
+  --ok-surface: color-mix(in srgb, var(--ok) 14%, transparent);
+  --warn: #f5b544;
+  --warn-surface: color-mix(in srgb, var(--warn) 12%, transparent);
+  --warn-surface-2: color-mix(in srgb, var(--warn) 18%, transparent);
+  --warn-border: color-mix(in srgb, var(--warn) 30%, transparent);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+/* Light values, from the "Desktop, light mode" board in the design source
+   (see src/fonts/README.md for where that lives). Surfaces, neutrals and the
+   accent are the design's own numbers.
+
+   Three status colours are darkened from what the board shows. The board uses
+   them on tinted chips, where 3:1 is the bar; this app also prints them as
+   body text, where the bar is 4.5:1 and the design's #12A87A (3.0), #C98A12
+   (2.9) and #77808D (4.0) all miss it. Hue is unchanged — only lightness —
+   because issue #26 was a user unable to read this theme. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-page: #f7f8fa;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #edeff3;
+  --bg-button: #f2f4f7;
+  --bg-button-hover: #e4e7ed;
+  --bg-input: #ffffff;
+  --bg-inset: #edeff3;
+  --bg-muted: #e4e7ed;
+  --bg-nav-active: color-mix(in srgb, var(--accent) 14%, transparent);
+  --border: rgba(15, 20, 28, 0.09);
+  --border-strong: rgba(15, 20, 28, 0.28);
+  --fg-primary: #14171c;
+  --fg-secondary: #3d444e;
+  --fg-muted: #656c75;
+  --fg-faint: #656c75;
+  /* The design mixes the lime into the ink rather than picking a new green:
+     color-mix(in srgb, var(--accent) 34%, #14171C). Written out so it does not
+     depend on --accent, which the highlight-colour picker may change. */
+  --accent: #52612d;
+  --accent-strong: #c9f24e;
+  --accent-strong-hover: #b6dd3d;
+  --accent-ink: #0b0d10;
+  --accent-glow: rgba(82, 97, 45, 0.28);
+  --accent-surface: color-mix(in srgb, var(--accent) 14%, transparent);
+  --danger: #d2402f;
+  --danger-ink: #ffffff;
+  --danger-strong: #b02f20;
+  --danger-text: #c0331f;
+  --danger-surface: color-mix(in srgb, var(--danger) 12%, transparent);
+  --danger-surface-text: #a82c1c;
+  --danger-border: color-mix(in srgb, var(--danger) 32%, transparent);
+  --ok: #0c7656;
+  --ok-surface: color-mix(in srgb, var(--ok) 14%, transparent);
+  --warn: #875c0c;
+  --warn-surface: color-mix(in srgb, var(--warn) 12%, transparent);
+  --warn-surface-2: color-mix(in srgb, var(--warn) 18%, transparent);
+  --warn-border: color-mix(in srgb, var(--warn) 30%, transparent);
+  --scrim: rgba(15, 20, 28, 0.35);
+  --shadow-modal: 0 50px 100px -30px rgba(15, 20, 28, 0.28);
+}
+
+/* Theme-independent tokens. */
+:root {
+  --sans: "Geist", system-ui, -apple-system, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "Roboto Mono", monospace;
+
+  /* Corner ladder. Desktop was noticeably sharper than the phone app (4 and
+     6px almost everywhere); the phone is rounder than suits a screen showing
+     this much at once. These sit between the two — clearly softer, without
+     the padding a phone-sized radius implies on a dense table. */
+  --radius-xs: 4px; /* meter and progress fills */
+  --radius-sm: 6px; /* badges, tags, chips */
+  --radius-md: 8px; /* buttons, inputs, small actions */
+  --radius-lg: 12px; /* cards and panels */
+  --radius-xl: 16px; /* dialogs */
+  --radius-pill: 999px;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  background: var(--bg-page);
+  color: var(--fg-primary);
+}
+* {
+  box-sizing: border-box;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+button {
+  background: var(--bg-button);
+  color: var(--fg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+button:hover {
+  background: var(--bg-button-hover);
+}
+/* An icon beside a label. Every round of feedback has included "the icon is
+   not centred with the text": a button is inline-block, the glyph is an
+   inline box on the baseline, and the two never agree. Any button or heading
+   that holds an icon directly becomes a flex row, so the glyph and the label
+   are centred on the same axis instead of sharing a baseline. Scoped to a
+   direct child so a button that stacks two lines (the verdict toggle) keeps
+   its own layout. */
+button:has(> .msr) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+h1:has(> .msr),
+h2:has(> .msr),
+h3:has(> .msr) {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+h2:has(> .msr) .msr {
+  color: var(--fg-muted);
+}
+/* The fill is lime in both themes, so the label is always dark ink. The
+   border carries --accent rather than the fill colour: in dark that is the
+   same lime and invisible, but in light it is the only thing separating a
+   lime button from a white card. */
+button.primary {
+  background: var(--accent-strong);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent-strong-hover);
+}
+/* There was no disabled rule at all, so a disabled button looked exactly like
+   a live one — a full lime Run that did nothing when clicked. A disabled
+   control has to look inert: it loses the accent fill, drops to muted ink, and
+   takes a not-allowed cursor so the pointer says so before the click does. */
+button:disabled,
+button[aria-disabled="true"] {
+  background: var(--bg-inset);
+  border-color: var(--border);
+  color: var(--fg-muted);
+  cursor: not-allowed;
+}
+button.primary:disabled {
+  background: var(--bg-inset);
+  border-color: var(--border);
+  color: var(--fg-muted);
+}
+button:disabled:hover {
+  background: var(--bg-inset);
+}
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--danger-ink);
+}
+button.danger:hover {
+  background: var(--danger-strong);
+}
+input, select, textarea {
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 0.45rem 0.7rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+/* Set globally: only two of the six files with checkboxes used to set this,
+   so the rest rendered in the browser's default blue. The fill token, not the
+   text one — the browser picks the checkmark ink from the fill's luminance. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent-strong);
+}
+
+/* There was no focus styling at all before this; the browser default ring
+   does not survive a palette this dark. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: transparent;
+}
+/* Ten components declare their own scoped copy of this; routes/+page.svelte
+   uses class="mono" without one, so its pairing message and device serials
+   were rendering in the sans face. The scoped copies win on specificity and
+   are folded in separately. */
+.mono {
+  font-family: var(--mono);
+}
+
+.muted {
+  color: var(--fg-secondary);
+  opacity: 0.8;
+}
+/* Card chrome, from the desktop board in the design source. Every screen in
+   this app is a card, so this is most of what the refresh looks like.
+   Previously each of nine files carried a byte-identical copy of these rules;
+   they differed only in that one of them set h3 to 1.2rem by accident. */
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.35rem 1.5rem;
+}
+.card h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+/* The title's icon is a marker, not a second voice — muted, so the name
+   still leads. */
+.card h2 .msr {
+  color: var(--fg-muted);
+}
+/* The board sets subsection headings as small mono uppercase labels rather
+   than smaller headings — it reads as a divider instead of competing with
+   the card title. */
+.card h3 {
+  margin: 1.6rem 0 0.7rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.card h3:first-of-type {
+  margin-top: 1.1rem;
+}
+/* Title row: name on the left, controls on the right, a hairline under both
+   so the card's body reads as separate from its chrome. */
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.85rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.card-header .header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+/* A card whose title is not wrapped in .card-header still wants the rule. */
+.card > h2:first-child {
+  padding-bottom: 0.85rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Safety verdicts. One chip, used by every table that shows one — see
+   $lib/safety.ts for the vocabulary. Two of the three tables used to render
+   the verdict as plain uncoloured text, so Protected and Unknown looked
+   identical. Tinted fill plus coloured text, the same recipe the state badges
+   already use.
+
+   Keep glyphs out of these chips: tests/memory-safety.mjs reads the cell's
+   text to check every lookup resolved, and an icon inside would join it. */
+.safety-tier {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.45rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+/* `safe` is a real verdict from the reviewed list, not an absence of one, so
+   it gets a colour. Teal rather than the lime accent: the accent means "the
+   thing to press", and a verdict is not an action. */
+.safety-tier--safe {
+  color: var(--ok);
+  background: var(--ok-surface);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
+}
+.safety-tier--unknown {
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg-primary) 7%, transparent);
+  border-color: var(--border);
+}
+.safety-tier--caution {
+  color: var(--warn);
+  background: var(--warn-surface-2);
+  border-color: var(--warn-border);
+}
+.safety-tier--protected {
+  color: var(--danger-text);
+  background: var(--danger-surface);
+  border-color: var(--danger-border);
+}
+/* Neither of these is a verdict, so they drop the uppercase mono treatment
+   that marks one. Unavailable is amber because it blocks removal — greying it
+   would read as "nothing to see here". */
+.safety-tier--checking {
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg-primary) 7%, transparent);
+  border-color: var(--border);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+}
+.safety-tier--unavailable {
+  color: var(--warn);
+  background: var(--warn-surface);
+  border-color: var(--warn-border);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+}
+
+/* Callout — a bordered aside that states one fact and, optionally, offers the
+   one action that answers it. Global because three components now render one
+   and Svelte scopes styles per file. The tint lives on the border and the
+   icon, never on a fill, so a callout never competes with a lime action. */
+.callout {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--fg-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.callout .msr {
+  color: var(--fg-muted);
+  margin-top: 0.1rem;
+  flex: none;
+}
+.callout-ok {
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+.callout-ok .msr {
+  color: var(--ok);
+}
+.callout-warn {
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  background: color-mix(in srgb, var(--warn) 7%, var(--bg-surface));
+}
+.callout-warn .msr {
+  color: var(--warn);
+}
+.callout-link {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Instant tooltips for icon-only controls.
+   `title` is the accessible fallback and stays on every one of these, but the
+   browser waits about a second before showing it — long enough that an icon
+   button reads as unlabelled. `data-tip` paints the same words immediately on
+   hover and on keyboard focus. Purely additive: nothing depends on it, and a
+   control without `data-tip` behaves exactly as before. */
+[data-tip] {
+  position: relative;
+}
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-2);
+  color: var(--fg-primary);
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+/* A tooltip on the last control in a row would otherwise be clipped by the
+   card's edge; these flip to the right-hand side. */
+[data-tip][data-tip-align="end"]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+/* Controls in the top bar have no room above them — the tooltip left the
+   window. These open downward instead. */
+[data-tip][data-tip-side="bottom"]::after {
+  bottom: auto;
+  top: calc(100% + 6px);
+}

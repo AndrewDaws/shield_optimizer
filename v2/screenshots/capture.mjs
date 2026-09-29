@@ -81,7 +81,7 @@ async function captureScreens(page, shot) {
 
     // 5. Playback capabilities.
     await page.locator("#tab-media").click();
-    await page.getByRole("heading", { name: "Video codec configuration" }).waitFor();
+    await page.getByText("Video codecs", { exact: true }).waitFor();
     await shot("playback");
 
     // 6. Launcher.
@@ -114,7 +114,9 @@ async function captureScreens(page, shot) {
 
     // 11. Files.
     await page.locator("#tab-files").click();
-    await page.getByText("Download", { exact: true }).first().waitFor();
+    // The row tools are icons now, and the legend's text node sits beside an
+    // icon ligature, so wait on a listing row landing instead.
+    await page.locator(".files-table tbody tr").first().waitFor();
     await shot("files");
 
     // 12. Install APK.
@@ -170,7 +172,10 @@ async function main() {
         n += 1;
         const file = join(scheme.dir, `${String(n).padStart(2, "0")}-${name}.png`);
         await page.waitForTimeout(450); // let layout/fonts settle
-        await page.screenshot({ path: file });
+        // SHOT_FULLPAGE=1 captures everything below the fold too. Off by
+        // default: the gallery wants a window, not a long strip. It is how you
+        // review a screen's whole length without scrolling by hand.
+        await page.screenshot({ path: file, fullPage: process.env.SHOT_FULLPAGE === "1" });
         console.log(`  ✓ ${file}`);
       };
 

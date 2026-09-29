@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { api } from "$lib/api";
+  import Icon from "$lib/components/Icon.svelte";
+  import type { IconName } from "$lib/icons";
   import appFilesCatalog from "$lib/app-files-catalog.json";
   import type { Device, FileEntry, FindResult } from "$lib/types";
 
@@ -181,14 +183,111 @@
   }
 
   onMount(() => loadFiles(filesPath));
+
+  /// Files dropped from this computer upload into the folder on screen. The
+  /// same Tauri drag-drop stream as Install APK (HTML5 drag events carry no
+  /// real path in a webview). Every tab that has been opened stays mounted,
+  /// hidden, so this listens only while its own panel is the one showing.
+  let rootEl = $state<HTMLElement | undefined>(undefined);
+  let dragging = $state(false);
+  let unlistenDrop: (() => void) | null = null;
+
+  function isShowing(): boolean {
+    return !!rootEl && rootEl.closest("[hidden]") === null;
+  }
+
+  function baseName(path: string): string {
+    return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+  }
+
+  async function uploadDropped(paths: string[]) {
+    if (filesBusy !== null) {
+      filesMessage = "Wait for the current transfer to finish, then drop again.";
+      return;
+    }
+    const dir = filesPath;
+    const allowSystem = powerUserPaths;
+    filesBusy = "__upload__";
+    const lines: string[] = [];
+    let uploaded = 0;
+    try {
+      for (const path of paths) {
+        filesMessage = `Uploading ${baseName(path)} to ${dir}…`;
+        try {
+          const r = await api.pushFile(serial, path, dir, allowSystem);
+          lines.push(r.message);
+          if (r.ok) uploaded += 1;
+        } catch (e) {
+          // push_file refuses anything that is not a regular file.
+          lines.push(
+            String(e).startsWith("Not a file:")
+              ? `${baseName(path)} is a folder. Drop files, not folders.`
+              : String(e),
+          );
+        }
+      }
+    } finally {
+      filesBusy = null;
+    }
+    if (uploaded > 0) await loadFiles(dir);
+    filesMessage = lines.join(" ");
+  }
+
+  onMount(async () => {
+    try {
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+        if (!isShowing()) {
+          dragging = false;
+          return;
+        }
+        if (event.payload.type === "over" || event.payload.type === "enter") {
+          dragging = true;
+          return;
+        }
+        if (event.payload.type === "leave") {
+          dragging = false;
+          return;
+        }
+        dragging = false;
+        if (event.payload.paths.length > 0) void uploadDropped(event.payload.paths);
+      });
+    } catch {
+      /* not running inside the app shell — no drop target, Upload here still works */
+    }
+  });
+
+  onDestroy(() => unlistenDrop?.());
+
+  /// Board 11.8 gives each row a glyph for what the file is. Extension-based,
+  /// because that is all `ls` tells us — an unrecognised extension falls back
+  /// to the generic document rather than guessing.
+  function fileIcon(name: string): IconName {
+    const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+    if (ext === "apk") return "android";
+    if (["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ext)) return "image";
+    if (["txt", "log"].includes(ext)) return "terminal";
+    return "description";
+  }
 </script>
 
-<div class="card" role="tabpanel" tabindex={0} id="tabpanel-files" aria-labelledby="tab-files">
+<div class="card" role="tabpanel" tabindex={0} id="tabpanel-files" aria-labelledby="tab-files" bind:this={rootEl}>
   <div class="card-header">
-    <h2>Files</h2>
+    <div class="header-title">
+      <h2><Icon name="folder" size={20} /> Files</h2>
+      <p class="muted small mono header-sub">
+        {#if filesEntries}
+          {filesEntries.length} item{filesEntries.length === 1 ? "" : "s"} · {formatSize(
+            filesEntries.reduce((n, f) => n + (f.is_dir ? 0 : (f.size_bytes ?? 0)), 0),
+          )} in this folder
+        {:else}
+          browsing the device
+        {/if}
+      </p>
+    </div>
     <div class="header-actions">
-      <button onclick={uploadToCurrentDir} disabled={filesBusy !== null} title="Upload a file from this computer into the current folder">
-        {filesBusy === "__upload__" ? "Uploading…" : "Upload here"}
+      <button class="primary" onclick={uploadToCurrentDir} disabled={filesBusy !== null} title="Upload a file from this computer into the current folder">
+        <Icon name="upload" size={16} /> {filesBusy === "__upload__" ? "Uploading…" : "Upload here"}
       </button>
       <button onclick={() => loadFiles(filesPath)} disabled={filesLoading}>
         {filesLoading ? "Loading…" : "Refresh"}
@@ -279,7 +378,7 @@
       disabled={filesPath === "/" || (filesPath === "/sdcard" && !powerUserPaths) || filesLoading}
       title="Up one level"
     >
-      ↑ Up
+      <Icon name="arrow_upward" size={16} /> Up
     </button>
     {#each crumbs as c, i (c.path)}
       {#if i > 0}<span class="muted">/</span>{/if}
@@ -306,6 +405,12 @@
       </button>
     </div>
   {/if}
+  <div class="files-drop" class:dragging>
+  {#if dragging}
+    <div class="drop-overlay" role="status">
+      <Icon name="upload" size={20} /> Drop files to upload to <code>{filesPath}</code>
+    </div>
+  {/if}
   {#if filesErr}
     <div class="error">{filesErr}</div>
   {:else if filesEntries === null}
@@ -315,7 +420,7 @@
   {:else}
     <table class="files-table">
       <thead>
-        <tr><th>Name</th><th class="num">Size</th><th>Modified</th><th></th></tr>
+        <tr><th>Name</th><th class="num">Size</th><th class="num">Modified</th><th class="num">Actions</th></tr>
       </thead>
       <tbody>
         {#each filesEntries as f (f.name)}
@@ -323,69 +428,94 @@
             <td class="file-name">
               {#if f.is_dir}
                 <button class="dir-link" onclick={() => loadFiles(`${filesPath}/${f.name}`)}>
-                  📁 {f.name}
+                  <Icon name="folder" size={16} fill /> {f.name}
                 </button>
               {:else}
-                <span>{f.is_symlink ? "🔗" : "📄"} {f.name}</span>
+                <span>
+                  <Icon name={f.is_symlink ? "link" : fileIcon(f.name)} size={16} />
+                  {f.name}
+                </span>
               {/if}
             </td>
-            <td class="num muted">{f.is_dir ? "—" : formatSize(f.size_bytes)}</td>
-            <td class="muted small">{f.modified}</td>
+            <td class="num muted mono">{f.is_dir ? "—" : formatSize(f.size_bytes)}</td>
+            <td class="num muted small mono">{f.modified}</td>
+            <!-- Icon-only, per the board: three verbs spelled out on every row
+                 crowded out the names they belonged to. Each keeps its title
+                 and gains an aria-label, and the legend is under the table. -->
             <td class="row-actions">
-              {#if !f.is_dir && !f.is_symlink}
+              {#if f.is_dir}
                 <button
-                  class="small-action"
+                  class="file-tool"
+                  onclick={() => loadFiles(`${filesPath}/${f.name}`)}
+                  title="Open {f.name}"
+                  data-tip="Open folder"
+                  aria-label={`Open the folder ${f.name}`}
+                ><Icon name="chevron_right" size={16} /></button>
+              {:else if !f.is_symlink}
+                <button
+                  class="file-tool"
                   onclick={() => downloadFile(f.name)}
                   disabled={filesBusy !== null}
                   title="Save this file to a folder on this computer"
-                >
-                  {filesBusy === f.name ? "…" : "Download"}
-                </button>
+                  data-tip="Download"
+                  aria-label={`Download ${f.name}`}
+                ><Icon name="download" size={16} /></button>
                 <button
-                  class="small-action subtle"
+                  class="file-tool"
                   onclick={() => startFileCopy(f.name)}
                   disabled={filesBusy !== null}
                   title="Copy this file to another connected device"
-                >
-                  Copy to…
-                </button>
+                  data-tip="Copy to device"
+                  aria-label={`Copy ${f.name} to another device`}
+                ><Icon name="swap_horiz" size={16} /></button>
               {/if}
               <button
-                class="small-action subtle danger"
+                class="file-tool danger"
                 onclick={() => deleteEntry(f)}
                 disabled={filesBusy !== null}
                 title="Delete from the device{f.is_dir ? ' (recursive!)' : ''}"
-              >
-                Delete
-              </button>
+                  data-tip="Delete from TV" data-tip-align="end"
+                aria-label={`Delete ${f.name} from the device`}
+              ><Icon name="delete" size={16} /></button>
             </td>
           </tr>
         {/each}
       </tbody>
     </table>
+    <p class="tool-legend">
+      <span><Icon name="download" size={14} /> download</span>
+      <span><Icon name="swap_horiz" size={14} /> copy to device</span>
+      <span><Icon name="delete" size={14} /> delete from TV</span>
+    </p>
   {/if}
+  </div>
 </div>
 
 <style>
+  .files-drop {
+    position: relative;
+  }
+  .files-drop.dragging {
+    min-height: 8rem;
+  }
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+    color: var(--fg-primary);
+    font-weight: 500;
+    pointer-events: none;
+  }
   /* --- Shared scoped utilities, duplicated from the page (see CLAUDE.md note
          on component CSS). Global rules (.muted, button, input) live in the
          layout and are inherited. --- */
-  .card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.2rem;
-  }
-  .card h2 {
-    margin: 0 0 0.8rem;
-    font-size: 1.1rem;
-  }
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-  }
   .header-actions {
     display: flex;
     gap: 0.8rem;
@@ -399,7 +529,7 @@
   th, td {
     text-align: left;
     padding: 0.5rem 0.6rem;
-    border-bottom: 1px solid var(--bg-button);
+    border-bottom: 1px solid var(--border);
     vertical-align: middle;
   }
   th {
@@ -410,7 +540,7 @@
     letter-spacing: 0.04em;
   }
   td.num {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
     text-align: right;
     width: 100px;
   }
@@ -418,15 +548,20 @@
     font-size: 0.82rem;
   }
   .mono {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
   }
   .error {
     background: var(--danger-surface);
     color: var(--danger-text);
     padding: 0.7rem 1rem;
-    border-radius: 6px;
-    font-family: ui-monospace, monospace;
+    border-radius: var(--radius-md);
+    font-family: var(--mono);
     font-size: 0.85rem;
+  }
+  .files-table .row-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.2rem;
   }
   .row-actions {
     display: flex;
@@ -438,15 +573,58 @@
     padding: 0.2rem 0.6rem;
     font-size: 0.78rem;
   }
-  .small-action.danger {
-    background: var(--bg-button);
-    border-color: var(--danger-surface);
-    color: var(--danger-strong);
+  /* Icon-only row tools. Borderless until hovered, so a long listing is a list
+     of files rather than a wall of buttons. */
+  .file-tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.3rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--fg-muted);
+    cursor: pointer;
   }
-  .small-action.danger:hover {
+  .file-tool:hover:not(:disabled) {
+    border-color: var(--border);
+    background: var(--bg-button-hover);
+    color: var(--fg-primary);
+  }
+  .file-tool.danger {
+    color: var(--danger);
+  }
+  .file-tool.danger:hover:not(:disabled) {
+    border-color: var(--danger);
     background: var(--danger-surface);
     color: var(--danger-surface-text);
-    border-color: var(--danger-strong);
+  }
+  .tool-legend {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--fg-muted);
+  }
+  .tool-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .header-title {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+  .header-title h2 {
+    margin: 0;
+  }
+  .header-sub {
+    margin: 0;
   }
   .small-action.subtle {
     background: transparent;
@@ -462,7 +640,7 @@
     padding: 0.4rem 0.6rem;
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     word-break: break-word;
   }
   .clone-panel {
@@ -474,7 +652,7 @@
     padding: 0.5rem 0.8rem;
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-size: 0.9rem;
   }
   .inline-check {
@@ -488,8 +666,8 @@
     background: var(--bg-inset);
     border: 1px solid var(--border);
     padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    font-family: ui-monospace, monospace;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
     font-size: 0.85em;
   }
 
@@ -499,7 +677,7 @@
     padding: 0.6rem 0.8rem;
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
   }
   .app-backups summary {
     cursor: pointer;
@@ -511,11 +689,11 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 0.5rem 0;
-    border-top: 1px solid var(--bg-button);
+    border-top: 1px solid var(--border);
     margin-top: 0.5rem;
   }
   .apk-name {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
     font-size: 0.88rem;
     word-break: break-all;
   }
@@ -555,15 +733,23 @@
   .files-table th, .files-table td {
     text-align: left;
     padding: 0.4rem 0.6rem;
-    border-bottom: 1px solid var(--bg-button);
+    border-bottom: 1px solid var(--border);
   }
   .files-table .num { text-align: right; white-space: nowrap; }
   .files-table .row-actions { text-align: right; white-space: nowrap; }
+  /* Icon + name share a baseline row; the icon is the file-type cue so it
+     takes the muted colour until the row is hovered. */
+  .dir-link,
+  .file-name > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
   .dir-link {
     background: none;
     border: none;
     padding: 0;
-    color: var(--fg);
+    color: var(--fg-primary);
     cursor: pointer;
     font-size: 0.95rem;
   }

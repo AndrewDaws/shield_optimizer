@@ -77,3 +77,114 @@ export function setLastSeenVersion(version: string): void {
     localStorage.setItem(LAST_SEEN_VERSION_KEY, version);
   }
 }
+
+const KEEP_KEY = "shieldopt.keptPackages";
+
+/// Packages the user has explicitly decided to keep, per device.
+///
+/// Keyed by hardware id (`ro.serialno`), never by address: two TVs can swap
+/// IPs, and a decision about one must not silently apply to the other. A
+/// device that cannot report an id gets no keep list rather than a shared one.
+///
+/// This is an opinion, not device state, which is why it lives here and not in
+/// a snapshot — a snapshot restores what the TV was, and "I decided to keep
+/// Plex" is not something the TV ever knew.
+type KeepMap = Record<string, string[]>;
+
+function readKeepMap(): KeepMap {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(KEEP_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    const out: KeepMap = {};
+    for (const [id, pkgs] of Object.entries(parsed as Record<string, unknown>)) {
+      if (Array.isArray(pkgs)) out[id] = pkgs.filter((p): p is string => typeof p === "string");
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/// Placeholder serials identify nothing, so they are never a storage key.
+function idKey(hardwareId: string | null | undefined): string | null {
+  const id = hardwareId?.trim() ?? "";
+  return id && id.toLowerCase() !== "unknown" ? id : null;
+}
+
+export function getKeptPackages(raw: string | null | undefined): Set<string> {
+  const hardwareId = idKey(raw);
+  if (!hardwareId) return new Set();
+  return new Set(readKeepMap()[hardwareId] ?? []);
+}
+
+export function setPackageKept(
+  raw: string | null | undefined,
+  pkg: string,
+  kept: boolean,
+): Set<string> {
+  const hardwareId = idKey(raw);
+  const current = getKeptPackages(hardwareId);
+  if (!hardwareId) return current;
+  if (kept) current.add(pkg);
+  else current.delete(pkg);
+  const map = readKeepMap();
+  if (current.size === 0) delete map[hardwareId];
+  else map[hardwareId] = [...current].sort();
+  try {
+    localStorage.setItem(KEEP_KEY, JSON.stringify(map));
+  } catch {
+    /* storage unavailable — the decision just will not survive a restart */
+  }
+  return current;
+}
+
+const SHELL_ACK_KEY = "shieldOptimizer.expertShellAcknowledged";
+
+function readAckSet(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SHELL_ACK_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((v): v is string => typeof v === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+/// The key this TV's shell consent is filed under: its hardware id, the same
+/// rule the keep decisions follow. Consenting to arbitrary shell on the
+/// living-room Shield must not silently consent for whatever else later
+/// answers on that IP, so a TV with no readable `ro.serialno` gets no key at
+/// all. Its tick lives only in the device page's state and is asked again
+/// next time.
+function shellAckKey(hardwareId: string | null | undefined): string | null {
+  return idKey(hardwareId);
+}
+
+/// Whether expert shell has been acknowledged for this TV before.
+export function getShellAcknowledged(hardwareId: string | null | undefined): boolean {
+  const key = shellAckKey(hardwareId);
+  if (!key) return false;
+  return readAckSet().has(key);
+}
+
+export function setShellAcknowledged(
+  hardwareId: string | null | undefined,
+  acknowledged: boolean,
+): void {
+  const key = shellAckKey(hardwareId);
+  if (!key) return;
+  const set = readAckSet();
+  if (acknowledged) set.add(key);
+  else set.delete(key);
+  try {
+    localStorage.setItem(SHELL_ACK_KEY, JSON.stringify([...set].sort()));
+  } catch {
+    /* storage unavailable — the box just has to be ticked again next time */
+  }
+}

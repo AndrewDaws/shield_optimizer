@@ -87,10 +87,147 @@ fn read_apk_package_id(apk_path: &std::path::Path) -> Option<String> {
     let doc = axmldecoder::parse(&bytes).ok()?;
     if let Some(axmldecoder::Node::Element(root)) = doc.get_root() {
         if root.get_tag() == "manifest" {
-            return root.get_attributes().get("package").cloned();
+            // The manifest is attacker-controlled, and this id is later
+            // interpolated into a device-side shell command (`pm list
+            // packages <id>`) before the user has confirmed anything. An id
+            // that is not a well-formed package name is treated as unreadable.
+            return trusted_package_id(root.get_attributes().get("package").cloned());
         }
     }
     None
+}
+
+fn trusted_package_id(raw: Option<String>) -> Option<String> {
+    raw.filter(|pkg| shield_optimizer_core::engine::is_valid_package_name(pkg))
+}
+
+/// What an APK claims about itself, read locally before anything is installed.
+///
+/// Every field is best-effort: an APK whose manifest will not decode still
+/// reports its name and size, and the UI says the rest is unknown rather than
+/// guessing. Nothing here is a signature check — it answers "what is this and
+/// will it run here", not "is it trustworthy".
+#[derive(Serialize)]
+pub struct ApkInspection {
+    pub path: String,
+    pub name: String,
+    pub size_bytes: u64,
+    pub package: Option<String>,
+    /// ABIs the APK ships native code for, from its `lib/<abi>/` entries.
+    /// Empty means no native libraries at all, which runs anywhere.
+    pub abis: Vec<String>,
+    /// ABIs the device reports (`ro.product.cpu.abilist`), when we could ask.
+    pub device_abis: Vec<String>,
+    /// `Some(false)` only when the APK ships native code and none of it matches
+    /// the device. `None` means we could not read one side or the other, and
+    /// the UI must not claim a mismatch it did not establish.
+    pub abi_compatible: Option<bool>,
+    /// True when the device already reports this package installed.
+    /// `None` when the TV could not answer; unreadable is not "absent".
+    pub already_installed: Option<bool>,
+}
+
+/// Read the `lib/<abi>/` prefixes an APK ships native code for.
+fn read_apk_abis(apk_path: &std::path::Path) -> Vec<String> {
+    let Ok(file) = std::fs::File::open(apk_path) else {
+        return Vec::new();
+    };
+    let Ok(mut zip) = zip::ZipArchive::new(file) else {
+        return Vec::new();
+    };
+    let mut abis: Vec<String> = Vec::new();
+    for i in 0..zip.len() {
+        let Ok(entry) = zip.by_index(i) else { continue };
+        let name = entry.name();
+        let Some(rest) = name.strip_prefix("lib/") else {
+            continue;
+        };
+        let Some((abi, _)) = rest.split_once('/') else {
+            continue;
+        };
+        if !abi.is_empty() && !abis.iter().any(|a| a == abi) {
+            abis.push(abi.to_string());
+        }
+    }
+    abis.sort();
+    abis
+}
+
+/// `inspect_apk` — read what an APK is before installing it.
+///
+/// Exists because a drag-and-drop install has no file picker to read the name
+/// out of: without this the user learns what they installed from the result
+/// message, which is far too late. Pure reads — this never touches the device
+/// beyond two `getprop`/`pm` queries.
+#[tauri::command]
+pub async fn inspect_apk(
+    state: State<'_, AppState>,
+    serial: String,
+    path: String,
+) -> Result<ApkInspection, String> {
+    let apk = PathBuf::from(&path);
+    let metadata = tokio::fs::metadata(&apk)
+        .await
+        .map_err(|e| format!("{path}: {e}"))?;
+    if !metadata.is_file() {
+        return Err(format!("{path} is not a file"));
+    }
+    let name = apk
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let package = read_apk_package_id(&apk);
+    let abis = read_apk_abis(&apk);
+
+    let adb = state.adb_snapshot().await;
+    let device_abis: Vec<String> = match adb.shell(&serial, "getprop ro.product.cpu.abilist").await
+    {
+        Ok(out) => out
+            .stdout
+            .trim()
+            .split(',')
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+
+    // Only claim a mismatch when both sides are known AND the APK actually
+    // ships native code. An APK with no `lib/` runs on any ABI.
+    let abi_compatible = if abis.is_empty() {
+        Some(true)
+    } else if device_abis.is_empty() {
+        None
+    } else {
+        Some(abis.iter().any(|a| device_abis.iter().any(|d| d == a)))
+    };
+
+    let already_installed = match &package {
+        Some(pkg) => match adb.shell(&serial, &format!("pm list packages {pkg}")).await {
+            // A pm "Failure"/"Exception" can still exit zero; that is an
+            // unread answer, not proof the package is absent.
+            Ok(out) if out.shell_reported_failure() => None,
+            Ok(out) => Some(
+                out.stdout
+                    .lines()
+                    .any(|line| line.trim() == format!("package:{pkg}")),
+            ),
+            Err(_) => None,
+        },
+        None => None,
+    };
+
+    Ok(ApkInspection {
+        path,
+        name,
+        size_bytes: metadata.len(),
+        package,
+        abis,
+        device_abis,
+        abi_compatible,
+        already_installed,
+    })
 }
 
 /// `list_apks_in_folder` — scan `folder` for `.apk` files. Used by the
@@ -184,7 +321,22 @@ pub(crate) fn decode_install_error(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_install_error;
+    use super::{decode_install_error, trusted_package_id};
+
+    #[test]
+    fn a_manifest_package_id_with_shell_syntax_is_treated_as_unreadable() {
+        let hostile = "com.example.app; pm disable-user --user 0 com.android.systemui";
+        assert_eq!(trusted_package_id(Some(hostile.to_string())), None);
+        assert_eq!(
+            trusted_package_id(Some("com.example.app$(reboot)".into())),
+            None
+        );
+        assert_eq!(
+            trusted_package_id(Some("org.smarttube.stable".into())),
+            Some("org.smarttube.stable".to_string())
+        );
+        assert_eq!(trusted_package_id(None), None);
+    }
 
     #[test]
     fn decodes_common_install_failures() {

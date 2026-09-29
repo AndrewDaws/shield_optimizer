@@ -44,6 +44,9 @@ base64 = "0.22"
 # Tracing for structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Rolling daily log files under the app data dir — a packaged app has nowhere
+# for stdout to go, so without this a bug report has no log to attach.
+tracing-appender = "0.2"
 
 # Directory resolution per OS (snapshots, config)
 dirs = "5"
@@ -65,3 +68,6 @@ axmldecoder = "0.5"
 shield-optimizer-core = { path = "../crates/core", features = ["test-support"] }
 pretty_assertions = "1"
 tempfile = "3"
+# `start_paused` — lets the reconnect-backoff tests advance time instantly
+# instead of really sleeping through it.
+tokio = { version = "1", features = ["test-util"] }

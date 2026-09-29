@@ -33,6 +33,7 @@ const device: Device = {
   name: "NVIDIA SHIELD Android TV",
   model: "SHIELD Android TV (2019 Pro)",
   device_type: "shield",
+  tv_evidence: "tv",
   status: "device",
   connection: "network",
   properties: {
@@ -49,8 +50,122 @@ const device: Device = {
     // Shaped like a real ro.serialno so the Profile row renders at a realistic
     // width in the generated screenshots.
     serial_number: "0323220012345",
+    leanback: true,
   },
 };
+
+/// A box that never said what it is. `ro.build.characteristics` reads
+/// `nosdcard` and `pm has-feature` gave no answer, which is exactly what the
+/// Xiaomi TV Box S in #120 reports — 2.2.0 called it "not an Android TV" and
+/// locked its owner out. It is openable, and labelled UNCONFIRMED TV.
+const unconfirmedDevice: Device = {
+  id: 2,
+  serial: "192.168.1.77:5555",
+  name: "Living Room Box",
+  model: "MiBOX4",
+  device_type: "unknown",
+  tv_evidence: "unknown",
+  status: "device",
+  connection: "network",
+  properties: {
+    friendly_name: "Living Room Box",
+    brand: "Xiaomi",
+    model: "MiBOX4",
+    device_codename: "cezanne",
+    manufacturer: "Xiaomi",
+    android_release: "12",
+    sdk_level: "31",
+    build_id: "STTE.240115.001",
+    board_platform: "amlogic",
+    characteristics: "nosdcard",
+    serial_number: "9AB4C21D7E03",
+    leanback: null,
+  },
+};
+
+/// A cabled device. Forget is `adb disconnect`, which has nothing to do on
+/// USB, so this row must never offer it.
+const usbDevice: Device = {
+  id: 3,
+  serial: "0323220054321",
+  name: "Workshop Shield",
+  model: "Shield TV (2019 Tube)",
+  device_type: "shield",
+  tv_evidence: "tv",
+  status: "device",
+  connection: "usb",
+  properties: {
+    friendly_name: "Workshop Shield",
+    brand: "NVIDIA",
+    model: "SHIELD Android TV",
+    device_codename: "sif",
+    manufacturer: "NVIDIA",
+    android_release: "11",
+    sdk_level: "30",
+    build_id: "PPR1.180610.011",
+    board_platform: "tegra",
+    characteristics: "tv",
+    serial_number: "0323220054321",
+    leanback: true,
+  },
+};
+
+const allDevices = [device, unconfirmedDevice, usbDevice];
+
+/// Opt-in demo switches, set from a test's init script. Off by default so the
+/// generated gallery keeps showing the ordinary state of the app.
+function demoFlag(name: string): boolean {
+  try {
+    return localStorage.getItem(`shieldopt.demo.${name}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+let debugLogging = false;
+const LOG_DIR = "/Users/you/Library/Application Support/ShieldOptimizer/logs";
+
+/// Stand-in for the real `collect_diagnostics`, in the same shape: host facts,
+/// then one device's identity and TV evidence, then a log tail. No package
+/// inventory, here or there.
+function demoDiagnostics(serial: string | null): string {
+  const target = serial ? allDevices.find((d) => d.serial === serial) : null;
+  const lines = [
+    "## ATV Optimizer diagnostics",
+    "",
+    `- App version: ${pkg.version}`,
+    "- OS: macos (aarch64)",
+    "- adb path: /opt/homebrew/bin/adb",
+    "- adb version: Android Debug Bridge version 1.0.41",
+    "",
+  ];
+  if (!target) {
+    lines.push("### Device", "", "No device selected.", "");
+  } else {
+    const p = target.properties;
+    lines.push(
+      `### Device \`${target.serial}\``,
+      "",
+      `- Transport: ${target.connection === "network" ? "network (ADB over TCP)" : "USB"}`,
+      `- Detected type: ${target.device_type}`,
+      `- TV evidence: ${target.tv_evidence}`,
+      "",
+      "#### Properties",
+      "",
+      `- ro.product.brand: \`${p?.brand ?? ""}\``,
+      `- ro.product.model: \`${p?.model ?? ""}\``,
+      `- ro.build.characteristics: \`${p?.characteristics ?? ""}\``,
+      `- android.software.leanback: \`${p?.leanback === null || p?.leanback === undefined ? "(no answer)" : String(p.leanback)}\``,
+      "",
+      "#### HOME handlers",
+      "",
+      "- `com.google.android.tvlauncher/.MainActivity`",
+      "",
+    );
+  }
+  lines.push("### Recent log", "", "```", "INFO shield_optimizer_v2_lib: adb located", "```", "");
+  return lines.join("\n");
+}
 
 const apps = demoApps as AppEntry[];
 
@@ -62,7 +177,10 @@ const health: HealthReport = {
   },
   ram: { total_mb: 2956, used_mb: 1894, free_mb: 1062, swap_mb: 512 },
   storage: { total: "15G", used: "9.2G", available: "5.1G", used_percent: 64 },
-  temperature_c: 47.5,
+  // Warm enough that the Temperature card's amber tier shows in the generated
+  // gallery — the tiers are the point of that card and a permanently green
+  // fixture never renders them.
+  temperature_c: 78,
   audio_device: "Dolby Atmos over HDMI (eARC)",
   top_memory: [
     { package: "com.netflix.ninja", mb: 312 },
@@ -132,18 +250,25 @@ const media: MediaCapabilities = {
   ],
 };
 
+const playStore = (pkg: string) => `https://play.google.com/store/apps/details?id=${pkg}`;
+
 const launchers: LauncherStatus[] = [
   {
-    entry: { name: "Android TV Launcher (Stock)", package: "com.google.android.tvlauncher" },
+    entry: {
+      name: "Android TV Launcher (Stock)",
+      package: "com.google.android.tvlauncher",
+      source_url: null,
+    },
     installed: true,
     enabled: true,
     stock: true,
     other: false,
   },
-  { entry: { name: "Projectivy Launcher", package: "com.spocky.projengmenu" }, installed: true, enabled: true, stock: false, other: false },
-  { entry: { name: "FLauncher", package: "me.efesser.flauncher" }, installed: true, enabled: true, stock: false, other: false },
-  { entry: { name: "ATV Launcher", package: "com.sweech.launcher" }, installed: false, enabled: false, stock: false, other: false },
-  { entry: { name: "Wolf Launcher", package: "com.wolf.firelauncher" }, installed: false, enabled: false, stock: false, other: false },
+  { entry: { name: "Projectivy Launcher", package: "com.spocky.projengmenu", source_url: playStore("com.spocky.projengmenu") }, installed: true, enabled: true, stock: false, other: false },
+  { entry: { name: "FLauncher", package: "me.efesser.flauncher", source_url: playStore("me.efesser.flauncher") }, installed: true, enabled: true, stock: false, other: false },
+  { entry: { name: "ATV Launcher", package: "com.sweech.launcher", source_url: playStore("com.sweech.launcher") }, installed: false, enabled: false, stock: false, other: false },
+  { entry: { name: "Wolf Launcher", package: "com.wolf.firelauncher", source_url: playStore("com.wolf.firelauncher") }, installed: false, enabled: false, stock: false, other: false },
+  { entry: { name: "Monet Launcher", package: "com.klevico.monet", source_url: "https://github.com/Klevico/Monet-Launcher" }, installed: false, enabled: false, stock: false, other: false },
 ];
 
 const tweaks: TweaksState = {
@@ -198,6 +323,12 @@ const DISABLED = new Set([
   "com.google.android.tvrecommendations",
   "com.amazon.amazonvideo.livingroom",
   "com.facebook.katana",
+  // A Caution-list package that is already disabled. It exists to keep the
+  // coverage honest: the Optimize tab used to query safety only for the rows
+  // it proposed to act on, so exactly this shape of row — the one whose
+  // verdict matters most — rendered "SAFETY UNAVAILABLE".
+  // tests/optimize-safety-all-rows.mjs reads it.
+  "com.android.providers.tv",
 ]);
 const MISSING = new Set(["com.disney.disneyplus", "com.wolf.firelauncher"]);
 
@@ -218,7 +349,20 @@ function optimizePlan(mode: "optimize" | "restore"): OptimizePlan {
   // wizard UI is what applies the per-app default (non-default apps default to
   // Skip), so the plan must carry the full set for that to be visible.
   const items: OptimizePlanItem[] = apps
-    .slice(0, 16)
+    .filter(
+      (entry, index) =>
+        // The first sixteen, plus the disabled Caution package above — the
+        // plan has to carry a row whose verdict the wizard must still resolve
+        // even though it proposes no action on it — plus one enabled
+        // medium-risk app, so the plan has a Caution row that is actionable
+        // and "Select all safe" has something it must leave alone — plus one
+        // uninstall-method app with no store listing, which Optimize must
+        // offer Disable for and never Uninstall.
+        index < 16
+        || entry.package === "com.android.providers.tv"
+        || entry.package === "com.nvidia.tegrazone3"
+        || entry.package === "com.philo.philo",
+    )
     .map((entry) => {
       const state = MISSING.has(entry.package)
         ? "missing"
@@ -297,8 +441,11 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       // Real version so screenshots never show a stale header badge.
       return {
         current: pkg.version,
-        latest: pkg.version,
-        update_available: false,
+        // "API ahead of manifest": GitHub has published a tag that the
+        // updater's latest.json has not caught up with yet. Opt-in, because
+        // the ordinary state of the app is the one the gallery should show.
+        latest: demoFlag("updateAhead") ? "2.9.9" : pkg.version,
+        update_available: demoFlag("updateAhead"),
         url: "https://github.com/bryanroscoe/shield_optimizer/releases",
         // The demo layer stands in for a real release, notes included, so the
         // post-update "what's new" path is reachable without a GitHub call.
@@ -309,9 +456,20 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
           "- It opens the new launcher on the TV the moment the switch succeeds.",
       };
     case "list_devices":
-      return [device];
+      return allDevices;
     case "device_profile":
-      return device;
+      return allDevices.find((d) => d.serial === String(args.serial ?? "")) ?? device;
+    case "collect_diagnostics":
+      return demoDiagnostics((args.serial as string | null) ?? null);
+    case "get_debug_logging":
+      return debugLogging;
+    case "set_debug_logging":
+      debugLogging = Boolean(args.enabled);
+      return debugLogging;
+    case "log_dir_path":
+      return LOG_DIR;
+    case "open_log_dir":
+      return null;
     case "health_report":
       return health;
     case "app_list_for_device":
@@ -320,8 +478,31 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return packageStates((args.packages as string[]) ?? []);
     case "app_permission_state":
       return "granted";
-    case "list_other_packages":
+    // Every installed package, catalog entries included. The Health tab uses
+    // this to tell a memory row that really is an installed app from a process
+    // name it cannot tie to one — without it, every row reads "not a package".
+    // Deliberately omits the native processes in top_memory (surfaceflinger
+    // and friends), because those genuinely are not packages.
+    case "list_installed_packages":
       return [
+        ...apps.map((a) => ({
+          package: a.package,
+          system: true,
+          enabled: true,
+          name: a.name,
+        })),
+        { package: "com.netflix.ninja", system: false, enabled: true, name: "Netflix" },
+        { package: "com.plexapp.android", system: false, enabled: true, name: "Plex" },
+        // The installed launchers from `launchers` above, so the Launcher tab's
+        // Advanced picker can offer them (tests/launcher-rows.mjs).
+        { package: "com.spocky.projengmenu", system: false, enabled: true, name: "Projectivy Launcher" },
+        { package: "me.efesser.flauncher", system: false, enabled: true, name: "FLauncher" },
+        { package: "com.disney.disneyplus", system: false, enabled: true, name: "Disney+" },
+        { package: "com.spotify.tv.android", system: false, enabled: true, name: "Spotify" },
+        { package: "tv.twitch.android.app", system: false, enabled: true, name: "Twitch" },
+        { package: "com.nvidia.tegrazone3", system: true, enabled: true, name: "NVIDIA Games" },
+        { package: "com.google.android.tvlauncher", system: true, enabled: true, name: null },
+        { package: "com.nvidia.shield.remote.server", system: true, enabled: true, name: null },
         { package: "com.teamsmart.videomanager.tv", system: false, enabled: true, name: "SmartTube" },
         { package: "ca.devmesh.overseerrtv", system: false, enabled: true, name: "Overseerr (TV)" },
         { package: "org.fdroid.fdroid", system: false, enabled: true, name: "F-Droid" },
@@ -329,12 +510,28 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         { package: "com.android.providers.media", system: true, enabled: true, name: null },
         { package: "com.nvidia.ota", system: true, enabled: false, name: null },
       ];
+    case "list_other_packages":
+      return [
+        { package: "com.teamsmart.videomanager.tv", system: false, enabled: true, name: "SmartTube", description: "An open-source YouTube client for Android TV." },
+        { package: "ca.devmesh.overseerrtv", system: false, enabled: true, name: "Overseerr (TV)", description: "Browse and request movies and shows from an Overseerr server." },
+        { package: "org.fdroid.fdroid", system: false, enabled: true, name: "F-Droid", description: "A catalog of free and open-source Android apps." },
+        { package: "com.android.vending", system: true, enabled: true, name: "Google Play Store", description: "Google's app store." },
+        { package: "com.android.providers.media", system: true, enabled: true, name: "Media Storage", description: "Indexes photos, music and video for apps." },
+        { package: "com.nvidia.ota", system: true, enabled: false, name: null },
+      ];
+    // Covers the rows the App List actually shows first, so the RAM and
+    // Last used columns read as columns in the gallery rather than as a
+    // stack of em dashes.
     case "app_memory_map":
       return {
         "com.teamsmart.videomanager.tv": 184.2,
         "com.netflix.ninja": 243.7,
         "com.amazon.amazonvideo.livingroom.nvidia": 126.5,
         "com.spocky.projengmenu": 92.1,
+        "com.google.android.feedback": 12.4,
+        "com.google.android.videos": 58.9,
+        "com.google.android.music": 31.2,
+        "com.Funimation.FunimationNow.androidtv": 142.6,
       };
     case "app_usage_map":
       return {
@@ -342,6 +539,12 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         "com.teamsmart.videomanager.tv": { last_used: "2026-06-04 21:30:00", launch_count: 88 },
         "com.hulu.plus": { last_used: "2026-03-12 19:02:00", launch_count: 4 },
         "com.showtime.standalone": { last_used: null, launch_count: 0 },
+        "com.google.android.feedback": { last_used: "2026-06-01 08:14:00", launch_count: 3 },
+        "com.android.printspooler": { last_used: null, launch_count: 0 },
+        "com.android.gallery3d": { last_used: null, launch_count: 0 },
+        "com.google.android.videos": { last_used: "2025-11-02 21:40:00", launch_count: 6 },
+        "com.google.android.music": { last_used: null, launch_count: 0 },
+        "com.Funimation.FunimationNow.androidtv": { last_used: null, launch_count: 0 },
       };
     // Process names from a memory report never consult the catalog — an
     // unverified string must not inherit a curated verdict.
@@ -389,7 +592,7 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         if (entry.risk === "safe") {
           return {
             kind: "safe",
-            reason: `Reviewed for Android TV and rated safe to remove.${tail}`,
+            reason: detail || "Reviewed for Android TV.",
             source: "reviewed_catalog",
           };
         }
@@ -411,7 +614,9 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
     case "list_launchers":
       return launchers;
     case "current_launcher":
-      return { package: "com.spocky.projengmenu", activity: "com.spocky.projengmenu/.MainActivity" };
+      // `activity` is the activity alone, as `resolve-activity --brief` reports
+      // it once the package has been split off — not the whole component.
+      return { package: "com.spocky.projengmenu", activity: ".MainActivity" };
     case "channel_provider_disabled":
       return false;
     case "media_report":
@@ -451,6 +656,15 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return tweaks;
     case "list_dir":
       return demoFiles(args.path as string);
+    // The real command refuses anything that is not a regular file. The demo
+    // cannot stat a path, so a last segment with no extension stands in for a
+    // dropped folder.
+    case "push_file": {
+      const local = String(args.localPath ?? "");
+      const name = local.split(/[\\/]/).filter(Boolean).pop() ?? local;
+      if (!name.includes(".")) throw `Not a file: ${local}`;
+      return { ok: true, message: `Uploaded ${name} to ${args.remoteDir}.`, local_path: null };
+    }
     case "get_display_scaling":
       return { size: "1920x1080 (default)", density: "320 (default)" };
     case "get_private_dns":
@@ -465,7 +679,22 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
       return { hits: [], unsearched: [] };
     case "list_apks_in_folder":
       return [];
-    case "preview_apply":
+    case "preview_apply": {
+      // Mirrors the engine: the launcher is a change only when the snapshot's
+      // differs from the one holding Home now (Projectivy, per current_launcher
+      // above), and "Now" carries the device's value for every key mentioned.
+      const snap = snapshots.find((s) => s.path === args.snapshotPath) ?? snapshots[0];
+      const homeNow = "com.spocky.projengmenu";
+      const now = Object.fromEntries(
+        Object.entries({
+          "global.hdmi_control_enabled": tweaks.hdmi_control_enabled,
+          "secure.match_content_frame_rate": tweaks.match_content_frame_rate,
+          "global.window_animation_scale": tweaks.window_animation_scale,
+          "global.transition_animation_scale": tweaks.transition_animation_scale,
+          "global.animator_duration_scale": tweaks.animator_duration_scale,
+          "global.encoded_surround_output": tweaks.encoded_surround_output,
+        }).filter((entry): entry is [string, string] => entry[1] != null),
+      );
       return {
         packages_to_disable: [
           "com.google.android.feedback",
@@ -475,15 +704,44 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         ],
         packages_already_disabled: ["com.amazon.amazonvideo.livingroom", "com.facebook.katana"],
         packages_not_installed: ["com.disney.disneyplus", "com.quibi.qlient"],
-        launcher_to_set: "com.spocky.projengmenu",
+        launcher_to_set: snap.launcher && snap.launcher !== homeNow ? snap.launcher : null,
+        current_launcher: homeNow,
+        launcher_not_installed: null,
         settings_to_write: {
-          "global.hdmi_control_enabled": "1",
-          "secure.match_content_frame_rate": "2",
-          "global.window_animation_scale": "0.5",
+          "global.hdmi_control_enabled": "0",
+          "secure.match_content_frame_rate": "1",
+          "global.window_animation_scale": "1.0",
         },
         settings_to_delete: ["global.encoded_surround_output"],
         settings_already_set: ["global.transition_animation_scale", "global.animator_duration_scale"],
+        current_values: now,
         cross_device_warning: null,
+      };
+    }
+    case "set_home_any": {
+      // Only real Home apps are accepted; anything else gets the honest refusal
+      // the command gives on a device.
+      const pkg = String(args.package ?? "");
+      const home = launchers.some((l) => l.entry.package === pkg && l.installed);
+      return home
+        ? { ok: true, current_launcher: pkg, declares_home: true, stock_holds_home: false, message: `${pkg} is now the Home app.`, diagnostics: [] }
+        : {
+            ok: false,
+            current_launcher: "com.spocky.projengmenu",
+            declares_home: false,
+            stock_holds_home: false,
+            message: `Android didn't accept ${pkg} as Home; it doesn't declare a Home screen. Nothing was disabled. Home is still com.spocky.projengmenu.`,
+            diagnostics: [],
+          };
+    }
+    case "disable_stock_launcher":
+      return {
+        ok: true,
+        strategy: "disable_stock_takeover",
+        current_launcher: String(args.target ?? ""),
+        last_error: null,
+        stock_takeover_available: false,
+        diagnostics: [],
       };
     case "apply_snapshot":
       return {

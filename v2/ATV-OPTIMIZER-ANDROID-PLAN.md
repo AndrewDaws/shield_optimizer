@@ -2,7 +2,7 @@
 
 ## Summary
 
-Build a separate Android phone/tablet app that acts as the ADB client for Android TV / Google TV devices over Wi-Fi. The mobile product name is **ATV Optimizer**; the desktop app keeps the existing Shield Optimizer name, identifier, updater, Homebrew tap, screenshots, and release pipeline until a separate desktop rebrand migration is planned.
+Build a separate Android phone/tablet app that acts as the ADB client for Android TV / Google TV devices over Wi-Fi. The mobile product name is **ATV Optimizer**. The desktop app took the same name in v2-2.3.0; it deliberately kept its identifier (`com.shieldoptimizer.app`), data folder, updater channel, Homebrew cask token and release pipeline, and pins its WiX UpgradeCode to the old name's value so installs upgrade in place.
 
 This plan starts with a behavior-preserving Rust workspace extraction so the audited safety engine and driver-generic command layer can be shared by desktop and mobile.
 

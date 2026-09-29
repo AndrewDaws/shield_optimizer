@@ -1,0 +1,51 @@
+name: My TV isn't recognised
+description: ATV Optimizer doesn't see the TV, says it isn't an Android TV, or marks it UNCONFIRMED TV.
+title: "Device support: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The app calls a device an Android TV only when the device itself says so, and it never guesses from the address. If yours reads UNCONFIRMED TV or NOT AN ANDROID TV, or doesn't appear at all, the diagnostics show what it actually reported. On the device's row, use **Copy diagnostics**, or open **Report a bug**, and paste the result below.
+  - type: input
+    id: tv-model
+    attributes:
+      label: TV model
+      description: The make and model, for example "TCL 55S450G" or "Sony Bravia XR-65A80L".
+    validations:
+      required: true
+  - type: dropdown
+    id: what-you-see
+    attributes:
+      label: What the app shows
+      options:
+        - The TV doesn't appear at all
+        - UNAUTHORIZED, and allowing it on the TV doesn't help
+        - UNCONFIRMED TV
+        - NOT AN ANDROID TV
+        - Something else (describe below)
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How it's connected
+      options:
+        - Wi-Fi (network ADB)
+        - USB
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Anything else
+      description: What you tried, and anything the TV showed on screen.
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: From Copy diagnostics on the device's row, or from Report a bug.
+    validations:
+      required: false

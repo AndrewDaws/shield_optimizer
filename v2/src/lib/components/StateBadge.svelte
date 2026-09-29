@@ -11,12 +11,19 @@
 <style>
   .state-badge {
     display: inline-block;
+    /* Hosts set `overflow-wrap: anywhere` so long package ids can break, and it
+       inherits. In a flex row that let ENABLED render as a vertical column of
+       seven letters and tripled the row's height. */
+    flex: none;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: keep-all;
     font-size: 0.74rem;
     padding: 0.15rem 0.55rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
   }
   .state-badge.state-enabled {
     background: var(--ok-surface);
@@ -28,6 +35,6 @@
   }
   .state-badge.state-missing {
     background: var(--bg-muted);
-    color: var(--fg-faint);
+    color: var(--fg-muted);
   }
 </style>

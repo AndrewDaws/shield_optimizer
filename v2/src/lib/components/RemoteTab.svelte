@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { api } from "$lib/api";
   import { getRemoteForceShell, setRemoteForceShell } from "$lib/prefs";
 
@@ -189,7 +190,7 @@
 
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-remote" aria-labelledby="tab-remote">
   <div class="remote-header">
-    <h2>Remote</h2>
+    <h2><Icon name="settings_remote" size={20} /> Remote</h2>
     {#if transport}
       <span class="transport" class:live={transport === "channel"}
         title={transport === "channel"
@@ -198,23 +199,15 @@
         {transport === "channel" ? "● instant" : "○ compatible (slower)"}
       </span>
     {/if}
-    <label class="compat-toggle" title="Skip the fast channel and use the slower, universal ADB input — use this if the instant channel misbehaves on your device.">
-      <input type="checkbox" checked={forceShell} onchange={toggleForceShell} />
-      Force compatible mode
-    </label>
   </div>
   <div class="remote-layout">
     <div class="remote-typing">
       <div class="typing-header">
         <h3>Live typing</h3>
-        <button class="small-action" onclick={pasteFromClipboard} title="Send the clipboard to the TV">
-          Paste
-        </button>
       </div>
       <p class="muted small">
-        Click below and type — keystrokes go straight to whatever field has
-        focus on the TV, including Backspace and Enter. You can paste too
-        (⌘V / Ctrl+V), which is easier for a long URL or password.
+        Click the box and type; keystrokes go to whatever has focus on the TV.
+        ⌘V / Ctrl+V pastes.
       </p>
       <div
         class="type-capture"
@@ -227,6 +220,17 @@
         onfocus={() => (remoteCaptureFocused = true)}
         onblur={() => (remoteCaptureFocused = false)}
       >
+        <!-- Inside the box, because pasting is a thing you do *to* this box.
+             `preventDefault` on mousedown keeps the click from pulling focus
+             off the capture — otherwise pasting would end the typing session
+             it exists to serve. -->
+        <button
+          class="small-action paste-action"
+          onclick={pasteFromClipboard}
+          onmousedown={(e) => e.preventDefault()}
+          data-tip="Send the clipboard to the TV"
+          data-tip-align="end"
+        ><Icon name="content_paste" size={13} /> Paste</button>
         {#if remoteEcho}
           <span class="mono">{remoteEcho}</span><span class="caret">▏</span>
         {:else if remoteCaptureFocused}
@@ -240,43 +244,62 @@
       {/if}
     </div>
     <div class="remote-pad">
-      <h3>Buttons</h3>
+      <!-- Row order follows mobile board 6.1: nav trio, then the disc as the
+           anchor, then transport, volume, and the system trio last. -->
+      <div class="remote-row nav-row">
+        <button onclick={() => sendRemoteKey("back")} title="Back"><Icon name="arrow_back" size={16} /> Back</button>
+        <button onclick={() => sendRemoteKey("home")} title="Home"><Icon name="home" size={16} /> Home</button>
+        <button onclick={() => sendRemoteKey("recents")} title="Recent apps / app switcher"><Icon name="apps" size={16} /> Recents</button>
+      </div>
       <!-- D-pad uses pointerdown/up (not click) so holding a direction
            auto-repeats on the fast channel; pointerleave/cancel stop the
            repeat if the cursor slides off mid-hold. -->
+      <!-- Four wedges, not a 3x3 grid. The grid left the four corners of the
+           disc dead — about a third of the target area did nothing — so each
+           direction is now a quarter of the circle, clipped to a triangle.
+           `clip-path` clips hit testing too, so the wedges meet exactly and
+           there is nowhere inside the disc that is not a direction. -->
       <div class="dpad">
-        <span></span>
-        <button onpointerdown={() => pressStart("up")} onpointerup={stopRepeat} onpointerleave={stopRepeat} onpointercancel={stopRepeat} title="D-pad up (hold to repeat)">▲</button>
-        <span></span>
-        <button onpointerdown={() => pressStart("left")} onpointerup={stopRepeat} onpointerleave={stopRepeat} onpointercancel={stopRepeat} title="D-pad left (hold to repeat)">◀</button>
+        <button class="dir up" onpointerdown={() => pressStart("up")} onpointerup={stopRepeat} onpointerleave={stopRepeat} onpointercancel={stopRepeat} title="D-pad up (hold to repeat)" aria-label="D-pad up"><Icon name="keyboard_arrow_up" size={24} /></button>
+        <button class="dir right" onpointerdown={() => pressStart("right")} onpointerup={stopRepeat} onpointerleave={stopRepeat} onpointercancel={stopRepeat} title="D-pad right (hold to repeat)" aria-label="D-pad right"><Icon name="keyboard_arrow_right" size={24} /></button>
+        <button class="dir down" onpointerdown={() => pressStart("down")} onpointerup={stopRepeat} onpointerleave={stopRepeat} onpointercancel={stopRepeat} title="D-pad down (hold to repeat)" aria-label="D-pad down"><Icon name="keyboard_arrow_down" size={24} /></button>
+        <button class="dir left" onpointerdown={() => pressStart("left")} onpointerup={stopRepeat} onpointerleave={stopRepeat} onpointercancel={stopRepeat} title="D-pad left (hold to repeat)" aria-label="D-pad left"><Icon name="keyboard_arrow_left" size={24} /></button>
         <button class="ok" onclick={() => sendRemoteKey("select")} title="Select / OK">OK</button>
-        <button onpointerdown={() => pressStart("right")} onpointerup={stopRepeat} onpointerleave={stopRepeat} onpointercancel={stopRepeat} title="D-pad right (hold to repeat)">▶</button>
-        <span></span>
-        <button onpointerdown={() => pressStart("down")} onpointerup={stopRepeat} onpointerleave={stopRepeat} onpointercancel={stopRepeat} title="D-pad down (hold to repeat)">▼</button>
-        <span></span>
+      </div>
+      <!-- What the status pill's tooltip used to hide. It changes with the
+           transport, and it is the one thing you need to know before you hold
+           a direction down. -->
+      {#if transport}
+        <p class="pad-caption">
+          {transport === "channel"
+            ? "Hold a direction to repeat"
+            : "Each press takes about 0.7s"}
+        </p>
+      {/if}
+      <div class="remote-keys">
+      <div class="remote-row transport-row">
+        <button onclick={() => sendRemoteKey("rewind")} title="Rewind" data-tip="Rewind" aria-label="Rewind"><Icon name="fast_rewind" size={18} /></button>
+        <button onclick={() => sendRemoteKey("play_pause")} title="Play / Pause" data-tip="Play / Pause" aria-label="Play or pause"><Icon name="play_pause" size={20} /></button>
+        <button onclick={() => sendRemoteKey("fast_forward")} title="Fast forward" data-tip="Fast forward" aria-label="Fast forward"><Icon name="fast_forward" size={18} /></button>
       </div>
       <div class="remote-row">
-        <button onclick={() => sendRemoteKey("back")} title="Back">Back</button>
-        <button onclick={() => sendRemoteKey("home")} title="Home">Home</button>
-        <button onclick={openSettings} title="Open Settings (the Shield remote's gear button)">⚙ Settings</button>
+        <button onclick={() => sendRemoteKey("volume_down")} title="Volume down" data-tip="Volume down" aria-label="Volume down"><Icon name="volume_down" size={18} /></button>
+        <button onclick={() => sendRemoteKey("mute")} title="Mute" data-tip="Mute" aria-label="Mute"><Icon name="volume_off" size={18} /></button>
+        <button onclick={() => sendRemoteKey("volume_up")} title="Volume up" data-tip="Volume up" aria-label="Volume up"><Icon name="volume_up" size={18} /></button>
       </div>
       <div class="remote-row">
-        <button onclick={() => sendRemoteKey("recents")} title="Recent apps / app switcher">Recents</button>
-      </div>
-      <div class="remote-row">
-        <button onclick={() => sendRemoteKey("rewind")} title="Rewind">◀◀</button>
-        <button onclick={() => sendRemoteKey("play_pause")} title="Play / Pause">▶❙❙</button>
-        <button onclick={() => sendRemoteKey("fast_forward")} title="Fast forward">▶▶</button>
-      </div>
-      <div class="remote-row">
-        <button onclick={() => sendRemoteKey("volume_down")} title="Volume down">Vol −</button>
-        <button onclick={() => sendRemoteKey("mute")} title="Mute">Mute</button>
-        <button onclick={() => sendRemoteKey("volume_up")} title="Volume up">Vol +</button>
-      </div>
-      <div class="remote-row">
+        <button onclick={openSettings} title="Open Settings (the Shield remote's gear button)"><Icon name="settings" size={16} /> Settings</button>
         <button onclick={() => sendRemoteKey("wakeup")} title="Wake the screen (KEYCODE_WAKEUP)">Wake</button>
-        <button onclick={() => sendRemoteKey("power")} title="Power toggle (sleep / wake)">Power</button>
+        <button class="power" onclick={() => sendRemoteKey("power")} title="Power toggle (sleep / wake)"><Icon name="power_settings_new" size={16} /> Power</button>
       </div>
+      </div>
+      <!-- A setting about how this remote talks to the TV, so it sits with the
+           remote and with the caption it changes — not in the card header,
+           where it looked like a page-level control. -->
+      <label class="compat-toggle" title="Skip the fast channel and use the slower, universal ADB input — use this if the instant channel misbehaves on your device.">
+        <input type="checkbox" checked={forceShell} onchange={toggleForceShell} />
+        Force compatible mode
+      </label>
     </div>
   </div>
 </div>
@@ -284,16 +307,6 @@
 <style>
   /* Shared scoped utilities duplicated from the page; global rules
      (.muted, button) live in the layout and are inherited. */
-  .card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.2rem;
-  }
-  .card h2 {
-    margin: 0 0 0.8rem;
-    font-size: 1.1rem;
-  }
   .remote-header {
     display: flex;
     align-items: baseline;
@@ -301,49 +314,74 @@
     flex-wrap: wrap;
   }
   .transport {
+    margin-left: auto;
     font-size: 0.74rem;
     color: var(--fg-muted);
     cursor: default;
   }
   .compat-toggle {
-    margin-left: auto;
     display: flex;
     align-items: center;
     gap: 0.35rem;
+    margin-top: 0.2rem;
     font-size: 0.78rem;
     color: var(--fg-muted);
     cursor: pointer;
   }
   .compat-toggle input {
-    accent-color: var(--accent);
+    accent-color: var(--accent-strong);
     cursor: pointer;
   }
   .transport.live {
     color: var(--ok);
   }
-  .card h3 {
-    margin: 1rem 0 0.4rem;
-    font-size: 1rem;
-    color: var(--fg-secondary);
-  }
   .small {
     font-size: 0.82rem;
   }
   .mono {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
   }
   .warn-text {
     color: var(--warn);
   }
 
   /* Remote-specific styles. */
+  /* Bounded and centred rather than stretched. Nothing on this screen scales
+     with the viewport — a capture box that echoes about sixty characters has
+     no business being 1200px wide — so letting the row fill a wide card left
+     the remote in a narrow rail beside several hundred pixels of nothing. */
   .remote-layout {
     display: flex;
-    gap: 2.5rem;
+    gap: 3rem;
     flex-wrap: wrap;
     align-items: flex-start;
+    justify-content: center;
+    max-width: 900px;
+    margin-inline: auto;
   }
-  .remote-typing { flex: 1; min-width: 280px; max-width: 480px; }
+  /* The pad reads first and the typing box second: the remote is the thing
+     this screen is, and the left edge is where a reader starts. DOM order
+     stays typing-then-pad so Tab still reaches the capture box before fifteen
+     buttons and the paste path is untouched. */
+  .remote-typing {
+    order: 2;
+  }
+  .remote-pad {
+    order: 1;
+  }
+  @media (max-width: 760px) {
+    /* Stacked, the order that matters is reading order again. */
+    .remote-typing,
+    .remote-pad {
+      order: 0;
+    }
+  }
+  .remote-typing {
+    /* ~60ch of mono: the echo's own length. */
+    flex: 0 1 480px;
+    max-width: 480px;
+    min-width: 280px;
+  }
   .typing-header {
     display: flex;
     align-items: center;
@@ -360,12 +398,25 @@
     font-size: 0.78rem;
   }
   .type-capture {
-    min-height: 3.2rem;
+    /* Five lines, so a pasted URL or a multi-line paste has somewhere to go
+       and the column reads as a surface rather than a single input. */
+    position: relative;
+    min-height: 9rem;
+    overflow-wrap: anywhere;
     padding: 0.8rem;
+    /* Room for the Paste button in the corner so the echo never runs under it. */
+    padding-right: 5.2rem;
     border: 1px dashed var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     cursor: text;
     background: var(--bg-inset);
+  }
+  .paste-action {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    padding: 0.15rem 0.45rem;
+    font-size: 0.72rem;
   }
   .type-capture.focused {
     border-style: solid;
@@ -376,21 +427,130 @@
     animation: caret-blink 1s steps(1) infinite;
   }
   @keyframes caret-blink { 50% { opacity: 0; } }
-  .remote-pad { display: flex; flex-direction: column; gap: 0.6rem; }
-  .dpad {
-    display: grid;
-    grid-template-columns: repeat(3, 3.2rem);
-    grid-auto-rows: 3.2rem;
-    gap: 0.4rem;
-    justify-items: stretch;
+  /* The width mobile board 6.1 gives the remote. Fixed, because a remote is a
+     physical object — it should not get wider just because the window did. */
+  .remote-pad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.9rem;
+    flex: 0 0 340px;
+    max-width: 340px;
   }
-  .dpad button { font-size: 1rem; }
-  .dpad .ok { font-weight: 700; }
+  .pad-caption {
+    margin: -0.2rem 0 0;
+    font-size: 0.76rem;
+    color: var(--fg-muted);
+    text-align: center;
+  }
+  /* A D-pad should look like one control, not four loose rectangles. The
+     ring is a single disc; the four directions are transparent wedges laid
+     over it in a 3x3 grid, with OK as a raised centre. */
+  .dpad {
+    position: relative;
+    width: 16rem;
+    height: 16rem;
+    border-radius: 50%;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .dpad .dir {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    padding: 0.9rem;
+    border: none;
+    border-radius: 0;
+    background: none;
+    color: var(--fg-secondary);
+  }
+  .dpad .dir.up {
+    clip-path: polygon(0 0, 100% 0, 50% 50%);
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .dpad .dir.right {
+    clip-path: polygon(100% 0, 100% 100%, 50% 50%);
+    align-items: center;
+    justify-content: flex-end;
+  }
+  .dpad .dir.down {
+    clip-path: polygon(100% 100%, 0 100%, 50% 50%);
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .dpad .dir.left {
+    clip-path: polygon(0 100%, 0 0, 50% 50%);
+    align-items: center;
+    justify-content: flex-start;
+  }
+  .dpad .dir:hover {
+    background: var(--bg-button-hover);
+    color: var(--fg-primary);
+  }
+  .dpad .dir:active {
+    background: var(--accent-surface);
+    color: var(--accent);
+  }
+  /* Sits above the wedges and takes their clicks back in the middle. */
+  .dpad .ok {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 6.5rem;
+    height: 6.5rem;
+    border-radius: 50%;
+    background: var(--bg-button);
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 1.05rem;
+  }
+  .dpad .ok:hover {
+    background: var(--accent-strong);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+  }
+  /* One grid for every key row, so the columns line up down the stack
+     instead of each row sizing itself. */
+  .remote-keys {
+    display: grid;
+    gap: 0.4rem;
+    width: 100%;
+  }
   .remote-row {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0.4rem;
-    max-width: 10.4rem;
+    width: 100%;
   }
-  .remote-row button { padding: 0.45rem 0.3rem; white-space: nowrap; }
+  /* Play is the one you reach for, so it gets the extra width — as on 6.1. */
+  .remote-row.transport-row {
+    grid-template-columns: 1fr 1.3fr 1fr;
+  }
+  .remote-row.nav-row {
+    margin-bottom: 0.2rem;
+  }
+  /* Destructive, so it carries the danger edge rather than a plain one. */
+  .remote-row button.power {
+    border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+    color: var(--danger);
+  }
+  .remote-row button.power:hover {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+  }
+  .dpad .ok,
+  .remote-row button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+  }
+  .remote-row button {
+    padding: 0.6rem 0.3rem;
+    white-space: nowrap;
+    border-radius: var(--radius-lg);
+  }
 </style>

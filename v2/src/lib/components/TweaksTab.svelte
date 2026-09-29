@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { api } from "$lib/api";
   import type {
     TweaksState,
@@ -262,6 +263,7 @@
   async function applyDisplayScaling(preset: DisplayScalePreset) {
     const label = preset === "uhd_4k" ? "4K (3839x2160, density 640)"
       : preset === "fhd_1080p" ? "1080p (1920x1080, density 320)"
+      : preset === "hd_720p" ? "720p (1280x720, density 213)"
       : "device defaults";
     if (!confirm(`Apply display scaling: ${label}? The screen will reflow.`)) return;
     displayScaleBusy = preset;
@@ -283,7 +285,7 @@
 
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-tweaks" aria-labelledby="tab-tweaks">
   <div class="card-header">
-    <h2>System Tweaks</h2>
+    <h2><Icon name="tune" size={20} /> System Tweaks</h2>
     <button onclick={loadTweaks} disabled={tweaksLoading}>
       {tweaksLoading ? "Loading…" : "Refresh"}
     </button>
@@ -643,8 +645,20 @@
 
     <h3>Display Scaling</h3>
     <p class="muted small">
-      Forces a specific resolution + density via <code>wm size</code> + <code>wm density</code>.
-      Mostly for Shield TV — useful for testing 1080p mode on a 4K device.
+      Tells Android to render the whole UI at a different resolution than the
+      panel, via <code>wm size</code> and <code>wm density</code>. The TV still
+      outputs at its native resolution — it just upscales what Android drew.
+    </p>
+    <p class="muted small">
+      <strong>Why you'd drop it:</strong> a 4K Shield renders four times the
+      pixels of a 1080p one for the same launcher. Rendering at 1080p makes the
+      UI and app menus noticeably lighter on GPU and RAM, at the cost of
+      sharpness in text and icons. Video is unaffected — players decode at the
+      source resolution regardless. <strong>Why you'd raise it:</strong> to put
+      it back, or to check how something looks at a size you don't own.
+      Density is how large UI elements are drawn; the presets pair each
+      resolution with a density that keeps things roughly the same physical
+      size.
     </p>
     {#if currentDisplayScaling}
       <div class="current-scaling muted small mono">
@@ -659,16 +673,24 @@
         disabled={displayScaleBusy !== null}
         onclick={() => applyDisplayScaling("uhd_4k")}
       >
-        <span class="scale-title">{displayScaleBusy === "uhd_4k" ? "Applying…" : "Shield 4K"}</span>
-        <span class="muted small">3839×2160, density 640</span>
+        <span class="scale-title">{displayScaleBusy === "uhd_4k" ? "Applying…" : "4K"}</span>
+        <span class="muted small">3839×2160, density 640 — Shield rejects 3840</span>
       </button>
       <button
         class="scale-option"
         disabled={displayScaleBusy !== null}
         onclick={() => applyDisplayScaling("fhd_1080p")}
       >
-        <span class="scale-title">{displayScaleBusy === "fhd_1080p" ? "Applying…" : "Shield 1080p"}</span>
-        <span class="muted small">1920×1080, density 320</span>
+        <span class="scale-title">{displayScaleBusy === "fhd_1080p" ? "Applying…" : "1080p"}</span>
+        <span class="muted small">1920×1080, density 320 — a quarter of 4K's pixels</span>
+      </button>
+      <button
+        class="scale-option"
+        disabled={displayScaleBusy !== null}
+        onclick={() => applyDisplayScaling("hd_720p")}
+      >
+        <span class="scale-title">{displayScaleBusy === "hd_720p" ? "Applying…" : "720p"}</span>
+        <span class="muted small">1280×720, density 213 — lightest; UI gets soft</span>
       </button>
       <button
         class="scale-option"
@@ -682,45 +704,33 @@
     {#if displayScaleMessage}
       <p class="muted small mono action-message">{displayScaleMessage}</p>
     {/if}
+    <div class="callout callout-warn scale-note">
+      <Icon name="warning" size={16} />
+      <span>
+        A size or density the TV dislikes can leave the UI unreadable or the
+        launcher off-screen. Reset puts both back; if you cannot see well enough
+        to click it, rebooting the TV does not clear an override, so use Reset
+        from here or <code>wm size reset</code> from the Shell tab.
+      </span>
+    </div>
   {/if}
 </div>
 
 <style>
   /* Shared scoped utilities duplicated from the page; global rules
      (.muted, button, input) live in the layout and are inherited. */
-  .card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.2rem;
-  }
-  .card h2 {
-    margin: 0 0 0.8rem;
-    font-size: 1.1rem;
-  }
-  .card h3 {
-    margin: 1rem 0 0.4rem;
-    font-size: 1rem;
-    color: var(--fg-secondary);
-  }
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-  }
   .small {
     font-size: 0.82rem;
   }
   .mono {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
   }
   .error {
     background: var(--danger-surface);
     color: var(--danger-text);
     padding: 0.7rem 1rem;
-    border-radius: 6px;
-    font-family: ui-monospace, monospace;
+    border-radius: var(--radius-md);
+    font-family: var(--mono);
     font-size: 0.85rem;
   }
   .row-actions {
@@ -729,13 +739,49 @@
     align-items: center;
     flex-wrap: wrap;
   }
+  /* A two-choice setting reads as a segmented control: one recessed trough,
+     the chosen segment filled. Kept as two explicit buttons rather than a
+     single switch — for a system setting, saying which state you want is
+     better than flipping an unlabelled toggle. */
+  .tweak-row .row-actions {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .tweak-row .row-actions .small-action {
+    border: 1px solid transparent;
+    background: none;
+    border-radius: calc(var(--radius-md) - 3px);
+    color: var(--fg-muted);
+    min-width: 3rem;
+  }
+  .tweak-row .row-actions .small-action:hover:not(.active):not(:disabled) {
+    background: var(--bg-button-hover);
+    color: var(--fg-primary);
+  }
+  /* This must out-specify `.tweak-row .row-actions .small-action` above, which
+     is (0,3,0) and blanks the background. A bare `.small-action.active` is
+     only (0,2,0), so it lost — and every segmented control in Tweaks rendered
+     with neither side selected, making live settings look inert. */
+  .tweak-row .row-actions .small-action.active {
+    background: var(--accent-strong);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+  }
+  .tweak-row .row-actions .small-action.active:disabled {
+    opacity: 1;
+  }
   .small-action {
-    padding: 0.2rem 0.6rem;
+    padding: 0.25rem 0.7rem;
     font-size: 0.78rem;
   }
   .small-action.active {
     background: var(--accent-strong);
-    color: #fff;
+    color: var(--accent-ink);
     border-color: var(--accent);
   }
   .dns-custom {
@@ -762,15 +808,15 @@
     padding: 0.4rem 0.6rem;
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     word-break: break-word;
   }
   code {
     background: var(--bg-inset);
     border: 1px solid var(--border);
     padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    font-family: ui-monospace, monospace;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
     font-size: 0.85em;
   }
 
@@ -781,18 +827,26 @@
     gap: 0.4rem;
     margin: 0.4rem 0 0.8rem;
   }
+  /* Each control is its own object rather than a hairline-separated line in
+     a long scroll — the board's settings rows. Eleven sections on one page
+     need the grouping more than they need the density. */
   .tweak-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 1rem;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--bg-button);
+    padding: 0.7rem 0.9rem;
+    background: var(--bg-surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .tweak-row + .tweak-row {
+    margin-top: 0.4rem;
   }
   .surround-formats {
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 0.5rem 0.7rem;
     margin: 0.4rem 0 0.8rem;
     line-height: 1.5;
@@ -800,10 +854,13 @@
   .current-scaling {
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 0.5rem 0.7rem;
     margin: 0.4rem 0 0.6rem;
     line-height: 1.4;
+  }
+  .scale-note {
+    margin-top: 0.8rem;
   }
   .scale-options {
     display: grid;
@@ -820,7 +877,7 @@
     gap: 0.2rem;
     background: var(--bg-button);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     cursor: pointer;
   }
   .scale-option:hover:not(:disabled) {

@@ -4,14 +4,17 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::engine::{
-    is_last_enabled_home_handler, is_valid_package_name, launcher_catalog, launcher_rows,
-    stock_launcher_catalog, LauncherStatus,
+    is_last_enabled_home_handler, is_valid_package_name, launcher_rows, LauncherStatus,
 };
 use crate::license::Feature;
 
+use super::loader::launchers;
 use super::{home_tracking, AppState};
 
-pub(crate) const HOME_HANDLER_QUERY: &str =
+/// Public so the desktop diagnostics bundle asks the device the *same*
+/// question the launcher tab does — a bug report that used a different query
+/// would describe a state the app never saw.
+pub const HOME_HANDLER_QUERY: &str =
     "cmd package query-activities -a android.intent.action.MAIN -c android.intent.category.HOME";
 
 /// Per-step progress sink for `set_default_launcher`. The multi-strategy
@@ -71,6 +74,12 @@ pub async fn list_launchers_impl(
     if sections[2].is_empty() {
         tracing::warn!("query-activities returned nothing; listing catalog launchers only");
     }
+    // HOME handlers only. Every TV app's launch activity declares
+    // LEANBACK_LAUNCHER — that category is how an app gets a tile on the home
+    // screen, not a claim to *be* the home screen — so listing it turned
+    // YouTube, Plex and the Play Store into "Home apps". An app that doesn't
+    // declare HOME can still be tried from the Advanced picker, which says
+    // honestly when Android won't accept it.
     let handler_pkgs = parse_home_handler_packages(&sections[2]);
 
     // Disabled handlers don't answer the HOME query — the tracker is what
@@ -79,6 +88,7 @@ pub async fn list_launchers_impl(
     let tracked = home_tracking::prune(&state.data_dir, serial, &disabled_pkgs).await;
 
     Ok(launcher_rows(
+        launchers(),
         &installed_pkgs,
         &disabled_pkgs,
         &handler_pkgs,
@@ -116,14 +126,420 @@ pub async fn disable_launcher(
     let result =
         crate::commands::apps::disable_package(state, serial.clone(), package.clone()).await?;
 
-    let in_catalogs = stock_launcher_catalog()
-        .iter()
-        .chain(launcher_catalog().iter())
-        .any(|e| e.package == package);
-    if result.ok && !in_catalogs {
+    if result.ok && !launchers().contains(&package) {
         home_tracking::record(&data_dir, &serial, &package).await;
     }
     Ok(result)
+}
+
+/// What `set_home_any` observed. It never disables anything, so a refusal
+/// here always leaves the TV exactly as it was, plus the target enabled.
+#[derive(Serialize)]
+pub struct SetHomeAnyResult {
+    pub ok: bool,
+    /// Active launcher after the attempt; `None` when the device couldn't say.
+    pub current_launcher: Option<String>,
+    /// Whether the package declares a Home screen. `None` when the device
+    /// can't answer the question (`query-activities` is Android 9+) — unknown
+    /// claims nothing either way.
+    pub declares_home: Option<bool>,
+    /// The stock launcher still holds Home after the polite setters. On these
+    /// builds only disabling stock hands Home over, which is the separate,
+    /// confirmed "Disable stock launcher" step — never done here.
+    pub stock_holds_home: bool,
+    pub message: String,
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
+}
+
+/// `set_home_any` — the Advanced picker's "set this app as Home". Enables the
+/// package and tries the role API and set-home-activity, then verifies. Unlike
+/// `set_default_launcher` it has no stock-takeover path at all: picking an app
+/// must never imply disabling the stock launcher.
+#[tauri::command]
+pub async fn set_home_any(
+    state: State<'_, AppState>,
+    serial: String,
+    package: String,
+    activity: Option<String>,
+) -> Result<SetHomeAnyResult, String> {
+    state.require_pro(Feature::LauncherTakeover)?;
+    set_home_any_impl(state.inner(), &serial, &package, activity.as_deref()).await
+}
+
+/// An activity name as the picker may pass it: `.Main`, `Main` or a fully
+/// qualified class. Interpolated into a shell command, so strict.
+fn is_valid_activity_name(activity: &str) -> bool {
+    let body = activity.strip_prefix('.').unwrap_or(activity);
+    !body.is_empty()
+        && body.split('.').all(|seg| {
+            seg.chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        })
+}
+
+pub async fn set_home_any_impl(
+    state: &AppState,
+    serial: &str,
+    package: &str,
+    activity: Option<&str>,
+) -> Result<SetHomeAnyResult, String> {
+    let mut diagnostics = Vec::new();
+    let refuse = |message: String, diagnostics: Vec<String>| SetHomeAnyResult {
+        ok: false,
+        current_launcher: None,
+        declares_home: None,
+        stock_holds_home: false,
+        message,
+        diagnostics,
+    };
+    if !is_valid_package_name(package) {
+        return Ok(refuse(
+            format!("Invalid package name: {package:?}"),
+            diagnostics,
+        ));
+    }
+    let activity = activity.map(str::trim).filter(|a| !a.is_empty());
+    if let Some(a) = activity {
+        if !is_valid_activity_name(a) {
+            return Ok(refuse(format!("Invalid activity name: {a:?}"), diagnostics));
+        }
+    }
+
+    let adb = state.adb_snapshot().await;
+    let enable_result = adb.shell(serial, &format!("pm enable {package}")).await;
+    if let Some(failure) = command_failure(&enable_result) {
+        diagnostics.push(format!("pm enable {package} -> {failure}"));
+        return Ok(refuse(
+            format!("Couldn't enable {package}: {failure}"),
+            diagnostics,
+        ));
+    }
+    diagnostics.push(format!("pm enable {package} -> ok"));
+
+    // Does it declare a Home screen? Only a query that listed at least one
+    // component answers that; an empty or refused query leaves it unknown.
+    let declared = adb
+        .shell(
+            serial,
+            "cmd package query-activities --components -a android.intent.action.MAIN -c android.intent.category.HOME",
+        )
+        .await
+        .ok()
+        .filter(|out| out.success() && !out.shell_reported_failure())
+        .map(|out| {
+            out.stdout
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.contains('/'))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|components| !components.is_empty());
+    let needle = format!("{package}/");
+    let declared_component = declared
+        .as_ref()
+        .and_then(|c| c.iter().find(|l| l.starts_with(&needle)).cloned());
+    let declares_home = declared.as_ref().map(|_| declared_component.is_some());
+    diagnostics.push(format!(
+        "query-activities HOME -> {}",
+        match declares_home {
+            Some(true) => "declares Home",
+            Some(false) => "does not declare Home",
+            None => "unavailable",
+        }
+    ));
+
+    let mut candidates = Vec::new();
+    if let Some(a) = activity {
+        let class = if a.starts_with('.') || !a.contains('.') {
+            format!(".{}", a.trim_start_matches('.'))
+        } else {
+            a.to_string()
+        };
+        candidates.push(format!("{package}/{class}"));
+    }
+    if let Some(c) = declared_component {
+        if !candidates.contains(&c) {
+            candidates.push(c);
+        }
+    }
+    if activity.is_none() && declares_home != Some(true) {
+        for guess in [
+            ".MainActivity",
+            ".Main",
+            ".LauncherActivity",
+            ".HomeActivity",
+        ] {
+            candidates.push(format!("{package}/{guess}"));
+        }
+    }
+
+    let role = adb
+        .shell(
+            serial,
+            &format!("cmd role add-role-holder android.app.role.HOME {package}"),
+        )
+        .await;
+    diagnostics.push(match command_failure(&role) {
+        Some(failure) => format!("cmd role add-role-holder HOME {package} -> {failure}"),
+        None => format!("cmd role add-role-holder HOME {package} -> ok"),
+    });
+    let setters = try_home_setters(&*adb, serial, &candidates).await;
+    diagnostics.extend(setters.attempts.iter().cloned());
+
+    if verify_active(&*adb, serial, package).await {
+        focus_home(&*adb, serial, &Progress::Silent).await;
+        return Ok(SetHomeAnyResult {
+            ok: true,
+            current_launcher: Some(package.to_string()),
+            declares_home,
+            stock_holds_home: false,
+            message: format!("{package} is now the Home app."),
+            diagnostics,
+        });
+    }
+
+    let current = active_launcher(&*adb, serial).await;
+    let now = current
+        .as_deref()
+        .map(|c| format!("Home is still {c}"))
+        .unwrap_or_else(|| "Android didn't report which app holds Home".to_string());
+    let stock_holds_home =
+        declares_home != Some(false) && current.as_deref().is_some_and(|c| launchers().is_stock(c));
+    let message = if declares_home == Some(false) {
+        format!(
+            "Android didn't accept {package} as Home; it doesn't declare a Home screen. \
+             Nothing was disabled. {now}."
+        )
+    } else if stock_holds_home {
+        format!(
+            "Android took the request, but the stock launcher still holds Home. On this TV \
+             only disabling the stock launcher hands Home over; that is the separate \
+             \"Disable stock launcher\" step. Nothing was disabled. {now}."
+        )
+    } else if setters.accepted {
+        format!(
+            "Android accepted {package} as Home but hasn't switched yet. Press Home on the \
+             TV, then Refresh. {now}."
+        )
+    } else {
+        format!("Android didn't accept {package} as Home. Nothing was disabled. {now}.")
+    };
+    Ok(SetHomeAnyResult {
+        ok: false,
+        current_launcher: current,
+        declares_home,
+        stock_holds_home,
+        message,
+        diagnostics,
+    })
+}
+
+/// `disable_stock_launcher` — the explicit, confirmed step that hands Home
+/// from the stock launcher to `target`. Separate from every "set as Home"
+/// action so it is never implied by picking an app.
+///
+/// Refuses unless `target` is an enabled Home handler, so disabling stock
+/// always leaves somewhere for the Home key to land. When stock holds Home it
+/// runs the same verify-or-restore takeover `set_default_launcher` uses; when
+/// `target` already holds Home it disables the enabled stock launchers behind
+/// it and restores them if Home moves.
+#[tauri::command]
+pub async fn disable_stock_launcher(
+    state: State<'_, AppState>,
+    serial: String,
+    target: String,
+) -> Result<SetLauncherResult, String> {
+    state.require_pro(Feature::LauncherTakeover)?;
+    disable_stock_launcher_impl(state.inner(), &serial, &target, &Progress::Silent).await
+}
+
+pub async fn disable_stock_launcher_impl(
+    state: &AppState,
+    serial: &str,
+    target: &str,
+    progress: &Progress,
+) -> Result<SetLauncherResult, String> {
+    let mut diagnostics = Vec::new();
+    let refuse =
+        |current: Option<String>, error: String, diagnostics: Vec<String>| SetLauncherResult {
+            ok: false,
+            strategy: None,
+            current_launcher: current,
+            last_error: Some(error),
+            stock_takeover_available: false,
+            diagnostics,
+        };
+    if !is_valid_package_name(target) {
+        return Ok(refuse(
+            None,
+            format!("Invalid package name: {target:?}"),
+            diagnostics,
+        ));
+    }
+    if launchers().is_stock(target) {
+        return Ok(refuse(
+            None,
+            format!("{target} is a stock launcher; pick the app that should take over Home."),
+            diagnostics,
+        ));
+    }
+    // Settings declares HOME only as a recovery hatch. Handing Home to it and
+    // disabling stock would "verify" and leave the TV with no home screen.
+    if crate::engine::launcher::safe_home_handlers().contains(&target) {
+        return Ok(refuse(
+            None,
+            format!(
+                "{target} is the Settings recovery fallback, not a launcher; pick a real launcher to take over Home."
+            ),
+            diagnostics,
+        ));
+    }
+
+    let adb = state.adb_snapshot().await;
+    let handlers = match adb.shell(serial, HOME_HANDLER_QUERY).await {
+        Ok(out) if out.success() && !out.shell_reported_failure() => {
+            parse_home_handler_packages(&out.stdout)
+        }
+        _ => {
+            return Ok(refuse(
+                None,
+                "Couldn't read this TV's Home apps, so disabling the stock launcher can't be \
+                 proven safe. Nothing was disabled."
+                    .to_string(),
+                diagnostics,
+            ))
+        }
+    };
+    diagnostics.push(format!("query-activities HOME -> {}", handlers.join(", ")));
+
+    if !handlers.iter().any(|h| h == target) {
+        return Ok(refuse(
+            None,
+            format!(
+                "{target} doesn't declare a Home screen, so disabling the stock launcher would \
+                 leave the TV without one. Nothing was disabled."
+            ),
+            diagnostics,
+        ));
+    }
+    let stocks: Vec<String> = handlers
+        .iter()
+        .filter(|h| launchers().is_stock(h))
+        .filter(|h| {
+            !matches!(
+                crate::engine::classify_safety(h),
+                crate::engine::Safety::NeverDisable { .. }
+            )
+        })
+        .cloned()
+        .collect();
+    if stocks.is_empty() {
+        return Ok(refuse(
+            None,
+            "No enabled stock launcher to disable.".to_string(),
+            diagnostics,
+        ));
+    }
+    // Disabling every stock launcher in turn must never take the last Home.
+    let mut remaining = handlers.clone();
+    for stock in &stocks {
+        if is_last_enabled_home_handler(stock, &remaining) {
+            return Ok(refuse(
+                None,
+                format!(
+                    "Refusing to disable {stock}: it's the only enabled launcher left on this \
+                     device. Nothing was disabled."
+                ),
+                diagnostics,
+            ));
+        }
+        remaining.retain(|h| h != stock);
+    }
+
+    let active = active_launcher(&*adb, serial).await;
+    diagnostics.push(match active.as_deref() {
+        Some(a) => format!("resolve-activity HOME -> {a}"),
+        None => "resolve-activity HOME -> unavailable".to_string(),
+    });
+    match active.as_deref() {
+        Some(a) if stocks.iter().any(|s| s == a) => {
+            if let Some(result) =
+                stock_takeover(&*adb, serial, target, a, true, progress, &mut diagnostics).await
+            {
+                return Ok(result);
+            }
+            Ok(refuse(
+                active.clone(),
+                format!("{a} can't be disabled safely. Nothing was disabled."),
+                diagnostics,
+            ))
+        }
+        Some(a) if a == target => {
+            let mut disabled = Vec::new();
+            let mut failure = None;
+            for stock in &stocks {
+                progress.step(&format!("Disabling the stock launcher ({stock})"));
+                let result = adb
+                    .shell(serial, &format!("pm disable-user --user 0 {stock}"))
+                    .await;
+                match command_failure(&result) {
+                    Some(f) => {
+                        diagnostics.push(format!("pm disable-user {stock} -> {f}"));
+                        // An errored disable may still have landed; restore it too.
+                        disabled.push(stock.clone());
+                        failure = Some(format!("Stock-disable command failed for {stock}: {f}"));
+                        break;
+                    }
+                    None => {
+                        diagnostics.push(format!("pm disable-user {stock} -> ok"));
+                        disabled.push(stock.clone());
+                    }
+                }
+            }
+            if failure.is_none() && verify_active(&*adb, serial, target).await {
+                return Ok(SetLauncherResult {
+                    ok: true,
+                    strategy: Some("disable_stock_takeover".into()),
+                    current_launcher: Some(target.to_string()),
+                    last_error: None,
+                    stock_takeover_available: false,
+                    diagnostics,
+                });
+            }
+            for stock in &disabled {
+                let restore = adb.shell(serial, &format!("pm enable {stock}")).await;
+                diagnostics.push(match command_failure(&restore) {
+                    Some(f) => format!("pm enable {stock} (restore) -> {f}"),
+                    None => format!("pm enable {stock} (restore) -> ok"),
+                });
+            }
+            let current = active_launcher(&*adb, serial).await;
+            Ok(refuse(
+                current,
+                format!(
+                    "{}. The stock launcher was re-enabled.",
+                    failure.unwrap_or_else(|| format!(
+                        "Home moved away from {target} after the stock launcher was disabled"
+                    ))
+                ),
+                diagnostics,
+            ))
+        }
+        other => Ok(refuse(
+            active.clone(),
+            format!(
+                "Set {target} as Home first; Home is currently {}. Nothing was disabled.",
+                other.unwrap_or("unknown")
+            ),
+            diagnostics,
+        )),
+    }
 }
 
 #[derive(Serialize)]
@@ -286,7 +702,7 @@ pub async fn set_default_launcher_impl(
         None => "resolve-activity HOME -> unavailable".to_string(),
     });
     if let Some(active) = active_before.clone() {
-        let active_is_stock = stock_launcher_catalog().iter().any(|e| e.package == active);
+        let active_is_stock = launchers().is_stock(&active);
         if active_is_stock && active != package {
             progress.step("Assigning the Home role to it");
             let role_result = adb
@@ -490,7 +906,7 @@ async fn stock_takeover(
     progress: &Progress,
     diagnostics: &mut Vec<String>,
 ) -> Option<SetLauncherResult> {
-    let active_is_stock = stock_launcher_catalog().iter().any(|e| e.package == active);
+    let active_is_stock = launchers().is_stock(active);
     let blocked = matches!(
         crate::engine::classify_safety(active),
         crate::engine::Safety::NeverDisable { .. }
@@ -645,7 +1061,11 @@ async fn verify_active(adb: &dyn crate::adb::AdbDriver, serial: &str, package: &
     false
 }
 
-async fn active_launcher(adb: &dyn crate::adb::AdbDriver, serial: &str) -> Option<String> {
+/// The package HOME resolves to now, or `None` when the device couldn't say.
+pub(crate) async fn active_launcher(
+    adb: &dyn crate::adb::AdbDriver,
+    serial: &str,
+) -> Option<String> {
     let out = adb
         .shell(
             serial,
@@ -774,7 +1194,13 @@ async fn discover_home_activity(
 /// Each Activity block exposes one packageName line. Strict regex (real
 /// package names start with a letter and only contain `[a-zA-Z0-9_.]`)
 /// avoids matching anything that happens to contain the string.
-pub(crate) fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
+///
+/// Public so desktop's diagnostics bundle (`commands::diagnostics` in the
+/// `shield-optimizer-v2` crate) reuses this parser instead of assuming
+/// `HOME_HANDLER_QUERY`'s `name=` field is a flattened `pkg/activity`
+/// component — it isn't; `name=` is the bare class and `packageName=` is the
+/// separate field this parses.
+pub fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"^\s*packageName=([a-zA-Z][a-zA-Z0-9_.]+)\s*$").unwrap()
     });
@@ -1142,15 +1568,16 @@ mod tests {
 
     #[tokio::test]
     async fn list_launchers_reads_every_section_from_one_batched_call() {
-        // installed / disabled / HOME handlers in one round-trip. A rule per
-        // sub-command would match the whole compound command, so the mock
-        // answers the sentinel with the concatenated sections.
+        // installed / disabled / HOME handlers in one round-trip. A rule per sub-command would match the whole compound
+        // command, so the mock answers the sentinel with the concatenated
+        // sections.
         let mock = MockAdb::default().on_shell(
             BATCH_SEPARATOR,
             &batched(&[
                 "package:com.google.android.tvlauncher\n\
                  package:com.spocky.projengmenu\n\
-                 package:com.example.otherhome",
+                 package:com.example.otherhome\n\
+                 package:com.example.leanbackonly",
                 "package:com.spocky.projengmenu",
                 "    packageName=com.example.otherhome",
             ]),
@@ -1187,7 +1614,44 @@ mod tests {
         assert_eq!(
             calls.len(),
             1,
-            "installed + disabled + HOME query must cost one round-trip: {calls:?}"
+            "installed + disabled + the HOME query must cost one round-trip: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_leanback_only_app_is_not_listed_as_a_home_app() {
+        // Every TV app (YouTube, Plex, the Play Store) declares
+        // LEANBACK_LAUNCHER so it gets a tile on the home screen. Treating that
+        // as a Home handler flooded the Launcher tab with "HOME APP" rows for
+        // ordinary apps. It is installed and enabled, but it must not get a row,
+        // and the leanback category must not be queried at all.
+        let mock = MockAdb::default().on_shell(
+            BATCH_SEPARATOR,
+            &batched(&[
+                "package:com.google.android.tvlauncher\n\
+                 package:com.plexapp.android",
+                "",
+                "    packageName=com.google.android.tvlauncher",
+            ]),
+        );
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let rows = list_launchers_impl(&state, "leanback-only-serial")
+            .await
+            .unwrap_or_else(|e| panic!("launcher rows: {e}"));
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.entry.package == "com.plexapp.android"),
+            "a leanback-only app must not be listed as a Home app: {:?}",
+            rows.iter().map(|r| &r.entry.package).collect::<Vec<_>>()
+        );
+        assert!(!rows.iter().any(|r| r.other));
+        let calls = log.lock().unwrap();
+        assert!(
+            !calls.iter().any(|c| c.contains("LEANBACK_LAUNCHER")),
+            "the leanback entry point is not a Home screen and must not be queried as one: {calls:?}"
         );
     }
 
@@ -1211,7 +1675,9 @@ mod tests {
     #[tokio::test]
     async fn list_launchers_rejects_failed_disabled_reads_before_pruning_tracking() {
         let status = crate::adb::batch::BATCH_STATUS;
-        let output = format!("package:com.example\n{status}0\n{BATCH_SEPARATOR}\n{status}1\n{BATCH_SEPARATOR}\n{status}0\n");
+        let output = format!(
+            "package:com.example\n{status}0\n{BATCH_SEPARATOR}\n{status}1\n{BATCH_SEPARATOR}\n{status}0\n"
+        );
         let state = state_with(MockAdb::default().on_shell(BATCH_SEPARATOR, &output));
         assert!(list_launchers_impl(&state, "serial").await.is_err());
     }
@@ -1639,5 +2105,248 @@ mod tests {
             parse_home_handler_packages(input),
             vec!["com.example.foo".to_string()]
         );
+    }
+
+    const COMPONENTS_QUERY: &str = "query-activities --components";
+    const HANDLERS_QUERY: &str = "query-activities -a";
+
+    #[tokio::test]
+    async fn set_home_any_refuses_honestly_for_an_app_without_a_home_screen() {
+        // YouTube declares only LEANBACK_LAUNCHER. The device lists the stock
+        // launcher as its only HOME component, so the answer is "doesn't
+        // declare a Home screen" — and nothing may be disabled on the way.
+        let mock = MockAdb::default()
+            .on_shell(
+                COMPONENTS_QUERY,
+                "com.google.android.tvlauncher/.MainActivity",
+            )
+            .on_shell("add-role-holder", "Error: not a home app")
+            .on_shell("set-home-activity", "Error: component not found")
+            .on_shell("resolve-activity", "com.google.android.tvlauncher/.Home");
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let res = set_home_any_impl(&state, "serial", "com.google.android.youtube.tv", None)
+            .await
+            .unwrap();
+        assert!(!res.ok);
+        assert_eq!(res.declares_home, Some(false));
+        assert!(!res.stock_holds_home);
+        assert!(
+            res.message.contains("doesn't declare a Home screen"),
+            "{}",
+            res.message
+        );
+        let calls = log.lock().unwrap();
+        assert!(
+            !calls.iter().any(|c| c.contains("disable")),
+            "picking an app must never disable anything: {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_home_any_reports_stock_holding_home_without_taking_it_over() {
+        let mock = MockAdb::default()
+            .on_shell(
+                COMPONENTS_QUERY,
+                "com.google.android.tvlauncher/.MainActivity\ncom.spocky.projengmenu/.ui.home.HomeActivity",
+            )
+            .on_shell("add-role-holder", "Success")
+            .on_shell("set-home-activity", "Success")
+            .on_shell("resolve-activity", "com.google.android.tvlauncher/.Home");
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let res = set_home_any_impl(&state, "serial", "com.spocky.projengmenu", None)
+            .await
+            .unwrap();
+        assert!(!res.ok);
+        assert_eq!(res.declares_home, Some(true));
+        assert!(res.stock_holds_home);
+        assert!(
+            res.message.contains("Disable stock launcher"),
+            "{}",
+            res.message
+        );
+        let calls = log.lock().unwrap();
+        assert!(calls
+            .iter()
+            .any(|c| c.ends_with("com.spocky.projengmenu/.ui.home.HomeActivity")));
+        assert!(!calls.iter().any(|c| c.contains("disable")), "{calls:?}");
+    }
+
+    #[tokio::test]
+    async fn set_home_any_succeeds_when_home_verifies_and_tries_the_given_activity_first() {
+        let mock = MockAdb::default()
+            .on_shell(COMPONENTS_QUERY, "")
+            .on_shell("add-role-holder", "Unknown command: role")
+            .on_shell("set-home-activity", "Success")
+            .on_shell("resolve-activity", "com.example.home/.Custom");
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let res = set_home_any_impl(&state, "serial", "com.example.home", Some(".Custom"))
+            .await
+            .unwrap();
+        assert!(res.ok, "{}", res.message);
+        // An empty query answers nothing: unknown, not "doesn't declare".
+        assert_eq!(res.declares_home, None);
+        let calls = log.lock().unwrap();
+        let first_setter = calls
+            .iter()
+            .find(|c| c.contains("set-home-activity"))
+            .expect("a setter ran");
+        assert!(
+            first_setter.ends_with("com.example.home/.Custom"),
+            "{first_setter}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_home_any_rejects_injected_activity_names() {
+        let mock = MockAdb::default();
+        let log = mock.shell_log();
+        let state = state_with(mock);
+        for bad in [".Main; reboot", "a b", ".", "com..x", ".1Main"] {
+            let res = set_home_any_impl(&state, "serial", "com.example.home", Some(bad))
+                .await
+                .unwrap();
+            assert!(!res.ok, "{bad:?} accepted");
+        }
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn disable_stock_refuses_when_the_target_has_no_home_screen() {
+        // The TV must never be left with no Home screen: a target that isn't
+        // an enabled HOME handler would leave stock as the only one.
+        let mock = MockAdb::default()
+            .on_shell(
+                HANDLERS_QUERY,
+                "    packageName=com.google.android.tvlauncher",
+            )
+            .on_shell("resolve-activity", "com.google.android.tvlauncher/.Home");
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let res = disable_stock_launcher_impl(
+            &state,
+            "serial",
+            "com.google.android.youtube.tv",
+            &Progress::Silent,
+        )
+        .await
+        .unwrap();
+        assert!(!res.ok);
+        assert!(
+            res.last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("doesn't declare a Home screen")),
+            "{:?}",
+            res.last_error
+        );
+        let calls = log.lock().unwrap();
+        assert!(
+            !calls.iter().any(|c| c.contains("disable-user")),
+            "{calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn disable_stock_refuses_a_settings_recovery_handler() {
+        for target in crate::engine::launcher::safe_home_handlers() {
+            let state = state_with(MockAdb::default());
+            let res = disable_stock_launcher_impl(&state, "serial", target, &Progress::Silent)
+                .await
+                .unwrap();
+            assert!(!res.ok, "{target} must never take over Home");
+        }
+    }
+
+    #[tokio::test]
+    async fn disable_stock_refuses_a_stock_target() {
+        let state = state_with(MockAdb::default());
+        let res = disable_stock_launcher_impl(
+            &state,
+            "serial",
+            "com.google.android.tvlauncher",
+            &Progress::Silent,
+        )
+        .await
+        .unwrap();
+        assert!(!res.ok);
+    }
+
+    #[tokio::test]
+    async fn disable_stock_hands_home_over_when_stock_holds_it() {
+        let mock = MockAdb::default()
+            .on_shell(
+                HANDLERS_QUERY,
+                "    packageName=com.google.android.tvlauncher\n    packageName=com.spocky.projengmenu",
+            )
+            .on_shell_seq(
+                "resolve-activity",
+                &[
+                    "com.google.android.tvlauncher/.Home",
+                    "com.spocky.projengmenu/.Home",
+                ],
+            );
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let res = disable_stock_launcher_impl(
+            &state,
+            "serial",
+            "com.spocky.projengmenu",
+            &Progress::Silent,
+        )
+        .await
+        .unwrap();
+        assert!(res.ok, "{:?}", res.last_error);
+        let calls = log.lock().unwrap();
+        assert!(calls
+            .iter()
+            .any(|c| c == "pm disable-user --user 0 com.google.android.tvlauncher"));
+        assert!(
+            !calls.iter().any(|c| c.starts_with("pm enable")),
+            "{calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn disable_stock_behind_the_active_target_restores_if_home_moves() {
+        // Target already holds Home; stock is disabled behind it. If Home then
+        // stops resolving to the target, stock comes back.
+        let mock = MockAdb::default()
+            .on_shell(
+                HANDLERS_QUERY,
+                "    packageName=com.google.android.tvlauncher\n    packageName=com.spocky.projengmenu",
+            )
+            .on_shell_seq(
+                "resolve-activity",
+                &[
+                    "com.spocky.projengmenu/.Home",
+                    "com.android.tv.settings/.FallbackHome",
+                ],
+            );
+        let log = mock.shell_log();
+        let state = state_with(mock);
+
+        let res = disable_stock_launcher_impl(
+            &state,
+            "serial",
+            "com.spocky.projengmenu",
+            &Progress::Silent,
+        )
+        .await
+        .unwrap();
+        assert!(!res.ok);
+        let calls = log.lock().unwrap();
+        assert!(calls
+            .iter()
+            .any(|c| c == "pm disable-user --user 0 com.google.android.tvlauncher"));
+        assert!(calls
+            .iter()
+            .any(|c| c == "pm enable com.google.android.tvlauncher"));
     }
 }

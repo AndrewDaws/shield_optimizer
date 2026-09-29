@@ -1,14 +1,31 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { api } from "$lib/api";
   import type { DeviceType, OptimizeMode, OptimizePlan, OptimizePlanItem, AppUsage, Safety } from "$lib/types";
   import AppRow from "$lib/components/AppRow.svelte";
   import { isStaleUsage, usageLabel } from "$lib/usage";
+  import {
+    CHECKING_LABEL,
+    UNAVAILABLE_LABEL,
+    isBlocked,
+    verdictLabel,
+    type SafetyStatus,
+  } from "$lib/safety";
+  import {
+    canOfferUninstall,
+    isReinstallable,
+    recommendation,
+    reviewLabel,
+    effectiveMethod,
+    uninstallNote,
+  } from "$lib/recommendation";
 
   let {
     serial,
     deviceType,
     appUsage,
+    keptPackages,
     resetToken,
     pageEpoch,
     onStatesChanged,
@@ -17,6 +34,9 @@
     serial: string;
     deviceType: DeviceType;
     appUsage: Record<string, AppUsage>;
+    /// Packages the user marked "keep" in the App List. The wizard must not
+    /// recommend removing something they already said they use.
+    keptPackages: Set<string>;
     resetToken: number;
     pageEpoch: number;
     onStatesChanged: () => void;
@@ -40,10 +60,6 @@
   let optimizeAbort = $state(false);
   let optimizeSummary = $state<string>("");
   let optimizePerfApplied = $state<boolean>(false);
-  type SafetyStatus =
-    | { status: "checking" }
-    | { status: "ready"; verdict: Safety }
-    | { status: "unavailable"; reason: string };
   type RunItem = {
     package: string;
     name: string;
@@ -57,12 +73,6 @@
   /// nothing and the reason was unreachable anywhere in the tab.
   let expandedSafety = $state<string | null>(null);
 
-  function safetyKindLabel(kind: Safety["kind"]): string {
-    if (kind === "never_disable") return "Protected";
-    if (kind === "caution") return "Caution";
-    if (kind === "safe") return "Safe";
-    return "Unknown";
-  }
   let componentEpoch = 0;
   let loadRequest = 0;
   let runRequest = 0;
@@ -139,11 +149,14 @@
       const plan = await api.prepareOptimize(context.serial, context.deviceType, mode);
       if (!contextIsCurrent(context) || request !== loadRequest) return;
       optimizePlan = plan;
+      // Every package the device actually has, not just the ones the plan
+      // proposes to remove. Filtering to disable/uninstall rows meant a
+      // catalog package that is ALREADY disabled — com.android.providers.tv,
+      // which is on the Caution list — was never queried, and the absent entry
+      // was then coerced to "unavailable" at the row. The most cautionary rows
+      // in the plan were the ones reading "SAFETY UNAVAILABLE".
       const packages = plan.items
-        .filter((item) => {
-          const action = naturalAction(item);
-          return action === "disable" || action === "uninstall";
-        })
+        .filter((item) => rowState(item) !== "missing")
         .map((item) => item.entry.package);
       safetyByPackage = Object.fromEntries(packages.map((pkg) => [pkg, { status: "checking" }]));
       const results = await Promise.allSettled(packages.map((pkg) => api.safetyInfo(pkg)));
@@ -174,7 +187,11 @@
   /// backend marked skip (not installed / already in target state) — those
   /// aren't actionable and get no dropdown.
   function naturalAction(item: OptimizePlanItem): RowAction | null {
-    return item.action.kind === "skip" ? null : item.action.kind;
+    if (item.action.kind === "skip") return null;
+    // The engine already applies `safe_method`; this repeats it so a plan
+    // from any source can never make an unrecoverable uninstall the default.
+    if (item.action.kind === "uninstall" && !isReinstallable(item.entry)) return "disable";
+    return item.action.kind;
   }
 
   /// What the dropdown defaults to. This mirrors v1's per-app defaults: only
@@ -186,13 +203,15 @@
     const natural = naturalAction(item);
     if (natural === null) return null;
     if (natural === "disable" || natural === "uninstall") {
-      const safety = safetyByPackage[item.entry.package];
-      if (safety?.status !== "ready" || safety.verdict.kind === "never_disable") return "skip";
-      if (safety.verdict.kind === "unknown") return "skip";
+      // A keep decision outranks the catalog's recommendation: the user has
+      // already answered the question the wizard is about to ask.
+      if (keptPackages.has(item.entry.package)) return "skip";
+      // The same suggestion the App List and Health show, so the three
+      // screens cannot disagree about what we recommend for one app.
+      const rec = recommendation(item.entry, rowState(item), safetyByPackage[item.entry.package]);
+      return rec.kind === "act" ? rec.action : "skip";
     }
-    const isDefault =
-      optimizeMode === "optimize" ? item.entry.default_optimize : item.entry.default_restore;
-    return isDefault ? natural : "skip";
+    return item.entry.default_restore ? natural : "skip";
   }
 
   /// The action that will actually run: the user's dropdown pick if they made
@@ -201,7 +220,7 @@
     const action = optimizeOverrides[item.entry.package] ?? defaultAction(item) ?? "skip";
     if (action === "disable" || action === "uninstall") {
       const safety = safetyByPackage[item.entry.package];
-      if (safety?.status !== "ready" || safety.verdict.kind === "never_disable") return "skip";
+      if (safety?.status !== "ready" || isBlocked(safety.verdict)) return "skip";
     }
     return action;
   }
@@ -209,12 +228,35 @@
   /// Dropdown choices for a row, in mode-appropriate order. Restore only ever
   /// produces enable rows, so its menu is Enable / Skip; optimize rows can be
   /// downgraded (uninstall→disable) or upgraded (disable→uninstall).
+  /// Keep first, then the actions that change the device — reading left to
+  /// right is then "do nothing, do a little, do the irreversible one".
   function actionOptions(item: OptimizePlanItem): RowAction[] {
-    if (naturalAction(item) === "enable") return ["enable", "skip"];
+    if (naturalAction(item) === "enable") return ["skip", "enable"];
     const safety = safetyByPackage[item.entry.package];
-    return safety?.status === "ready" && safety.verdict.kind !== "never_disable"
-      ? ["disable", "uninstall", "skip"]
-      : ["skip"];
+    if (safety?.status !== "ready" || isBlocked(safety.verdict)) return ["skip"];
+    // No Uninstall on an app the store can't give back, unless it is a
+    // sideload whose source the confirm prompt can name.
+    return canOfferUninstall(item.entry) ? ["skip", "disable", "uninstall"] : ["skip", "disable"];
+  }
+
+  /// Set every row we can vouch for to the action the plan chose for it, and
+  /// leave the rest alone. Only rows rated Safe to remove — Caution, Unknown,
+  /// Protected and unresolved rows stay as they are, because "all safe" has
+  /// to mean safe, or the phrase is a trap.
+  function selectAllSafe() {
+    if (!optimizePlan || optimizeRunning) return;
+    for (const item of optimizePlan.items) {
+      const natural = naturalAction(item);
+      if (!natural) continue;
+      const safety = safetyByPackage[item.entry.package];
+      if (safety?.status !== "ready" || safety.verdict.kind !== "safe") continue;
+      setOptimizeAction(item.entry.package, natural);
+    }
+  }
+
+  function keepAll() {
+    if (!optimizePlan || optimizeRunning) return;
+    for (const item of optimizePlan.items) setOptimizeAction(item.entry.package, "skip");
   }
 
   function removalReviewIsAvailable(item: OptimizePlanItem): boolean {
@@ -222,19 +264,43 @@
     const safety = safetyByPackage[item.entry.package];
     return (action === "disable" || action === "uninstall")
       && safety?.status === "ready"
-      && safety.verdict.kind !== "never_disable";
+      && !isBlocked(safety.verdict);
   }
 
-  function actionLabel(item: OptimizePlanItem, action: RowAction): string {
-    const base = { disable: "Disable", uninstall: "Uninstall", enable: "Enable", skip: "Skip" }[action];
-    // Review rows have no machine recommendation — "Skip (recommended)" would
-    // read as "keep this", which is exactly backwards. The dropdown carries
-    // the decision rule instead.
-    if (item.entry.review && naturalAction(item) !== "enable") {
-      if (action === "skip") return "Skip";
-      return base;
-    }
-    return action === defaultAction(item) ? `${base} (recommended)` : base;
+  function actionLabel(_item: OptimizePlanItem, action: RowAction): string {
+    return { disable: "Disable", uninstall: "Uninstall", enable: "Enable", skip: "Keep" }[action];
+  }
+
+  /// Which option we recommend, shown as a small "Recommended" pill beside
+  /// that option's label. A review row gets none: it carries its own amber
+  /// "Review: … if unused" pill instead, because "if you don't use it" is the
+  /// whole of the advice and "Recommended" would overstate it.
+  function isRecommended(item: OptimizePlanItem, action: RowAction): boolean {
+    if (isReviewRow(item)) return false;
+    return action === defaultAction(item);
+  }
+
+  function isReviewRow(item: OptimizePlanItem): boolean {
+    return !!item.entry.review && removalReviewIsAvailable(item);
+  }
+
+  /// Why a row offers no choice. A lone disabled "Keep" pill is a control
+  /// that refuses to say what is wrong with it; the sentence is the point.
+  function singleOptionReason(item: OptimizePlanItem): string {
+    const safety = safetyByPackage[item.entry.package];
+    if (!safety || safety.status === "unavailable") return UNAVAILABLE_LABEL;
+    if (safety.status === "checking") return CHECKING_LABEL;
+    if (isBlocked(safety.verdict)) return "Protected — never removed";
+    return "No action available";
+  }
+
+  /// A failure message is arbitrary text from the device. `data-tip` is a
+  /// single nowrap line, so it carries the opening clause and `title` keeps
+  /// the whole thing.
+  function shortTip(text: string | undefined): string | undefined {
+    const trimmed = text?.trim();
+    if (!trimmed) return undefined;
+    return trimmed.length <= 56 ? trimmed : `${trimmed.slice(0, 55)}…`;
   }
 
   function setOptimizeAction(pkg: string, action: RowAction) {
@@ -278,7 +344,11 @@
     const label = mode === "optimize" ? "Optimize" : "Restore";
     const removalDetails = selected
       .filter((item) => item.verdict)
-      .map((item) => `${item.action.toUpperCase()} ${item.name} (${item.package})\nSafety: ${safetyKindLabel(item.verdict!.kind)}\nReason: ${item.verdict!.reason}`)
+      .map((item) => {
+        const entry = plan.items.find((i) => i.entry.package === item.package)?.entry ?? null;
+        const note = item.action === "uninstall" ? uninstallNote(item.package, entry) : null;
+        return `${item.action.toUpperCase()} ${item.name} (${item.package})\nSafety: ${verdictLabel(item.verdict!)}\nReason: ${item.verdict!.reason}${note ? `\n${note}` : ""}`;
+      })
       .join("\n\n");
     const confirmation = removalDetails
       ? `Run ${label} on ${selected.length} package(s)?\n\n${removalDetails}`
@@ -310,11 +380,11 @@
           if (!contextIsCurrent(context) || request !== runRequest) return;
           if (optimizeAbort) break;
           if (!item.verdict
-            || currentSafety.kind === "never_disable"
+            || isBlocked(currentSafety)
             || currentSafety.kind !== item.verdict.kind
             || currentSafety.reason !== item.verdict.reason) {
             optimizeProgress[pkg] = "failed";
-            optimizeFailureMessages[pkg] = currentSafety.kind === "never_disable"
+            optimizeFailureMessages[pkg] = isBlocked(currentSafety)
               ? `Protected: ${currentSafety.reason}`
               : "Safety changed after confirmation. Reload and review the plan.";
             failed++;
@@ -412,6 +482,30 @@
       : [],
   );
 
+  /// What the plan is made of, in the safety vocabulary — the first thing the
+  /// guided header says, because "N safe, M caution, K protected" is the shape
+  /// of the decision you are about to make. Counted over the rows that are
+  /// actually on the device; a package the TV does not have is not a risk.
+  let planVerdicts = $derived.by(() => {
+    const tally = { safe: 0, caution: 0, protected: 0, unknown: 0, pending: 0 };
+    for (const item of optimizePlan?.items ?? []) {
+      if (rowState(item) === "missing") continue;
+      const safety = safetyByPackage[item.entry.package];
+      if (safety?.status !== "ready") {
+        tally.pending++;
+      } else if (safety.verdict.kind === "never_disable") {
+        tally.protected++;
+      } else if (safety.verdict.kind === "caution") {
+        tally.caution++;
+      } else if (safety.verdict.kind === "safe") {
+        tally.safe++;
+      } else {
+        tally.unknown++;
+      }
+    }
+    return tally;
+  });
+
   function skipReasonLabel(item: OptimizePlanItem): string | null {
     if (item.action.kind !== "skip") return null;
     switch (item.action.reason) {
@@ -425,24 +519,46 @@
 
 <div class="card" role="tabpanel" tabindex={0} id="tabpanel-optimize" aria-labelledby="tab-optimize">
   <div class="card-header">
-    <h2>Optimize / Restore Wizard</h2>
+    <h2><Icon name="auto_fix_high" size={20} /> Optimize / Restore Wizard</h2>
     <div class="header-actions">
-      <button
-        class:primary={optimizeMode === "optimize"}
-        onclick={() => loadOptimizePlan("optimize")}
-        disabled={optimizePlanLoading || optimizeRunning}
-      >Optimize</button>
-      <button
-        class:primary={optimizeMode === "restore"}
-        onclick={() => loadOptimizePlan("restore")}
-        disabled={optimizePlanLoading || optimizeRunning}
-      >Restore</button>
+      <!-- A mode switch, not an action pair. It was two buttons with the lime
+           fill marking the current mode, but lime means "press this" — using
+           it for state makes the app's one action colour ambiguous. A
+           segmented control shows which mode you are in without borrowing
+           the action colour, and matches the two-choice settings in Tweaks. -->
+      <span class="mode-label" id="plan-mode-label">Mode</span>
+      <div class="mode-box" role="group" aria-labelledby="plan-mode-label">
+        <button
+          class="mode-btn"
+          class:active={optimizeMode === "optimize"}
+          aria-pressed={optimizeMode === "optimize"}
+          onclick={() => loadOptimizePlan("optimize")}
+          disabled={optimizePlanLoading || optimizeRunning}
+        >Optimize</button>
+        <button
+          class="mode-btn"
+          class:active={optimizeMode === "restore"}
+          aria-pressed={optimizeMode === "restore"}
+          onclick={() => loadOptimizePlan("restore")}
+          disabled={optimizePlanLoading || optimizeRunning}
+        >Restore</button>
+      </div>
     </div>
   </div>
+  {#if optimizePlan}
+    {@const actionableNow = optimizePlan.items.filter((i) => naturalAction(i) !== null).length}
+    {@const ramNow = optimizePlan.items
+      .filter((i) => naturalAction(i) !== null)
+      .reduce((acc, i) => acc + (i.memory_mb ?? 0), 0)}
+    <p class="muted small mono header-sub">
+      {actionableNow} app{actionableNow === 1 ? "" : "s"} actionable
+      {#if ramNow > 0} · ≈{ramNow.toFixed(0)} MB of RAM in play{/if}
+    </p>
+  {/if}
   <p class="muted small">
     {optimizeMode === "optimize"
-      ? "Check each app's safety before choosing Disable or Uninstall. Anything we can't vouch for is set to Skip until you say otherwise."
-      : "Re-enable everything that's currently disabled per the device's app catalog. Set any row to Skip to leave it, then Run. Restore is reversible by running Optimize again."}
+      ? "Check each app's safety before choosing Disable or Uninstall. Anything we can't vouch for is set to Keep until you say otherwise."
+      : "Re-enable everything that's currently disabled per the device's app catalog. Set any row to Keep to leave it, then Run plan. Restore is reversible by running Optimize again."}
   </p>
 
   {#if optimizePlanErr}
@@ -458,12 +574,43 @@
     {@const totalRunning = optimizePlan.items
       .filter((i) => naturalAction(i) !== null)
       .reduce((acc, i) => acc + (i.memory_mb ?? 0), 0)}
-    <div class="plan-summary">
-      <strong>{actionable}</strong> of {optimizePlan.items.length} items will be acted on.
-      {#if totalRunning > 0}
-        <span class="muted">≈ {totalRunning.toFixed(0)} MB of RAM in play.</span>
-      {/if}
-    </div>
+    <!-- Two steps, numbered. The wizard had a Run button at the foot and a
+         table in between, and nothing on screen said the table came first —
+         so "Plan · 3 of 16 selected" was the only cue that there was anything
+         to do before pressing the green button. -->
+    <ol class="plan-steps">
+      <li class="plan-step">
+        <span class="step-num mono" aria-hidden="true">1</span>
+        <div class="step-body">
+          <p class="step-text">
+            Review the plan below — {planVerdicts.safe} safe to remove, {planVerdicts.caution} caution,
+            {planVerdicts.protected} protected{#if planVerdicts.unknown > 0}, {planVerdicts.unknown} unknown{/if}
+          </p>
+          <div class="plan-bulk">
+            <button
+              class="small-action"
+              data-tip="Arm every row rated Safe to remove"
+              onclick={selectAllSafe}
+              disabled={optimizeRunning}
+            >Select all safe</button>
+            <button
+              class="small-action subtle"
+              data-tip="Set every row back to Keep"
+              onclick={keepAll}
+              disabled={optimizeRunning}
+            >Keep all</button>
+          </div>
+        </div>
+      </li>
+      <li class="plan-step">
+        <span class="step-num mono" aria-hidden="true">2</span>
+        <div class="step-body">
+          <p class="step-text">
+            Run — the button is under the table. {actionable} of {optimizePlan.items.length} rows are armed.
+          </p>
+        </div>
+      </li>
+    </ol>
     {#if optimizeMode === "optimize"}
       {@const reviewItems = optimizePlan.items.filter((i) => i.entry.review && rowState(i) === "enabled")}
       {@const removalReviewItems = reviewItems.filter(removalReviewIsAvailable)}
@@ -492,30 +639,36 @@
         </div>
       {/if}
     {/if}
-    <div class="apply-row">
-      <button
-        class="primary"
-        onclick={executeOptimize}
-        disabled={optimizeRunning || actionable === 0}
-      >
-        {optimizeRunning ? `Running… (${optimizeCurrent ?? ""})` : `Run ${optimizeMode === "optimize" ? "Optimize" : "Restore"}`}
-      </button>
-      {#if optimizeRunning}
-        <button onclick={cancelOptimize}>Abort</button>
-      {/if}
-      {#if optimizeSummary && !optimizeRunning}
-        <button
-          onclick={applyPerformanceSettings}
-          disabled={optimizePerfApplied}
-          title={optimizeMode === "optimize" ? "Set animation scales to 0.5×" : "Reset animation scales to 1×"}
-        >
-          {optimizePerfApplied ? "Performance applied" : (optimizeMode === "optimize" ? "Apply 0.5× animations" : "Reset animations to 1×")}
-        </button>
-      {/if}
-    </div>
-    {#if optimizeSummary}
-      <p class="muted small mono action-message">{optimizeSummary}</p>
+    {#if optimizeRunning}
+      {@const done = Object.values(optimizeProgress).filter((v) => v !== "pending").length}
+      <!-- The board's running panel. The package id used to live inside the
+           button's label, which reflowed the button on every step and put the
+           Abort control somewhere new each time. -->
+      <div class="run-card" role="status" aria-live="polite">
+        <div class="run-count"><strong>{done}</strong> of {actionable} applied</div>
+        <div class="run-bar"><span style={`width:${actionable ? (done / actionable) * 100 : 0}%`}></span></div>
+        {#if optimizeCurrent}
+          <p class="run-current">
+            <span class="muted small">Current package</span>
+            <span class="mono">{optimizeCurrent}</span>
+          </p>
+        {/if}
+        <button class="run-cancel" onclick={cancelOptimize}>Cancel remaining</button>
+      </div>
     {/if}
+
+    <!-- The board promises "a snapshot is written before the first change".
+         This app writes none, so the callout says what is actually true and
+         points at the tab that does it. -->
+    <div class="callout callout-warn optimize-note">
+      <Icon name="warning" size={16} />
+      <span>
+        No snapshot is written automatically, and a snapshot is not a full undo:
+        restoring one re-disables its apps and puts back its Home app and
+        settings, but never re-enables or reinstalls an app. Restore mode
+        re-enables only what the catalog knows about.
+      </span>
+    </div>
 
     <div class="app-toolbar">
       <label class="inline-check">
@@ -527,9 +680,11 @@
     <table class="optimize-table">
       <thead>
         <tr>
+          <th><span class="sr-only">Details</span></th>
           <th>App</th>
-          <th class="center">State</th>
-          <th class="center">Safety</th>
+          <th>Verdict &amp; source</th>
+          <th class="right">RAM</th>
+          <th class="right">Last used</th>
           <th>Action</th>
           <th>Result</th>
         </tr>
@@ -550,42 +705,68 @@
             showUsage={naturalAction(item) !== null}
             safety={readySafety(item.entry.package)}
             safetyStatus={safetyByPackage[item.entry.package]?.status ?? "unavailable"}
+            safetyUnavailableReason={(() => {
+              const st = safetyByPackage[item.entry.package];
+              return st?.status === "unavailable" ? st.reason : undefined;
+            })()}
+            columns={7}
             detailOpen={expandedSafety === item.entry.package}
             onToggleDetail={() =>
               (expandedSafety =
                 expandedSafety === item.entry.package ? null : item.entry.package)}
-            rowClass={eff === "skip"
-              ? item.entry.review && !skip && removalReviewIsAvailable(item)
-                ? "review-flag"
-                : "dim"
-              : !skip
-                ? "acting"
-                : undefined}
+            rowClass={!skip && isReviewRow(item)
+              ? eff === "skip" ? "review-flag" : "review-flag acting"
+              : eff === "skip"
+                ? "dim"
+                : !skip
+                  ? "acting"
+                  : undefined}
           >
             {#snippet actions()}
             <td>
               {#if skip}
                 <span class="terminal-reason">{skip}</span>
               {:else}
-                <select
-                  class="action-select"
-                  class:will-skip={eff === "skip"}
-                  class:will-remove={eff === "uninstall"}
-                  class:will-act={eff === "disable" || eff === "enable"}
-                  value={eff}
-                  onchange={(e) =>
-                    setOptimizeAction(
-                      item.entry.package,
-                      (e.currentTarget as HTMLSelectElement).value as RowAction,
-                    )}
-                  disabled={optimizeRunning || actionOptions(item).length === 1}
-                >
-                  {#each actionOptions(item) as opt (opt)}
-                    <option value={opt}>{actionLabel(item, opt)}</option>
-                  {/each}
-                </select>
-                {#if item.entry.review && removalReviewIsAvailable(item)}
-                  <div class="muted small review-hint">Uninstall / disable if unused</div>
+                {@const opts = actionOptions(item)}
+                {#if opts.length === 1}
+                  <!-- One option is not a choice. A lone greyed-out "Keep" pill
+                       looked like a control that had failed; the sentence says
+                       which of protected / unchecked / still-checking it is. -->
+                  <span class="terminal-reason">{singleOptionReason(item)}</span>
+                {:else}
+                  <!-- One pill per option with a radio mark, so the armed state
+                       is legible before you read the fill colour — a segmented
+                       control relies on the fill alone, and on a table of
+                       sixteen rows that is a lot of colour to decode. -->
+                  <div class="action-radio" role="group" aria-label={`Action for ${item.entry.name}`}>
+                    {#each opts as opt (opt)}
+                      <button
+                        class="radio-pill"
+                        class:active={eff === opt}
+                        class:will-remove={opt === "uninstall"}
+                        class:will-keep={opt === "skip"}
+                        aria-pressed={eff === opt}
+                        disabled={optimizeRunning}
+                        onclick={() => setOptimizeAction(item.entry.package, opt)}
+                      >
+                        <Icon
+                          name={eff === opt ? "radio_button_checked" : "radio_button_unchecked"}
+                          size={15}
+                          fill={eff === opt}
+                        />
+                        <span class="radio-label">{actionLabel(item, opt)}</span>
+                        {#if isRecommended(item, opt)}
+                          <span class="plan-caption mono" data-tip="What we recommend for this app">Recommended</span>
+                        {/if}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+                {#if isReviewRow(item)}
+                  <span
+                    class="review-pill mono"
+                    data-tip="Check the last-used column — act only if nobody here uses it"
+                  >{reviewLabel(effectiveMethod(item.entry))}</span>
                 {:else if safetyByPackage[item.entry.package]?.status === "unavailable"}
                   <div class="muted small review-hint">Reload the plan to retry safety.</div>
                 {/if}
@@ -593,13 +774,19 @@
             </td>
             <td>
               {#if progress === "done"}
-                <span class="tag installed">✓ DONE</span>
+                <span class="tag installed"><Icon name="check" size={14} /> DONE</span>
               {:else if progress === "pending"}
                 <span class="muted small">…</span>
               {:else if progress === "skipped"}
                 <span class="muted small">skipped</span>
               {:else if progress === "failed"}
-                <span class="tag" style="background:var(--danger-surface); color:var(--danger-text)" title={optimizeFailureMessages[item.entry.package] ?? ""}>FAILED</span>
+                <span
+                  class="tag"
+                  style="background:var(--danger-surface); color:var(--danger-text)"
+                  data-tip={shortTip(optimizeFailureMessages[item.entry.package])}
+                  data-tip-align="end"
+                  title={optimizeFailureMessages[item.entry.package] ?? ""}
+                >FAILED</span>
               {/if}
             </td>
             {/snippet}
@@ -607,45 +794,68 @@
         {/each}
       </tbody>
     </table>
+
+    <!-- The action sits after the list it acts on. Above it, Run was reachable
+         before you had read a single row of the plan you were running. -->
+    <div class="apply-row apply-foot">
+      <!-- A disabled button never gets :hover, so the reason it is disabled has
+           to hang off something that does. -->
+      <span
+        class="tip-wrap"
+        data-tip={actionable === 0
+          ? "Nothing is armed — use Select all safe, or arm a row"
+          : `Apply ${actionable} change${actionable === 1 ? "" : "s"} to this TV`}
+      >
+      <button
+        class="primary"
+        onclick={executeOptimize}
+        disabled={optimizeRunning || actionable === 0}
+      >
+        {optimizeRunning
+          ? "Running…"
+          : `Run plan · ${actionable} item${actionable === 1 ? "" : "s"}`}
+      </button>
+      </span>
+      {#if optimizeSummary && !optimizeRunning}
+        <button
+          onclick={applyPerformanceSettings}
+          disabled={optimizePerfApplied}
+          data-tip={optimizeMode === "optimize" ? "Set animation scales to 0.5×" : "Reset animation scales to 1×"}
+        >
+          {optimizePerfApplied ? "Performance applied" : (optimizeMode === "optimize" ? "Apply 0.5× animations" : "Reset animations to 1×")}
+        </button>
+      {/if}
+    </div>
+    {#if optimizeSummary}
+      <p class="muted small mono action-message">{optimizeSummary}</p>
+    {/if}
   {/if}
 </div>
 
 <style>
   /* Shared scoped utilities duplicated from the page; global muted and button
      rules live in the layout and are inherited. */
-  .card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.2rem;
-  }
-  .card h2 {
-    margin: 0 0 0.8rem;
-    font-size: 1.1rem;
-  }
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-  }
   .header-actions {
     display: flex;
     gap: 0.8rem;
     align-items: center;
   }
+  th.right {
+    text-align: right;
+  }
+
   .small {
     font-size: 0.82rem;
   }
   .mono {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
   }
   .error {
     background: var(--danger-surface);
     color: var(--danger-text);
     padding: 0.7rem 1rem;
-    border-radius: 6px;
-    font-family: ui-monospace, monospace;
+    border-radius: var(--radius-md);
+    font-family: var(--mono);
     font-size: 0.85rem;
   }
   table {
@@ -656,7 +866,7 @@
   th, td {
     text-align: left;
     padding: 0.5rem 0.6rem;
-    border-bottom: 1px solid var(--bg-button);
+    border-bottom: 1px solid var(--border);
     vertical-align: middle;
   }
   th {
@@ -669,7 +879,7 @@
   .tag {
     font-size: 0.7rem;
     padding: 0.15rem 0.5rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     letter-spacing: 0.04em;
   }
   .tag.installed { background: var(--ok-surface); color: var(--ok); }
@@ -678,7 +888,7 @@
     padding: 0.4rem 0.6rem;
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     word-break: break-word;
   }
   .apply-row {
@@ -704,20 +914,182 @@
   }
 
   /* Optimize-specific styles. */
-  .plan-summary {
-    margin: 0.4rem 0;
-    padding: 0.5rem 0.8rem;
+  /* The running total of what this run will do — accent-tinted so it reads as
+     the consequence of the button beneath it rather than another grey note. */
+  /* Recessed trough, filled active segment — the same idiom as a two-choice
+     setting in Tweaks. */
+  /* A pill track with a raised thumb, so it reads as a two-way switch rather
+     than as two buttons that happen to sit together. */
+  .mode-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    font-size: 0.9rem;
+    border-radius: var(--radius-pill);
   }
+  .mode-btn {
+    border: 1px solid transparent;
+    background: none;
+    border-radius: var(--radius-pill);
+    color: var(--fg-muted);
+    padding: 0.25rem 0.9rem;
+    font-size: 0.85rem;
+    transition: background 0.15s, color 0.15s;
+  }
+  .mode-btn:hover:not(.active):not(:disabled) {
+    background: var(--bg-button-hover);
+    color: var(--fg-primary);
+  }
+  /* A segmented control with both halves in surface grey reads as chrome, not
+     as a choice you have made. The armed half now carries a visible edge and a
+     shadow so it looks pressed, and the label beside it says what is being
+     chosen — without this, "Optimize | Restore" looked like a toggle switch
+     someone else had already set. */
+  .mode-btn.active {
+    background: var(--bg-surface);
+    border-color: var(--accent);
+    color: var(--fg-primary);
+    font-weight: 600;
+    box-shadow: 0 1px 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .mode-label {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-muted);
+  }
+  .header-sub {
+    margin: 0 0 0.3rem;
+  }
+  .optimize-note {
+    margin: 0.6rem 0 0.2rem;
+  }
+  .apply-foot {
+    margin-top: 1.2rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--border);
+  }
+  /* The guided strip. Numbered, because the order matters and the Run button
+     is a screen away from the table it applies. */
+  .plan-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1.5rem;
+    margin: 1rem 0 0.5rem;
+    padding: 0.7rem 0.9rem;
+    list-style: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-inset);
+  }
+  .plan-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+  .step-num {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.3rem;
+    height: 1.3rem;
+    border-radius: 50%;
+    background: var(--bg-button);
+    color: var(--fg-secondary);
+    font-size: 0.72rem;
+  }
+  .step-body {
+    min-width: 0;
+  }
+  .step-text {
+    margin: 0.1rem 0 0;
+    font-size: 0.85rem;
+  }
+  /* Visually hidden, still announced — the caret column has no visible head. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tip-wrap {
+    display: inline-flex;
+  }
+  .plan-bulk {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.4rem;
+  }
+  .small-action {
+    padding: 0.2rem 0.6rem;
+    font-size: 0.78rem;
+  }
+  .small-action.subtle {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--fg-muted);
+  }
+  .small-action.subtle:hover:not(:disabled) {
+    background: var(--bg-button);
+    color: var(--fg-secondary);
+  }
+  /* Progress as a panel, not as a reflowing button label. */
+  .run-card {
+    margin: 0.5rem 0 1rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    border-radius: var(--radius-lg);
+    background: var(--bg-inset);
+  }
+  .run-count {
+    font-size: 1.1rem;
+  }
+  .run-count strong {
+    font-family: var(--mono);
+    font-size: 1.6rem;
+  }
+  .run-bar {
+    height: 6px;
+    margin: 0.6rem 0;
+    border-radius: var(--radius-pill);
+    background: var(--bg-button);
+    overflow: hidden;
+  }
+  .run-bar span {
+    display: block;
+    height: 100%;
+    background: var(--accent-strong);
+    transition: width 0.2s;
+  }
+  .run-current {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    margin: 0 0 0.8rem;
+  }
+  .run-current .mono {
+    color: var(--accent);
+    overflow-wrap: anywhere;
+  }
+  .run-cancel {
+    width: 100%;
+    justify-content: center;
+  }
+
   .review-callout {
     margin: 0.4rem 0;
     padding: 0.5rem 0.8rem;
     background: var(--bg-inset);
     border: 1px solid var(--warn);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     font-size: 0.85rem;
   }
   .review-callout .stale-line {
@@ -733,25 +1105,78 @@
     max-width: 11rem;
     text-align: center;
   }
-  .action-select {
-    font-size: 0.85rem;
-    padding: 0.25rem 0.5rem;
-    min-width: 9.5rem;
+  /* A radio group, not a segmented control: the mark says which one is chosen
+     before the fill colour does, which is what makes a column of sixteen rows
+     scannable. The pills stack rather than sitting in a trough, so the labels
+     stay readable when the Action column narrows. */
+  .action-radio {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    align-items: flex-start;
   }
-  /* Color the dropdown by what it will do, so each row's intent is legible at
-     a glance: muted italic for Skip, accent for disable/enable, danger for the
-     destructive uninstall. */
-  .action-select.will-skip {
+  .radio-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.18rem 0.55rem 0.18rem 0.35rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    background: none;
     color: var(--fg-muted);
-    font-style: italic;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    cursor: pointer;
   }
-  .action-select.will-act {
-    color: var(--accent);
-    font-weight: 500;
+  .radio-pill:hover:not(.active):not(:disabled) {
+    background: var(--bg-button-hover);
+    color: var(--fg-primary);
   }
-  .action-select.will-remove {
-    color: var(--danger-strong);
-    font-weight: 500;
+  /* Lime is this app's one action colour: it marks the choice you have made,
+     never every choice you could make. */
+  .action-radio .radio-pill.active {
+    background: var(--accent-strong);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+  }
+  /* Keeping an app is not an action, so an armed Keep is a neutral surface. */
+  .action-radio .radio-pill.will-keep.active {
+    background: var(--bg-surface);
+    border-color: var(--border);
+    color: var(--fg-primary);
+  }
+  /* Uninstall is the one that does not come back; armed, it says so. */
+  .action-radio .radio-pill.will-remove.active {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--danger-ink);
+  }
+  .action-radio .radio-pill.active:disabled {
+    opacity: 1;
+  }
+  /* Our pick, named rather than dotted. A small outlined pill so it reads as
+     a label on the option, not as a second option. */
+  .plan-caption {
+    padding: 0 0.3rem;
+    border: 1px solid currentColor;
+    border-radius: var(--radius-pill);
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: 0.8;
+  }
+  /* The review advice, in the same amber as the row it tints. */
+  .review-pill {
+    display: inline-block;
+    margin-top: 0.3rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--warn-border);
+    border-radius: var(--radius-pill);
+    background: var(--warn-surface-2);
+    color: var(--warn);
+    font-size: 0.68rem;
+    white-space: nowrap;
   }
   /* Terminal rows (not installed / already in target state) can't be acted on —
      a neutral pill, distinct from the italic "Skip (recommended)" dropdown so
@@ -760,7 +1185,7 @@
     display: inline-block;
     font-size: 0.74rem;
     padding: 0.15rem 0.5rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: var(--bg-muted);
     color: var(--fg-faint);
     letter-spacing: 0.02em;

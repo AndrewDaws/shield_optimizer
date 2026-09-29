@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
   import sideloadCatalog from "$lib/sideload-catalog.json";
-  import type { DiscoveredApk } from "$lib/types";
+  import type { ApkInspection, DiscoveredApk } from "$lib/types";
 
-  let { serial }: { serial: string } = $props();
+  let { serial, deviceLabel = "" }: { serial: string; deviceLabel?: string } = $props();
 
   /// Path of the APK currently installing (null when idle) — per-path so a
   /// multi-APK list only shows the spinner on the row actually installing.
@@ -28,6 +29,78 @@
   /// package id → state, for the discovered APKs, so each row can say whether
   /// it's already installed on this device.
   let apkInstallState = $state<Record<string, "enabled" | "disabled" | "missing">>({});
+
+  /// Board 11.9 draws a drop target. HTML5 drag events never carry a real
+  /// path in a webview, so this uses Tauri's own drag-drop stream, which does.
+  /// It is a no-op outside the app shell (the screenshot pipeline runs in a
+  /// plain browser), so the pane simply never highlights there.
+  let dragging = $state(false);
+  let dropError = $state("");
+  /// A dropped APK is staged, never installed. Dropping a file used to install
+  /// it outright, so the first you knew of what you had installed was the
+  /// result message — the gesture is easy to make by accident and impossible
+  /// to take back.
+  let staged = $state<ApkInspection | null>(null);
+  let staging = $state(false);
+
+  async function stageApk(path: string) {
+    staging = true;
+    staged = null;
+    try {
+      staged = await api.inspectApk(serial, path);
+    } catch (e) {
+      dropError = `Could not read that APK: ${e}`;
+    } finally {
+      staging = false;
+    }
+  }
+  let unlistenDrop: (() => void) | null = null;
+  // Every opened tab stays mounted, hidden, and the webview's drop stream is
+  // window-wide — without this a file dropped on Files was also staged here.
+  let rootEl = $state<HTMLElement | undefined>(undefined);
+
+  function isShowing(): boolean {
+    return !!rootEl && rootEl.closest("[hidden]") === null;
+  }
+
+  onMount(async () => {
+    try {
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+        if (!isShowing()) {
+          dragging = false;
+          return;
+        }
+        // `enter` carries paths too; only a real drop may stage anything, or
+        // hovering a file over the window would query the TV.
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          dragging = true;
+          return;
+        }
+        if (event.payload.type === "leave") {
+          dragging = false;
+          return;
+        }
+        dragging = false;
+        const apks = event.payload.paths.filter((path) => path.toLowerCase().endsWith(".apk"));
+        if (apks.length === 0) {
+          dropError = "That is not an .apk. Drop an APK file, or use Pick file…";
+          return;
+        }
+        if (apks.length > 1) {
+          // Installing several in one gesture would hide which one failed.
+          dropError = `Dropped ${apks.length} APKs — drop one at a time so each result is its own.`;
+          return;
+        }
+        dropError = "";
+        void stageApk(apks[0]);
+      });
+    } catch {
+      /* not running inside the app shell — no drop target, everything else works */
+    }
+  });
+
+  onDestroy(() => unlistenDrop?.());
 
   async function pickAndInstallApk() {
     const selected = await openDialog({
@@ -134,6 +207,8 @@
     return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
   }
 
+  const ISSUES_URL = "https://github.com/bryanroscoe/shield_optimizer/issues/new";
+
   async function openDownloadPage(url: string) {
     try {
       await openUrl(url);
@@ -148,9 +223,12 @@
   });
 </script>
 
-<div class="card" role="tabpanel" tabindex={0} id="tabpanel-sideload" aria-labelledby="tab-sideload">
+<div class="card" role="tabpanel" tabindex={0} id="tabpanel-sideload" aria-labelledby="tab-sideload" bind:this={rootEl}>
   <div class="card-header">
-    <h2>Install APK</h2>
+    <div class="header-title">
+      <h2><Icon name="download" size={20} /> Install APK</h2>
+      <p class="muted small mono header-sub">sideload to {deviceLabel || serial}</p>
+    </div>
     <div class="header-actions">
       <button onclick={pickApkFolder} disabled={sideloadBusy !== null || discoveryBusy}>
         {discoveryBusy ? "Scanning…" : "Choose folder…"}
@@ -165,19 +243,92 @@
     Either way, install runs <code>adb install -r &lt;file&gt;</code>.
   </p>
 
-  {#if savedFolder}
-    <div class="saved-folder">
-      <div class="saved-folder-path small">
-        <strong>Saved folder</strong>
-        <code>{savedFolder}</code>
+  <div class="sideload-layout">
+    <div class="sideload-main">
+  {#if staging}
+    <p class="muted">Reading that APK…</p>
+  {:else if staged}
+    {@const mismatch = staged.abi_compatible === false}
+    <div class="staged-card" class:mismatch>
+      <div class="staged-head">
+        <span class="apk-icon" aria-hidden="true"><Icon name="android" size={18} /></span>
+        <div class="staged-title">
+          <div class="apk-name">{staged.name}</div>
+          <div class="muted small mono">
+            {staged.package ?? "package id unreadable"} · {formatBytes(staged.size_bytes)}
+          </div>
+        </div>
       </div>
-      <button
-        class="small-action"
-        onclick={scanSavedFolder}
-        disabled={discoveryBusy || sideloadBusy !== null}
-      >
-        {discoveryBusy ? "Scanning…" : "Scan saved folder"}
-      </button>
+      <dl class="staged-facts">
+        <dt>Package</dt>
+        <dd class="mono">{staged.package ?? "could not read the manifest"}</dd>
+        <dt>Native code</dt>
+        <dd class="mono">
+          {#if staged.abis.length === 0}
+            none — runs on any architecture
+          {:else}
+            {staged.abis.join(", ")}
+          {/if}
+        </dd>
+        <dt>This TV</dt>
+        <dd class="mono">{staged.device_abis.length ? staged.device_abis.join(", ") : "not reported"}</dd>
+        <dt>Already installed</dt>
+        <dd class="mono">{staged.already_installed === true ? "yes — this would replace it" : staged.already_installed === false ? "no" : "unknown — couldn't ask the TV"}</dd>
+      </dl>
+      <!-- `abi_compatible` is null when we could not read one side. That is not
+           a mismatch and must not be drawn as one. -->
+      {#if mismatch}
+        <div class="callout callout-warn">
+          <Icon name="warning" size={16} />
+          <span>
+            This APK ships native code for {staged.abis.join(", ")}, and this TV
+            reports {staged.device_abis.join(", ")}. It will probably fail to
+            install, or install and crash on launch.
+          </span>
+        </div>
+      {:else if staged.abi_compatible === null && staged.abis.length > 0}
+        <div class="callout">
+          <Icon name="info" size={16} />
+          <span>
+            The TV did not report its architecture, so whether this APK's native
+            code matches could not be checked.
+          </span>
+        </div>
+      {/if}
+      <p class="muted small">
+        Nothing has been installed. This is a third-party build from outside the
+        Play Store — install it only if you know where it came from.
+      </p>
+      <div class="staged-actions">
+        <button
+          class="primary"
+          onclick={() => { const path = staged?.path; staged = null; if (path) void installApkPath(path); }}
+          disabled={sideloadBusy !== null}
+        >
+          {staged.already_installed === true ? "Reinstall" : "Install"}{staged.package ? ` ${staged.package}` : ""}
+        </button>
+        <button onclick={() => (staged = null)} disabled={sideloadBusy !== null}>Cancel</button>
+      </div>
+    </div>
+  {/if}
+  {#if savedFolder}
+    <!-- The board's watch-folder card: the path you scan, and the one control
+         that changes it, on one line. -->
+    <div class="saved-folder">
+      <div class="saved-folder-head">
+        <span class="folder-icon" aria-hidden="true"><Icon name="folder_open" size={18} /></span>
+        <div class="saved-folder-path small">
+          <strong>Watch folder</strong>
+          <code>{savedFolder}</code>
+        </div>
+        <button
+          class="small-action"
+          onclick={scanSavedFolder}
+          disabled={discoveryBusy || sideloadBusy !== null}
+        >
+          {discoveryBusy ? "Scanning…" : "Scan folder"}
+        </button>
+      </div>
       <p class="muted small">
         Scanning reads APK files in this folder and checks whether detected apps are installed on
         this TV. Scanning does not install apps.
@@ -186,17 +337,17 @@
   {/if}
 
   {#if scanError}
-    <div class="install-result bad" role="alert"><span>✕ {scanError}</span></div>
+    <div class="install-result bad" role="alert"><span><Icon name="close" size={16} /> {scanError}</span></div>
   {/if}
 
   {#if discoveredFolder && discoveredApks.length > 0}
-    <div class="apk-folder muted small mono">
-      Scanned folder: {discoveredFolder} — {discoveredApks.length} APK{discoveredApks.length === 1 ? "" : "s"} found
-    </div>
+    <p class="rail-label">Discovered APKs · {discoveredApks.length}</p>
+    <div class="apk-folder muted small mono">{discoveredFolder}</div>
     <ul class="apk-list">
       {#each discoveredApks as apk (apk.path)}
         <li>
           <div class="apk-row">
+            <span class="apk-icon" aria-hidden="true"><Icon name="android" size={18} /></span>
             <div class="apk-meta">
               <div class="apk-name">{apk.name}</div>
               <div class="muted small">
@@ -216,12 +367,18 @@
               onclick={() => installApkPath(apk.path)}
               disabled={sideloadBusy !== null}
             >
-              {sideloadBusy === apk.path ? "Installing…" : "Install"}
+              {sideloadBusy === apk.path
+                ? "Installing…"
+                : apk.package &&
+                    (apkInstallState[apk.package] === "enabled" ||
+                      apkInstallState[apk.package] === "disabled")
+                  ? "Reinstall"
+                  : "Install"}
             </button>
           </div>
           {#if sideloadResultPath === apk.path && sideloadResult}
             <div class="install-result" class:ok={sideloadOk} class:bad={!sideloadOk}>
-              <span>{sideloadOk ? "✓" : "✕"} {sideloadResult}</span>
+              <span><Icon name={sideloadOk ? "check" : "close"} size={16} /> {sideloadResult}</span>
               {#if sideloadHint}<span class="muted small"> — {sideloadHint}</span>{/if}
             </div>
           {/if}
@@ -230,73 +387,192 @@
     </ul>
   {:else if discoveredFolder}
     <p class="muted small">No <code>.apk</code> files in the scanned folder: {discoveredFolder}.</p>
+  {:else if !savedFolder && !staged && !staging}
+    <div class="sideload-empty" class:dragging>
+      <Icon name="upload" size={28} />
+      <strong>{dragging ? "Drop to review" : "Drop an .apk here"}</strong>
+      <span class="small">
+        Nothing installs until you confirm. Or Choose folder… to list every APK
+        inside it and keep it for next time, or Pick file… to install one.
+      </span>
+      {#if dropError}<span class="small drop-error">{dropError}</span>{/if}
+    </div>
   {/if}
 
   {#if sideloadResult && !discoveredApks.some((a) => a.path === sideloadResultPath)}
     <div class="install-result" class:ok={sideloadOk} class:bad={!sideloadOk}>
-      <span>{sideloadOk ? "✓" : "✕"} {sideloadResult}</span>
+      <span><Icon name={sideloadOk ? "check" : "close"} size={16} /> {sideloadResult}</span>
       {#if sideloadHint}<span class="muted small"> — {sideloadHint}</span>{/if}
     </div>
   {/if}
 
-  <details class="sideload-catalog">
-    <summary>Popular sideloads — common apps you download to install ({sideloadCatalog.length})</summary>
-    <p class="muted small">
-      Apps people commonly install that aren't on the Play Store. Links go to the
-      official source only — download the APK there, then install it with the
-      buttons above. You're sideloading third-party software; check it's the
-      official release.
-    </p>
-    <ul class="catalog-list">
-      {#each sideloadCatalog as entry (entry.package)}
-        <li>
-          <div>
-            <div class="apk-name">{entry.name}</div>
-            <div class="muted small">{entry.description}</div>
-            <div class="muted small mono">{entry.package}</div>
-          </div>
-          <button
-            class="small-action"
-            onclick={() => openDownloadPage(entry.url)}
-            title={entry.url}
-          >
-            Open download page
-          </button>
-        </li>
-      {/each}
-    </ul>
-  </details>
+    </div>
+
+    <!-- The board gives the catalog a permanent rail rather than a disclosure.
+         It is the answer to "what do I even install", so it should not be a
+         thing you have to know to open. -->
+    <aside class="sideload-rail">
+      <p class="rail-label">Popularly requested sideloads · {sideloadCatalog.length}</p>
+      <ul class="catalog-list">
+        {#each sideloadCatalog as entry (entry.package)}
+          <li>
+            <div class="catalog-text">
+              <div class="apk-name">{entry.name}</div>
+              <div class="muted small">{entry.description}</div>
+              <div class="muted small mono catalog-pkg">{entry.package}</div>
+            </div>
+            {#if apkInstallState[entry.package] === "enabled"}
+              <span class="tag installed">INSTALLED</span>
+            {:else if apkInstallState[entry.package] === "disabled"}
+              <span class="tag disabled">INSTALLED (disabled)</span>
+            {/if}
+            <!-- This opens a web page; it does not download or install
+                 anything. A download glyph here promised otherwise. -->
+            <button
+              class="catalog-get"
+              onclick={() => openDownloadPage(entry.url)}
+              title={`Open the official download page in your browser — ${entry.url}`}
+              aria-label={`Open the official download page for ${entry.name}`}
+            ><Icon name="open_in_new" size={16} /> <span>Get</span></button>
+          </li>
+        {/each}
+      </ul>
+      <p class="muted small rail-note">
+        Apps people ask for that aren't on the Play Store; links go to the official
+        source only. Download there, then install with the buttons on the left.
+        <button class="link-button" onclick={() => openDownloadPage(ISSUES_URL)}>
+          Suggest one on GitHub
+        </button>
+      </p>
+    </aside>
+  </div>
 </div>
 
 <style>
   /* Shared scoped utilities duplicated from the page; global rules
      (.muted, button, input) live in the layout and are inherited. */
-  .card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.2rem;
-  }
-  .card h2 {
-    margin: 0 0 0.8rem;
-    font-size: 1.1rem;
-  }
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-  }
   .header-actions {
     display: flex;
     gap: 0.8rem;
     align-items: center;
   }
+  .header-title {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+  .header-title h2 {
+    margin: 0;
+  }
+  .header-sub {
+    margin: 0;
+  }
+  /* What you have on the left, what you could have on the right — board 11.9.
+     The catalog was a closed <details> at the bottom, which is the wrong place
+     for the answer to "what do I even install". */
+  .sideload-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 24rem);
+    gap: 1.5rem;
+    align-items: start;
+    margin-top: 1rem;
+  }
+  .sideload-main,
+  .sideload-rail {
+    min-width: 0;
+  }
+  .rail-label {
+    margin: 1rem 0 0.5rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-muted);
+  }
+  .sideload-rail .rail-label {
+    margin-top: 0;
+  }
+  .rail-note {
+    margin-top: 0.7rem;
+  }
+  /* Reads as the link it is, inside the sentence, rather than as a button
+     parked under it. */
+  .link-button {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .saved-folder-head {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+  }
+  .folder-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 2.2rem;
+    height: 2.2rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
+    color: var(--fg-muted);
+  }
+  .saved-folder-head .saved-folder-path {
+    flex: 1;
+    min-width: 0;
+  }
+  .apk-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 2.2rem;
+    height: 2.2rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
+    color: var(--ok);
+  }
+  .catalog-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .catalog-pkg {
+    overflow-wrap: anywhere;
+  }
+  /* A link out, not an install — the icon says "fetch it", and the title says
+     where from, because sideloading somebody else's build deserves a name. */
+  .catalog-get {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--accent);
+    font-size: 0.78rem;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .catalog-get:hover {
+    border-color: var(--border);
+    background: var(--bg-button-hover);
+  }
+
   .small {
     font-size: 0.82rem;
   }
   .mono {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
   }
   .small-action {
     padding: 0.2rem 0.6rem;
@@ -305,7 +581,7 @@
   .tag {
     font-size: 0.7rem;
     padding: 0.15rem 0.5rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     letter-spacing: 0.04em;
   }
   .tag.installed { background: var(--ok-surface); color: var(--ok); }
@@ -314,8 +590,8 @@
     background: var(--bg-inset);
     border: 1px solid var(--border);
     padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    font-family: ui-monospace, monospace;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
     font-size: 0.85em;
   }
 
@@ -325,7 +601,7 @@
     padding: 0.4rem 0.6rem;
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     word-break: break-all;
   }
   .saved-folder {
@@ -337,7 +613,7 @@
     padding: 0.7rem;
     background: var(--bg-inset);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
   }
   .saved-folder-path {
     display: flex;
@@ -359,7 +635,7 @@
   }
   .apk-list li {
     padding: 0.5rem 0;
-    border-bottom: 1px solid var(--bg-button);
+    border-bottom: 1px solid var(--border);
   }
   .apk-list li:last-child {
     border-bottom: none;
@@ -377,17 +653,88 @@
   .install-result.ok { color: var(--ok); }
   .install-result.bad { color: var(--warn); }
   .apk-name {
-    font-family: ui-monospace, monospace;
+    font-family: var(--mono);
     font-size: 0.88rem;
     word-break: break-all;
   }
-  .sideload-catalog {
-    margin-top: 1.5rem;
-    padding-top: 1.2rem;
-    border-top: 1px solid var(--border);
+  .catalog-text .apk-name {
+    font-family: var(--sans);
+    font-size: 0.92rem;
+    font-weight: 600;
+    word-break: normal;
   }
-  .sideload-catalog summary {
-    cursor: pointer;
+  /* Nothing scanned yet is a state, not a blank half-screen. */
+  .sideload-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 2.5rem 1.5rem;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-lg);
+    text-align: center;
+    color: var(--fg-muted);
+    transition: border-color 0.1s, background 0.1s;
+  }
+  .sideload-empty.dragging {
+    border-color: var(--accent);
+    background: var(--accent-surface);
+    color: var(--fg-secondary);
+  }
+  .sideload-empty.dragging :global(.msr) {
+    color: var(--accent);
+  }
+  .drop-error {
+    color: var(--warn);
+  }
+  /* A dropped APK lands here, not on the device. */
+  .staged-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    padding: 1rem 1.1rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface-2);
+  }
+  .staged-card.mismatch {
+    border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  }
+  .staged-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .staged-title {
+    min-width: 0;
+  }
+  .staged-facts {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.3rem 1rem;
+    margin: 0;
+    font-size: 0.85rem;
+  }
+  .staged-facts dt {
+    color: var(--fg-muted);
+  }
+  .staged-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .staged-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .sideload-empty :global(.msr) {
+    color: var(--fg-muted);
+  }
+  .sideload-empty strong {
+    color: var(--fg-secondary);
     font-weight: 600;
   }
   .catalog-list {
@@ -401,7 +748,7 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 0.6rem 0;
-    border-bottom: 1px solid var(--bg-button);
+    border-bottom: 1px solid var(--border);
   }
   .catalog-list li button {
     white-space: nowrap;

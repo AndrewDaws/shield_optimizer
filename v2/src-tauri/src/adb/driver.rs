@@ -1,7 +1,7 @@
 //! Desktop subprocess-backed ADB driver.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::io::AsyncReadExt;
@@ -60,7 +60,9 @@ impl SubprocessAdb {
             });
         }
 
-        debug!(adb = ?self.binary, ?args, "adb invoke");
+        let safe_args = redact_args(args);
+        debug!(adb = ?self.binary, args = ?safe_args, "adb invoke");
+        let started = Instant::now();
 
         let mut cmd = Command::new(&self.binary);
         cmd.args(args).kill_on_drop(true);
@@ -71,7 +73,7 @@ impl SubprocessAdb {
         let output = match timeout(dur, fut).await {
             Ok(r) => r?,
             Err(_) => {
-                warn!(?args, "adb timeout");
+                warn!(args = ?safe_args, ms = started.elapsed().as_millis(), "adb timeout");
                 return Err(AdbError::Timeout {
                     seconds: dur.as_secs(),
                 });
@@ -82,13 +84,27 @@ impl SubprocessAdb {
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         let exit_code = output.status.code();
 
+        // The whole invocation, at debug: what a bug report needs and what an
+        // ordinary run must not carry. Args are redacted (pairing PINs), and
+        // stdout is capped so one `pm list packages` cannot flood the file —
+        // and redacted outright when it's a package inventory, since debug
+        // logs are embedded verbatim in the Report-a-bug bundle.
+        debug!(
+            args = ?safe_args,
+            ms = started.elapsed().as_millis(),
+            ?exit_code,
+            stderr = %stderr.trim(),
+            stdout = %redact_stdout_for_log(&args.join(" "), &stdout),
+            "adb done"
+        );
+
         // Surface real process failures rather than letting callers parse
         // empty stdout as "no results". Exit-0 with empty stdout is a
         // legitimate response for many `pm` queries (e.g. "no disabled
         // packages matched"); exit-nonzero is the signal that something
         // actually went wrong.
         if !output.status.success() {
-            warn!(?args, ?exit_code, %stderr, "adb exited nonzero");
+            warn!(args = ?safe_args, ?exit_code, %stderr, "adb exited nonzero");
             return Err(AdbError::NonZeroExit {
                 code: exit_code,
                 stderr: if stderr.is_empty() {
@@ -105,6 +121,82 @@ impl SubprocessAdb {
             exit_code,
         })
     }
+}
+
+/// Cap on logged stdout. Debug logging exists to be pasted into a bug report;
+/// a full `pm list packages` in every entry makes that unreadable and the file
+/// enormous.
+const LOG_STDOUT_LIMIT: usize = 2 * 1024;
+
+fn truncate_for_log(text: &str) -> String {
+    let text = text.trim();
+    if text.len() <= LOG_STDOUT_LIMIT {
+        return text.to_string();
+    }
+    let mut end = LOG_STDOUT_LIMIT;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… [{} bytes truncated]", &text[..end], text.len() - end)
+}
+
+/// True when the invoked command (or, for a batched/expert-shell string, any
+/// part of it) asks the device to enumerate installed packages —
+/// `pm list packages` and its `-d`/`-e`/`-u`/`-3` variants. Truncation alone
+/// still leaves dozens of package IDs in a 2 KiB window, and that inventory
+/// must never reach the debug log: `collect_diagnostics` embeds the newest
+/// log lines verbatim in the Report-a-bug bundle.
+fn mentions_package_listing(command_text: &str) -> bool {
+    command_text.to_ascii_lowercase().contains("list packages")
+}
+
+/// Redact stdout before it is logged: a full package inventory is replaced
+/// with just its entry count, everything else goes through the ordinary
+/// truncation.
+fn redact_stdout_for_log(command_text: &str, stdout: &str) -> String {
+    if mentions_package_listing(command_text) {
+        let count = stdout
+            .lines()
+            .filter(|line| line.trim_start().starts_with("package:"))
+            .count();
+        format!("<redacted: package inventory, {count} entries>")
+    } else {
+        truncate_for_log(stdout)
+    }
+}
+
+/// Strip the pairing PIN out of an argument list before it is logged.
+///
+/// `adb pair <host:port> <pin>` is the one call this app makes that carries a
+/// secret the user read off their own screen. Debug logging is meant to be
+/// pasted into a public issue, so the PIN must never reach the file in the
+/// first place — redacting at the read end would be too late.
+/// Typed text rides as `input text '<payload>'`, and that payload is whatever
+/// the user typed or pasted into Remote — passwords and URLs included. The
+/// debug log feeds the bug-report bundle, so the payload never reaches it.
+fn redact_typed_text(arg: &str) -> String {
+    match arg.find("input text") {
+        Some(at) => format!("{}input text <redacted text>", &arg[..at]),
+        None => arg.to_string(),
+    }
+}
+
+fn redact_args(args: &[&str]) -> Vec<String> {
+    let Some(pair_at) = args.iter().position(|a| *a == "pair") else {
+        return args.iter().map(|a| redact_typed_text(a)).collect();
+    };
+    args.iter()
+        .enumerate()
+        .map(|(i, a)| {
+            // Keep the subcommand and the address it pairs with; everything
+            // after that is the code.
+            if i <= pair_at + 1 {
+                (*a).to_string()
+            } else {
+                "<redacted pin>".to_string()
+            }
+        })
+        .collect()
 }
 
 /// Ceiling for file transfers: long enough for multi-GB pulls over slow Wi-Fi,
@@ -200,7 +292,31 @@ impl AdbDriver for SubprocessAdb {
         cmd.args(["-s", serial, "shell", command]);
         super::hide_console_window(&mut cmd);
         super::pin_working_directory(&mut cmd);
-        collect_bounded_shell(cmd, SHELL_TIMEOUT).await
+        let started = Instant::now();
+        let result = collect_bounded_shell(cmd, SHELL_TIMEOUT).await;
+        match &result {
+            // Only the expert shell uses this path. Its command and output
+            // are whatever the user chose to run, so neither is logged: the
+            // debug log feeds the bug-report bundle.
+            Ok(out) => debug!(
+                serial,
+                command = "<expert shell command redacted>",
+                ms = started.elapsed().as_millis(),
+                exit_code = ?out.exit_code,
+                termination = ?out.termination,
+                stdout_bytes = out.stdout.len(),
+                stderr_bytes = out.stderr.len(),
+                "adb shell (bounded) done"
+            ),
+            Err(e) => debug!(
+                serial,
+                command = "<expert shell command redacted>",
+                ms = started.elapsed().as_millis(),
+                error = %e,
+                "adb shell (bounded) failed"
+            ),
+        }
+        result
     }
 
     async fn raw_bytes(&self, args: &[&str]) -> AdbResult<Vec<u8>> {
@@ -210,7 +326,9 @@ impl AdbDriver for SubprocessAdb {
             });
         }
 
-        debug!(adb = ?self.binary, ?args, "adb invoke (binary)");
+        let safe_args = redact_args(args);
+        debug!(adb = ?self.binary, args = ?safe_args, "adb invoke (binary)");
+        let started = Instant::now();
 
         let mut cmd = Command::new(&self.binary);
         cmd.args(args).kill_on_drop(true);
@@ -220,7 +338,7 @@ impl AdbDriver for SubprocessAdb {
         let output = match timeout(self.command_timeout, cmd.output()).await {
             Ok(r) => r?,
             Err(_) => {
-                warn!(?args, "adb timeout");
+                warn!(args = ?safe_args, ms = started.elapsed().as_millis(), "adb timeout");
                 return Err(AdbError::Timeout {
                     seconds: self.command_timeout.as_secs(),
                 });
@@ -229,12 +347,21 @@ impl AdbDriver for SubprocessAdb {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            warn!(?args, code = ?output.status.code(), %stderr, "adb exited nonzero");
+            warn!(args = ?safe_args, code = ?output.status.code(), %stderr, "adb exited nonzero");
             return Err(AdbError::NonZeroExit {
                 code: output.status.code(),
                 stderr,
             });
         }
+
+        // Binary stdout: its size is the useful fact, not its contents.
+        debug!(
+            args = ?safe_args,
+            ms = started.elapsed().as_millis(),
+            exit_code = ?output.status.code(),
+            stdout_bytes = output.stdout.len(),
+            "adb done (binary)"
+        );
 
         Ok(output.stdout)
     }
@@ -246,7 +373,7 @@ impl AdbDriver for SubprocessAdb {
             });
         }
 
-        debug!(adb = ?self.binary, ?args, "adb spawn (long-lived)");
+        debug!(adb = ?self.binary, args = ?redact_args(args), "adb spawn (long-lived)");
 
         let mut cmd = Command::new(&self.binary);
         cmd.args(args).kill_on_drop(true);
@@ -480,6 +607,67 @@ fn which_in_path(bin: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Debug logging is written to be pasted into a public issue. The pairing
+    /// PIN the user read off their TV must not be in it.
+    #[test]
+    fn typed_remote_text_never_reaches_the_log() {
+        assert_eq!(
+            redact_args(&["-s", "tv:5555", "shell", "input text 'hunter2'"]),
+            vec!["-s", "tv:5555", "shell", "input text <redacted text>"]
+        );
+    }
+
+    #[test]
+    fn a_pairing_pin_never_reaches_the_log() {
+        assert_eq!(
+            redact_args(&["pair", "192.168.1.9:37421", "314159"]),
+            vec!["pair", "192.168.1.9:37421", "<redacted pin>"]
+        );
+        // Everything else is logged as-is — the address is what makes a report
+        // legible, and there is no secret in it.
+        assert_eq!(
+            redact_args(&["-s", "192.168.1.9:5555", "shell", "getprop"]),
+            vec!["-s", "192.168.1.9:5555", "shell", "getprop"]
+        );
+    }
+
+    /// Debug logs are embedded verbatim in the Report-a-bug bundle. A package
+    /// inventory must never reach it, even truncated — only its entry count.
+    #[test]
+    fn package_listing_stdout_is_redacted_not_truncated() {
+        let stdout = "package:com.google.android.tv.launcher\npackage:com.netflix.ninja\n";
+        assert_eq!(
+            redact_stdout_for_log("-s 192.168.1.9:5555 shell pm list packages", stdout),
+            "<redacted: package inventory, 2 entries>"
+        );
+        // The `-d`/`-3` variants and a batched command string are covered too.
+        assert_eq!(
+            redact_stdout_for_log("pm list packages -d", "package:com.disabled.app\n"),
+            "<redacted: package inventory, 1 entries>"
+        );
+        assert_eq!(
+            redact_stdout_for_log(
+                "pm list packages 2>/dev/null; echo __SEP__; dumpsys meminfo",
+                "package:com.a\npackage:com.b\n"
+            ),
+            "<redacted: package inventory, 2 entries>"
+        );
+        // An unrelated command still goes through ordinary truncation.
+        assert_eq!(
+            redact_stdout_for_log("getprop ro.serialno", "  ABC123  "),
+            "ABC123"
+        );
+    }
+
+    #[test]
+    fn logged_stdout_is_capped_without_splitting_a_character() {
+        let long = "é".repeat(4096);
+        let logged = truncate_for_log(&long);
+        assert!(logged.len() < long.len());
+        assert!(logged.contains("bytes truncated"));
+        assert_eq!(truncate_for_log("  short  "), "short");
+    }
 
     #[cfg(unix)]
     async fn shell_fixture(script: &str, duration: Duration) -> BoundedShellOutput {

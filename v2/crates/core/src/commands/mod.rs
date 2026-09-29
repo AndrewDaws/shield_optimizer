@@ -61,6 +61,9 @@ pub mod test_support {
     /// call return a typed `AdbError` so command error branches get exercised.
     enum Reply {
         Ok(String),
+        /// Stdout plus an explicit exit code — a command that answered and
+        /// still exited nonzero, like `pm has-feature` saying "false".
+        Code(String, i32),
         Err(String),
     }
 
@@ -99,6 +102,15 @@ pub mod test_support {
                 .push(Rule::single(needle, Reply::Ok(stdout.into())));
             self
         }
+        /// Return `stdout` *and* a nonzero `exit_code` for matching `shell`
+        /// calls: the call succeeded at the process level and produced output,
+        /// but the last command in it exited nonzero. Distinct from
+        /// `on_shell_err`, which never delivers stdout at all.
+        pub fn on_shell_exit(mut self, needle: &str, stdout: &str, exit_code: i32) -> Self {
+            self.shell_rules
+                .push(Rule::single(needle, Reply::Code(stdout.into(), exit_code)));
+            self
+        }
         /// Make matching `shell` calls fail with a typed `AdbError` carrying
         /// `err_message` — the subprocess-failure branch (nonzero exit).
         pub fn on_shell_err(mut self, needle: &str, err_message: &str) -> Self {
@@ -127,6 +139,23 @@ pub mod test_support {
         pub fn on_raw(mut self, needle: &str, stdout: &str) -> Self {
             self.raw_rules
                 .push(Rule::single(needle, Reply::Ok(stdout.into())));
+            self
+        }
+        /// Hand back replies in order for successive matching `raw` calls,
+        /// sticking on the last once exhausted. `Ok` is stdout, `Err` is an
+        /// `AdbError` message — so a test can say "fails twice, then works".
+        pub fn on_raw_seq(mut self, needle: &str, responses: &[Result<&str, &str>]) -> Self {
+            self.raw_rules.push(Rule {
+                needle: needle.into(),
+                replies: responses
+                    .iter()
+                    .map(|r| match r {
+                        Ok(out) => Reply::Ok((*out).into()),
+                        Err(msg) => Reply::Err((*msg).into()),
+                    })
+                    .collect(),
+                cursor: AtomicUsize::new(0),
+            });
             self
         }
         /// Make matching `raw` calls fail with a typed `AdbError`.
@@ -168,6 +197,11 @@ pub mod test_support {
                     .min(rule.replies.len() - 1);
                 return match &rule.replies[idx] {
                     Reply::Ok(out) => ok(out.clone()),
+                    Reply::Code(out, code) => Ok(AdbOutput {
+                        stdout: out.clone(),
+                        stderr: String::new(),
+                        exit_code: Some(*code),
+                    }),
                     Reply::Err(msg) => Err(AdbError::NonZeroExit {
                         code: Some(1),
                         stderr: msg.clone(),

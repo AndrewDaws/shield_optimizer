@@ -33,7 +33,7 @@ pub struct AppState {
     /// search "Everything else" by a recognizable name instead of a bare package
     /// ID. There's no cheap way to read an app's label over adb, so this is a
     /// curated map loaded from `crates/core/data/app-lists/known-names.json`.
-    pub known_names: HashMap<String, String>,
+    pub known_names: HashMap<String, crate::commands::loader::KnownName>,
     /// Current product entitlement, stored atomically so it can be flipped at
     /// runtime (mobile's `activate_license`) while `require_pro` stays a cheap
     /// synchronous read. Desktop constructs this as Pro; mobile starts Free and
@@ -71,8 +71,14 @@ impl AppState {
 
     /// Attach the curated package→name map. Builder-style so the existing
     /// constructors (and their test callers) stay unchanged.
-    pub fn with_known_names(mut self, known_names: HashMap<String, String>) -> Self {
-        self.known_names = known_names;
+    pub fn with_known_names<T: Into<crate::commands::loader::KnownName>>(
+        mut self,
+        known_names: HashMap<String, T>,
+    ) -> Self {
+        self.known_names = known_names
+            .into_iter()
+            .map(|(pkg, known)| (pkg, known.into()))
+            .collect();
         self
     }
 

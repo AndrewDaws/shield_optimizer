@@ -1,12 +1,15 @@
-// The Devices list has to be honest about three things at once:
+// The Devices list has to be honest about several things at once:
 //   - one physical device reached two ways is ONE row (the duplicate-transport
 //     regression: adb auto-connects a paired mDNS device under its service
 //     name, and dialling it again by address makes a second transport);
 //   - a device that is positively not an Android TV says so and does not open
-//     the TV tools, while a device we simply cannot read yet claims nothing;
-//   - a network device is not told to look for a *USB* dialog.
+//     the TV tools; one that never said either way still opens, labelled
+//     UNCONFIRMED TV (#120); and one we cannot read at all claims nothing;
+//   - a network device is not told to look for a *USB* dialog;
+//   - every network row can be forgotten, and no USB row can, and forgetting
+//     from a clickable row does not navigate into the device it just dropped.
 //
-// Rendering is where all three become visible, so this drives the real screen.
+// Rendering is where all of it becomes visible, so this drives the real screen.
 import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,32 +46,51 @@ const tvProperties = {
   friendly_name: "Bedroom Shield", brand: "NVIDIA", model: "SHIELD Android TV",
   device_codename: "mdarcy", manufacturer: "NVIDIA", android_release: "11",
   sdk_level: "30", build_id: "PPR1", board_platform: "tegra",
-  characteristics: "tv", serial_number: "1324619053514",
+  characteristics: "tv", serial_number: "1324619053514", leanback: true,
 };
 
+// A phone SAYS it is a phone. That is the only thing that earns the label —
+// `nosdcard` alone used to be read as "not a TV" and locked out real boxes.
 const phoneProperties = {
   friendly_name: null, brand: "google", model: "Pixel 10 Pro",
   device_codename: "blazer", manufacturer: "Google", android_release: "16",
   sdk_level: "36", build_id: "BP41", board_platform: "zuma",
-  characteristics: "nosdcard", serial_number: "58040DLCH005YV",
+  characteristics: "nosdcard,phone", serial_number: "58040DLCH005YV",
+  leanback: false,
+};
+
+// The #120 device: readable, and it never said either way.
+const oddBoxProperties = {
+  friendly_name: "Living Room Box", brand: "Xiaomi", model: "MiBOX4",
+  device_codename: "cezanne", manufacturer: "Xiaomi", android_release: "12",
+  sdk_level: "31", build_id: "STTE", board_platform: "amlogic",
+  characteristics: "nosdcard", serial_number: "9AB4C21D7E03", leanback: null,
 };
 
 const ROWS = [
   { id: 1, serial: "192.168.42.196:5555", name: "Bedroom Shield",
-    model: "Shield TV Pro (2019)", device_type: "shield", status: "device",
-    connection: "network", properties: tvProperties },
-  // Unknown *with* readable properties = positively not a TV.
+    model: "Shield TV Pro (2019)", device_type: "shield", tv_evidence: "tv",
+    status: "device", connection: "network", properties: tvProperties },
+  // It reported a non-TV form factor = positively not a TV.
   { id: 2, serial: "192.168.42.211:34083", name: "Bryan Pixel 10 Pro",
-    model: "Pixel 10 Pro", device_type: "unknown", status: "device",
-    connection: "network", properties: phoneProperties },
+    model: "Pixel 10 Pro", device_type: "unknown", tv_evidence: "not_tv",
+    status: "device", connection: "network", properties: phoneProperties },
   // No properties = we do not know what this is yet. Claim nothing.
   { id: 3, serial: "192.168.42.143:5555", name: "192.168.42.143:5555",
-    model: "", device_type: "unknown", status: "unauthorized",
-    connection: "network", properties: null },
+    model: "", device_type: "unknown", tv_evidence: "unknown",
+    status: "unauthorized", connection: "network", properties: null },
   // Same, but over USB — the one place the USB wording is right.
   { id: 4, serial: "0323220012345", name: "0323220012345",
-    model: "", device_type: "unknown", status: "unauthorized",
-    connection: "usb", properties: null },
+    model: "", device_type: "unknown", tv_evidence: "unknown",
+    status: "unauthorized", connection: "usb", properties: null },
+  // Readable, said neither way: openable, labelled, and not accused.
+  { id: 5, serial: "192.168.42.77:5555", name: "Living Room Box",
+    model: "MiBOX4", device_type: "unknown", tv_evidence: "unknown",
+    status: "device", connection: "network", properties: oddBoxProperties },
+  // A cabled TV. `adb disconnect` has nothing to do here.
+  { id: 6, serial: "0323220054321", name: "Workshop Shield",
+    model: "Shield TV (2019 Tube)", device_type: "shield", tv_evidence: "tv",
+    status: "device", connection: "usb", properties: tvProperties },
 ];
 
 const rowFor = (page, name) =>
@@ -78,6 +100,15 @@ async function exercise({ browser, base }) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1400 } });
   await page.goto(base, { waitUntil: "networkidle" });
   await page.getByText("NVIDIA SHIELD", { exact: false }).first().waitFor();
+
+  // First, the demo fixture itself: the gallery has to show the openable
+  // unconfirmed row, or a regression here would only ever be seen on a real
+  // device nobody on the team owns.
+  const demoOdd = rowFor(page, "Living Room Box");
+  assert.equal(await demoOdd.locator("a.device-row").count(), 1,
+    "the demo's unconfirmed box must still open");
+  assert.equal(await demoOdd.getByText("UNCONFIRMED TV").count(), 1,
+    "and must say that it never confirmed what it is");
 
   await page.evaluate((rows) => {
     const bridge = window.__TAURI_INTERNALS__;
@@ -117,8 +148,39 @@ async function exercise({ browser, base }) {
   const usbHelp = await usb.locator(".unauthorized-help").innerText();
   assert.match(usbHelp, /"Allow USB debugging\?"/, usbHelp);
 
+  // #120: a box that never said what it is still opens, and says so. This is
+  // the row 2.2.0 locked its owner out of.
+  const odd = rowFor(page, "Living Room Box");
+  assert.equal(await odd.locator("a.device-row").count(), 1,
+    "a device that said neither way must still open");
+  assert.equal(await odd.getByText("UNCONFIRMED TV").count(), 1,
+    "and must say that it never confirmed what it is");
+  assert.equal(await odd.getByText("NOT AN ANDROID TV").count(), 0,
+    "saying nothing is not the same as saying no");
+  assert.equal(await odd.getByRole("button", { name: "Copy diagnostics" }).count(), 1,
+    "the row we are unsure about is the one worth reporting");
+
+  // Forget is on EVERY network row now, including the online, clickable ones.
+  for (const name of ["Bedroom Shield", "Bryan Pixel 10 Pro", "192.168.42.143:5555", "Living Room Box"]) {
+    assert.equal(await rowFor(page, name).getByRole("button", { name: "Forget" }).count(), 1,
+      `${name} is on the network, so it can be forgotten`);
+  }
+  // …and on no USB row: `adb disconnect` has nothing to drop over a cable.
+  for (const name of ["0323220012345", "Workshop Shield"]) {
+    assert.equal(await rowFor(page, name).getByRole("button", { name: "Forget" }).count(), 0,
+      `${name} is cabled, so Forget would mean nothing`);
+  }
+
+  // Forgetting from inside the row link must not follow the link. The row is
+  // an <a>; without stopping the click, "Forget" would open the device it had
+  // just disconnected.
+  const before = page.url();
+  await rowFor(page, "Bedroom Shield").getByRole("button", { name: "Forget" }).click();
+  await page.waitForTimeout(300);
+  assert.equal(page.url(), before, "Forget must not navigate into the device");
+
   console.log(
-    "Device list rows passed: TVs open, a known non-TV is labelled and inert, an unknown device claims nothing, and only USB devices are told about a USB dialog.",
+    "Device list rows passed: TVs open, a known non-TV is labelled and inert, a device that said neither way opens with an UNCONFIRMED TV tag, only USB devices are told about a USB dialog, and Forget is on every network row without navigating.",
   );
 }
 

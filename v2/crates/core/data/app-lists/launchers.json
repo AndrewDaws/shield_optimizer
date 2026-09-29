@@ -1,0 +1,61 @@
+{
+  "custom": [
+    {
+      "name": "Projectivy Launcher",
+      "package": "com.spocky.projengmenu",
+      "source_url": "https://play.google.com/store/apps/details?id=com.spocky.projengmenu"
+    },
+    {
+      "name": "FLauncher",
+      "package": "me.efesser.flauncher",
+      "source_url": "https://play.google.com/store/apps/details?id=me.efesser.flauncher"
+    },
+    {
+      "name": "ATV Launcher",
+      "package": "com.sweech.launcher",
+      "source_url": "https://play.google.com/store/apps/details?id=com.sweech.launcher"
+    },
+    {
+      "name": "Wolf Launcher",
+      "package": "com.wolf.firelauncher",
+      "source_url": "https://play.google.com/store/apps/details?id=com.wolf.firelauncher"
+    },
+    {
+      "name": "AT4K Launcher",
+      "package": "com.overdevs.at4k",
+      "source_url": "https://play.google.com/store/apps/details?id=com.overdevs.at4k"
+    },
+    {
+      "name": "Dispatch Launcher",
+      "package": "com.spauldhaliwal.dispatch",
+      "source_url": "https://play.google.com/store/apps/details?id=com.spauldhaliwal.dispatch"
+    },
+    {
+      "name": "Monet Launcher",
+      "package": "com.klevico.monet",
+      "source_url": "https://github.com/Klevico/Monet-Launcher"
+    }
+  ],
+  "stock": [
+    {
+      "name": "Android TV Launcher (Stock)",
+      "package": "com.google.android.tvlauncher"
+    },
+    {
+      "name": "Google TV Home (Stock)",
+      "package": "com.google.android.apps.tv.launcherx"
+    },
+    {
+      "name": "Leanback Launcher (Stock)",
+      "package": "com.google.android.leanbacklauncher"
+    },
+    {
+      "name": "Amazon TV Launcher (Stock)",
+      "package": "com.amazon.tv.launcher"
+    }
+  ],
+  "home_handler_names": {
+    "com.google.android.tungsten.setupwraith": "Setup Wraith (HOME)",
+    "com.droidlogic.launcher.provider": "Droidlogic Launcher Provider"
+  }
+}

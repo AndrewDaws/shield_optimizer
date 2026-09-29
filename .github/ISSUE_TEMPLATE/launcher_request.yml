@@ -1,0 +1,43 @@
+name: Launcher request
+description: Ask for a Home screen app to be added to the Launcher tab's list.
+title: "Launcher: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The Launcher tab lists Home screen apps that have been checked on Android TV. Tell us which one you'd like added, and where it comes from.
+  - type: input
+    id: launcher-name
+    attributes:
+      label: Launcher name
+      placeholder: e.g. Projectivy Launcher
+    validations:
+      required: true
+  - type: input
+    id: package
+    attributes:
+      label: Package id
+      description: If you know it. On the App List it's the grey text under the app's name, for example com.spocky.projengmenu.
+    validations:
+      required: false
+  - type: input
+    id: source
+    attributes:
+      label: Where to get it
+      description: A Play Store link, the developer's site, or a GitHub releases page.
+    validations:
+      required: true
+  - type: input
+    id: tv-model
+    attributes:
+      label: TV model you use it on
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: For example, whether it takes over from the stock launcher by itself, or needs the stock launcher disabled.
+    validations:
+      required: false

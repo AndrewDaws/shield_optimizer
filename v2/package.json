@@ -1,5 +1,5 @@
 {
-  "name": "shield-optimizer-v2",
+  "name": "atv-optimizer-v2",
   "version": "2.2.0",
   "description": "",
   "type": "module",
@@ -14,13 +14,22 @@
     "test:sideload-scan": "node tests/sideload-scan.mjs",
     "test:device-list-rows": "node tests/device-list-rows.mjs",
     "test:release-notes": "node tests/release-notes.mjs",
+    "test:version-compare": "node tests/version-compare.mjs",
     "test:update-notes-dialog": "node tests/update-notes-dialog.mjs",
+    "test:report-bug": "node tests/report-bug.mjs",
     "test:remote-paste": "node tests/remote-paste.mjs",
     "test:memory-safety": "node tests/memory-safety.mjs",
+    "test:recommendation-labels": "node tests/recommendation-labels.mjs",
     "test:optimize-plan": "node tests/optimize-plan.mjs",
     "test:playback-shell": "node tests/playback-shell.mjs",
+    "test:optimize-safety-all-rows": "node tests/optimize-safety-all-rows.mjs",
+    "test:shell-acknowledge": "node tests/shell-acknowledge.mjs",
+    "test:icon-alignment": "node tests/icon-alignment.mjs",
+    "test:launcher-rows": "node tests/launcher-rows.mjs",
+    "test:files-drop": "node tests/files-drop.mjs",
     "screenshots": "node screenshots/capture.mjs && bash screenshots/build-gif.sh",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "subset-icons": "python3 scripts/subset-material-symbols.py"
   },
   "license": "MIT",
   "dependencies": {
@@ -36,6 +45,7 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tauri-apps/cli": "^2",
     "@types/node": "^25.9.1",
+    "material-symbols": "^0.45.10",
     "playwright": "^1.60.0",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",

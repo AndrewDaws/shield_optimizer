@@ -1,17 +1,317 @@
 {
-  "ca.devmesh.overseerrtv": "Overseerr (TV)",
-  "com.spocky.projengmenu": "Projectivy Launcher",
-  "org.pbskids.video": "PBS Kids Video",
-  "com.teamsmart.videomanager.tv": "SmartTube",
-  "com.liskovsoft.smarttubetv.beta": "SmartTube (Beta)",
-  "org.fdroid.fdroid": "F-Droid",
-  "air.com.shirogames.evoland12": "Evoland 2",
+  "ca.devmesh.overseerrtv": {
+    "name": "Overseerr (TV)",
+    "description": "Browse and request movies and shows from an Overseerr server."
+  },
+  "com.spocky.projengmenu": {
+    "name": "Projectivy Launcher",
+    "description": "A customizable third-party Home screen for Android TV."
+  },
+  "org.pbskids.video": {
+    "name": "PBS Kids Video",
+    "description": "Free videos from PBS Kids shows."
+  },
+  "com.teamsmart.videomanager.tv": {
+    "name": "SmartTube",
+    "description": "An open-source YouTube client for Android TV."
+  },
+  "com.liskovsoft.smarttubetv.beta": {
+    "name": "SmartTube (Beta)",
+    "description": "The beta channel of SmartTube, an open-source YouTube client for Android TV."
+  },
+  "org.smarttube.beta": {
+    "name": "SmartTube (Beta)",
+    "description": "The beta channel of SmartTube, an open-source YouTube client for Android TV."
+  },
+  "org.fdroid.fdroid": {
+    "name": "F-Droid",
+    "description": "A catalog of free and open-source Android apps."
+  },
+  "air.com.shirogames.evoland12": {
+    "name": "Evoland 2",
+    "description": "A game from Shiro Games."
+  },
   "net.eightbitape.dungeoncrawl": "Dungeon Crawl",
-  "com.adultswim.apps.now": "Adult Swim",
-  "com.imdbtv.livingroom": "IMDb TV (Freevee)",
+  "com.adultswim.apps.now": {
+    "name": "Adult Swim",
+    "description": "Adult Swim's streaming app."
+  },
+  "com.imdbtv.livingroom": {
+    "name": "IMDb TV (Freevee)",
+    "description": "Amazon's free, ad-supported streaming service."
+  },
   "com.nest.android": "Google Nest",
-  "com.onemainstream.smithsonia.android": "Smithsonian Channel",
-  "com.amazon.music.tv": "Amazon Music",
-  "com.overdevs.at4k": "AT4K (Apple TV 4K launcher)",
-  "tv.projectivy.plugin.wallpaperprovider.overflight": "Projectivy Wallpaper: Overflight"
+  "com.onemainstream.smithsonia.android": {
+    "name": "Smithsonian Channel",
+    "description": "Smithsonian Channel's streaming app."
+  },
+  "com.amazon.music.tv": {
+    "name": "Amazon Music",
+    "description": "Amazon's music streaming app."
+  },
+  "com.overdevs.at4k": {
+    "name": "AT4K (Apple TV 4K launcher)",
+    "description": "A third-party Home screen styled after Apple TV."
+  },
+  "tv.projectivy.plugin.wallpaperprovider.overflight": {
+    "name": "Projectivy Wallpaper: Overflight",
+    "description": "A wallpaper plugin for Projectivy Launcher that plays aerial footage."
+  },
+  "android": {
+    "name": "Android System",
+    "description": "The Android framework itself."
+  },
+  "com.android.backupconfirm": {
+    "name": "Backup Confirmation",
+    "description": "Shows the on-screen confirmation for adb backup and restore."
+  },
+  "com.android.bluetooth": {
+    "name": "Bluetooth",
+    "description": "Android's Bluetooth stack: remotes, controllers, headphones."
+  },
+  "com.android.bluetoothmidiservice": {
+    "name": "Bluetooth MIDI Service",
+    "description": "Connects Bluetooth MIDI instruments."
+  },
+  "com.android.captiveportallogin": {
+    "name": "Captive Portal Login",
+    "description": "Opens the sign-in page for Wi-Fi networks that require a login."
+  },
+  "com.android.certinstaller": {
+    "name": "Certificate Installer",
+    "description": "Installs user security certificates."
+  },
+  "com.android.companiondevicemanager": {
+    "name": "Companion Device Manager",
+    "description": "Handles pairing prompts for companion devices."
+  },
+  "com.android.cts.ctsshim": {
+    "name": "CTS Shim",
+    "description": "A placeholder package used by Android's compatibility tests."
+  },
+  "com.android.cts.priv.ctsshim": {
+    "name": "CTS Shim (privileged)",
+    "description": "A placeholder package used by Android's compatibility tests."
+  },
+  "com.android.documentsui": {
+    "name": "Files (system picker)",
+    "description": "Android's system file picker, used when an app asks you to choose a file."
+  },
+  "com.android.dynsystem": {
+    "name": "Dynamic System Updates",
+    "description": "Loads test system images alongside the installed one."
+  },
+  "com.android.externalstorage": {
+    "name": "External Storage",
+    "description": "Gives apps access to USB drives and other external storage."
+  },
+  "com.android.hotspot2.osulogin": {
+    "name": "Passpoint Sign-up",
+    "description": "Online sign-up for Passpoint (Hotspot 2.0) Wi-Fi networks."
+  },
+  "com.android.hotwordenrollment.okgoogle": {
+    "name": "\"Ok Google\" Enrollment",
+    "description": "Voice enrollment for the \"Ok Google\" hotword."
+  },
+  "com.android.hotwordenrollment.xgoogle": {
+    "name": "\"Ok Google\" Enrollment",
+    "description": "Voice enrollment for the \"Ok Google\" hotword."
+  },
+  "com.android.htmlviewer": {
+    "name": "HTML Viewer",
+    "description": "Displays local HTML files, such as license text."
+  },
+  "com.android.inputdevices": {
+    "name": "Input Devices",
+    "description": "Keyboard layouts for physical keyboards."
+  },
+  "com.android.keychain": {
+    "name": "Key Chain",
+    "description": "System storage for credentials and certificates."
+  },
+  "com.android.localtransport": {
+    "name": "Local Backup Transport",
+    "description": "A backup transport that stores backups on the device."
+  },
+  "com.android.location.fused": {
+    "name": "Fused Location",
+    "description": "Android's location provider."
+  },
+  "com.android.mtp": {
+    "name": "MTP Host",
+    "description": "Media Transfer Protocol support for USB devices."
+  },
+  "com.android.networkstack.inprocess": {
+    "name": "Network Stack",
+    "description": "Android's network connectivity stack."
+  },
+  "com.android.networkstack.permissionconfig": {
+    "name": "Network Stack Permissions",
+    "description": "Permission configuration for the network stack."
+  },
+  "com.android.networkstack.tethering.inprocess": {
+    "name": "Tethering",
+    "description": "Android's tethering and hotspot service."
+  },
+  "com.android.pacprocessor": {
+    "name": "PAC Processor",
+    "description": "Evaluates proxy auto-config (PAC) scripts."
+  },
+  "com.android.providers.calendar": {
+    "name": "Calendar Storage",
+    "description": "Stores calendar data for apps."
+  },
+  "com.android.providers.contacts": {
+    "name": "Contacts Storage",
+    "description": "Stores contacts data for apps."
+  },
+  "com.android.providers.downloads": {
+    "name": "Download Manager",
+    "description": "The system download service apps hand downloads to."
+  },
+  "com.android.providers.media": {
+    "name": "Media Storage",
+    "description": "Indexes photos, music and video for apps."
+  },
+  "com.android.providers.media.module": {
+    "name": "Media Storage (module)",
+    "description": "Indexes photos, music and video for apps."
+  },
+  "com.android.providers.settings": {
+    "name": "Settings Storage",
+    "description": "Stores the system settings database."
+  },
+  "com.android.providers.userdictionary": {
+    "name": "User Dictionary",
+    "description": "Stores words added to the keyboard dictionary."
+  },
+  "com.android.proxyhandler": {
+    "name": "Proxy Handler",
+    "description": "Applies network proxy settings."
+  },
+  "com.android.se": {
+    "name": "Secure Element",
+    "description": "Access to the device's secure element hardware."
+  },
+  "com.android.settings.intelligence": {
+    "name": "Settings Suggestions",
+    "description": "Search and suggestions inside Settings."
+  },
+  "com.android.sharedstoragebackup": {
+    "name": "Shared Storage Backup",
+    "description": "Backs up shared storage during adb backup."
+  },
+  "com.android.shell": {
+    "name": "Shell",
+    "description": "The package behind adb shell commands, including this app's."
+  },
+  "com.android.soundpicker": {
+    "name": "Sounds",
+    "description": "The system picker for notification and alarm sounds."
+  },
+  "com.android.statementservice": {
+    "name": "Intent Filter Verification",
+    "description": "Verifies which app is allowed to open a website's links."
+  },
+  "com.android.systemui": {
+    "name": "System UI",
+    "description": "Draws the system's own screens, notifications and volume panel."
+  },
+  "com.android.tv.settings": {
+    "name": "Settings",
+    "description": "Android TV's Settings app."
+  },
+  "com.android.vending": {
+    "name": "Google Play Store",
+    "description": "Google's app store."
+  },
+  "com.android.vpndialogs": {
+    "name": "VPN Dialogs",
+    "description": "The confirmation dialogs shown when an app starts a VPN."
+  },
+  "com.android.wallpaperbackup": {
+    "name": "Wallpaper Backup",
+    "description": "Backs up the wallpaper setting."
+  },
+  "com.android.wifi.resources": {
+    "name": "Wi-Fi Resources",
+    "description": "Configuration resources for the Wi-Fi stack."
+  },
+  "com.dolby.android.audio.service": "Dolby Audio Service",
+  "com.google.android.ext.services": {
+    "name": "Android Services Library",
+    "description": "Shared system services used by the framework."
+  },
+  "com.google.android.ext.shared": {
+    "name": "Android Shared Library",
+    "description": "Shared code libraries used by system apps."
+  },
+  "com.google.android.gms": {
+    "name": "Google Play services",
+    "description": "Google's background services for sign-in, casting, updates and more."
+  },
+  "com.google.android.gsf": {
+    "name": "Google Services Framework",
+    "description": "Core plumbing for Google account sync and messaging."
+  },
+  "com.google.android.inputmethod.latin": {
+    "name": "Gboard",
+    "description": "Google's keyboard."
+  },
+  "com.google.android.leanback.ime": {
+    "name": "Leanback Keyboard",
+    "description": "The on-screen keyboard for Android TV."
+  },
+  "com.google.android.modulemetadata": {
+    "name": "Main Components",
+    "description": "Metadata for Android's updatable system modules."
+  },
+  "com.google.android.onetimeinitializer": {
+    "name": "One Time Init",
+    "description": "Runs one-time setup steps after an update."
+  },
+  "com.google.android.packageinstaller": {
+    "name": "Package Installer",
+    "description": "Installs and uninstalls apps and asks you to confirm."
+  },
+  "com.google.android.partnersetup": {
+    "name": "Google Partner Setup",
+    "description": "Device-maker configuration for Google apps."
+  },
+  "com.google.android.permissioncontroller": {
+    "name": "Permission Controller",
+    "description": "Shows and manages app permission prompts."
+  },
+  "com.google.android.syncadapters.calendar": {
+    "name": "Google Calendar Sync",
+    "description": "Syncs Google Calendar data to the device."
+  },
+  "com.google.android.tv": {
+    "name": "Live Channels",
+    "description": "Google's app for watching channels from tuners and channel apps."
+  },
+  "com.google.android.tv.frameworkpackagestubs": {
+    "name": "Framework Package Stubs",
+    "description": "Answers requests for phone features a TV does not have."
+  },
+  "com.google.android.webview": {
+    "name": "Android System WebView",
+    "description": "Renders web content inside other apps."
+  },
+  "com.nvidia.bluetooth.ps3usbpairer": {
+    "name": "PS3 Controller Pairing",
+    "description": "Pairs PlayStation 3 controllers over USB."
+  },
+  "com.nvidia.overscancomp": {
+    "name": "Overscan Compensation",
+    "description": "Adjusts the picture to fit TVs that crop the edges."
+  },
+  "com.nvidia.shield.remotelocator": {
+    "name": "Remote Locator",
+    "description": "Makes a SHIELD remote beep so you can find it."
+  },
+  "com.nvidia.shield.smbserver": {
+    "name": "SMB Server",
+    "description": "Shares SHIELD storage on your network as a Windows (SMB) share."
+  }
 }

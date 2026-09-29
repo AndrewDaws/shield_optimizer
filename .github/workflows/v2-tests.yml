@@ -142,6 +142,12 @@ jobs:
         working-directory: v2
         run: npm run test:update-notes-dialog
 
+      # The "rolling out" banner must agree with the backend's update check on
+      # what "newer" means — including that beta.10 beats beta.9.
+      - name: Version compare
+        working-directory: v2
+        run: npm run test:version-compare
+
       # The Remote box could be typed into but not pasted into (#91), which is
       # backwards for the long URLs and passwords it exists for.
       - name: Remote paste
@@ -164,6 +170,39 @@ jobs:
       - name: Playback and expert shell regressions
         working-directory: v2
         run: npm run test:playback-shell
+
+      # Every plan row must resolve its verdict, including rows the plan
+      # proposes no action on.
+      - name: Optimize safety on every row
+        working-directory: v2
+        run: npm run test:optimize-safety-all-rows
+
+      - name: Expert shell acknowledgement
+        working-directory: v2
+        run: npm run test:shell-acknowledge
+
+      - name: Report a bug
+        working-directory: v2
+        run: npm run test:report-bug
+
+      # Checks that icons sit on their label and that sibling controls in a
+      # row share one centre line.
+      - name: Icon and control alignment
+        working-directory: v2
+        run: npm run test:icon-alignment
+
+      - name: Files drag and drop
+        working-directory: v2
+        run: npm run test:files-drop
+
+      # App List, Optimize and Health must use one recommendation vocabulary.
+      - name: Recommendation labels
+        working-directory: v2
+        run: npm run test:recommendation-labels
+
+      - name: Launcher rows
+        working-directory: v2
+        run: npm run test:launcher-rows
 
   frontend-mobile:
     name: Mobile frontend type check

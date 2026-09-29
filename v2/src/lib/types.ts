@@ -4,6 +4,9 @@
 export type ConnectionType = "network" | "usb";
 export type DeviceStatus = "device" | "unauthorized" | "offline";
 export type DeviceType = "shield" | "google_tv" | "unknown";
+/// What the device said about being a TV. Distinct from DeviceType, whose
+/// "unknown" only means "no catalog match" — see engine/detection.rs.
+export type TvEvidence = "tv" | "not_tv" | "unknown";
 export type ActionMethod = "disable" | "uninstall";
 export type RiskTier = "safe" | "medium" | "high" | "advanced";
 
@@ -19,6 +22,9 @@ export interface DeviceProperties {
   board_platform: string;
   characteristics?: string;
   serial_number?: string;
+  /// `pm has-feature android.software.leanback`. null when the device gave no
+  /// readable answer — which is not the same as "no".
+  leanback?: boolean | null;
 }
 
 export interface Device {
@@ -27,6 +33,7 @@ export interface Device {
   name: string;
   model: string;
   device_type: DeviceType;
+  tv_evidence: TvEvidence;
   status: DeviceStatus;
   connection: ConnectionType;
   properties: DeviceProperties | null;
@@ -60,6 +67,10 @@ export interface AppUsage {
 export interface LauncherEntry {
   name: string;
   package: string;
+  /// The launcher's official page, for the "Get" link on a row that isn't
+  /// installed. Null for stock launchers and for HOME handlers found on the
+  /// device rather than in the catalog.
+  source_url: string | null;
 }
 
 export interface LauncherStatus {
@@ -175,6 +186,21 @@ export interface OtherPackage {
   enabled: boolean;
   /// Friendly name for recognized sideloads (Artemis, Overseerr, …); null otherwise.
   name?: string | null;
+  /// One line on what the app is, from known-names.json. Display only: the
+  /// verdict for these packages stays Unknown.
+  description?: string | null;
+}
+
+/// `set_home_any` — the Advanced picker. It never disables anything.
+export interface SetHomeAnyResult {
+  ok: boolean;
+  current_launcher: string | null;
+  /// null when the device can't answer (query-activities is Android 9+).
+  declares_home: boolean | null;
+  /// Stock still holds Home; only the separate "Disable stock launcher" step hands it over.
+  stock_holds_home: boolean;
+  message: string;
+  diagnostics: string[];
 }
 
 export interface SetLauncherResult {
@@ -203,6 +229,21 @@ export interface DiscoveredApk {
   name: string;
   size_bytes: number;
   package: string | null;
+}
+
+/// What an APK claims about itself, read before anything is installed.
+/// `abi_compatible: null` means we could not establish it — never render that
+/// as a mismatch.
+export interface ApkInspection {
+  path: string;
+  name: string;
+  size_bytes: number;
+  package: string | null;
+  abis: string[];
+  device_abis: string[];
+  abi_compatible: boolean | null;
+  /** null when the TV could not be asked — never read that as "no". */
+  already_installed: boolean | null;
 }
 
 export interface BackupApkResult {
@@ -306,6 +347,12 @@ export interface SnapshotApplyPlan {
   settings_to_write: Record<string, string>;
   settings_to_delete: string[];
   settings_already_set: string[];
+  /// Device values for every setting the snapshot mentions; a missing key is unset.
+  current_values: Record<string, string>;
+  /// Home app when the plan was computed; null means the device couldn't say.
+  current_launcher: string | null;
+  /// The snapshot's launcher when it isn't installed here, so it's skipped.
+  launcher_not_installed: string | null;
   cross_device_warning: string | null;
 }
 
@@ -365,7 +412,7 @@ export interface WriteResult {
   message: string;
 }
 
-export type DisplayScalePreset = "uhd_4k" | "fhd_1080p" | "reset";
+export type DisplayScalePreset = "uhd_4k" | "fhd_1080p" | "hd_720p" | "reset";
 
 export interface DisplayScaleResult {
   ok: boolean;
@@ -414,8 +461,4 @@ export function deviceTypeLabel(t: DeviceType): string {
     case "unknown":
       return "Unknown";
   }
-}
-
-export function riskBadgeClass(r: RiskTier): string {
-  return `risk-${r}`;
 }

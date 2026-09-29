@@ -5,8 +5,11 @@
 //! the resulting `AppListBundle` as an input.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-use crate::engine::AppListBundle;
+use serde::Deserialize;
+
+use crate::engine::{AppListBundle, LauncherCatalog};
 
 /// Embedded JSON for the three default app lists. Loaded at compile time so
 /// the binary works offline. Future versions will additionally check a
@@ -15,6 +18,7 @@ const COMMON_JSON: &str = include_str!("../../data/app-lists/common.json");
 const SHIELD_JSON: &str = include_str!("../../data/app-lists/shield.json");
 const GOOGLETV_JSON: &str = include_str!("../../data/app-lists/googletv.json");
 const KNOWN_NAMES_JSON: &str = include_str!("../../data/app-lists/known-names.json");
+const LAUNCHERS_JSON: &str = include_str!("../../data/app-lists/launchers.json");
 
 /// Load the bundled defaults. Returns a useful error string if any of the
 /// embedded JSON files fail to parse — that's a build-time mistake worth
@@ -33,10 +37,76 @@ pub fn load_embedded_app_lists() -> Result<AppListBundle, String> {
     })
 }
 
+/// Parse the embedded launcher catalog. Separate from the accessor so a test
+/// can assert on the shipped file's contents and report a parse error rather
+/// than a panic.
+pub fn load_embedded_launchers() -> Result<LauncherCatalog, String> {
+    serde_json::from_str(LAUNCHERS_JSON).map_err(|e| format!("launchers.json parse error: {e}"))
+}
+
+/// The launcher catalog, parsed once. Unlike the app lists it has no
+/// per-device variant, so every caller shares one copy rather than threading it
+/// through `AppState`. The JSON is embedded at compile time and its parse is
+/// asserted by the tests below, so the failure this expects on is a build-time
+/// mistake that cannot reach a shipped binary.
+pub fn launchers() -> &'static LauncherCatalog {
+    static CATALOG: LazyLock<LauncherCatalog> =
+        LazyLock::new(|| load_embedded_launchers().expect("embedded launchers.json must parse"));
+    &CATALOG
+}
+
+/// One entry of `known-names.json`: a friendly name and, optionally, a
+/// one-line description of what the app is. Display only — it never feeds a
+/// safety verdict, so a described package still reads Unknown until a
+/// reviewed list says otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "KnownNameEntry")]
+pub struct KnownName {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// The JSON accepts either a bare name string or `{ name, description }`, so
+/// entries without a description stay one line.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum KnownNameEntry {
+    Name(String),
+    Full {
+        name: String,
+        #[serde(default)]
+        description: Option<String>,
+    },
+}
+
+impl From<KnownNameEntry> for KnownName {
+    fn from(entry: KnownNameEntry) -> Self {
+        match entry {
+            KnownNameEntry::Name(name) => KnownName {
+                name,
+                description: None,
+            },
+            KnownNameEntry::Full { name, description } => KnownName {
+                name,
+                description: description.filter(|d| !d.trim().is_empty()),
+            },
+        }
+    }
+}
+
+impl From<String> for KnownName {
+    fn from(name: String) -> Self {
+        KnownName {
+            name,
+            description: None,
+        }
+    }
+}
+
 /// Load the curated package→friendly-name map for popular sideloads. Display
 /// only, so a parse error is non-fatal — log it and carry on with an empty map
 /// (rows just fall back to showing the package id).
-pub fn load_known_names() -> HashMap<String, String> {
+pub fn load_known_names() -> HashMap<String, KnownName> {
     match serde_json::from_str(KNOWN_NAMES_JSON) {
         Ok(map) => map,
         Err(e) => {
@@ -188,15 +258,113 @@ mod tests {
         }
     }
 
+    /// The shipped launcher catalog, not a fixture — the engine takes the
+    /// catalog as an argument now, so this file is the only place the real
+    /// entries are checked.
+    #[test]
+    fn embedded_launchers_parse_with_every_shipped_entry() {
+        let cat = load_embedded_launchers().expect("launchers.json must parse");
+        assert_eq!(cat.custom.len(), 7, "custom launcher count");
+        assert_eq!(cat.stock.len(), 4, "stock launcher count");
+
+        // Critical correctness: the Dispatch package name change from v1's
+        // launcher selection fix.
+        let dispatch = cat
+            .custom
+            .iter()
+            .find(|e| e.name == "Dispatch Launcher")
+            .expect("Dispatch entry");
+        assert_eq!(dispatch.package, "com.spauldhaliwal.dispatch");
+        assert!(cat
+            .custom
+            .iter()
+            .any(|e| e.package == "com.spocky.projengmenu"));
+        // GitHub #121.
+        assert!(
+            cat.custom.iter().any(|e| e.package == "com.klevico.monet"),
+            "Monet Launcher is missing"
+        );
+        assert!(cat
+            .home_handler_name("com.google.android.tungsten.setupwraith")
+            .is_some());
+    }
+
+    /// A custom launcher with no source is a row whose "Get" link cannot be
+    /// rendered — the only way to install one the device's Play Store lacks.
+    #[test]
+    fn every_custom_launcher_has_a_source_url_and_no_package_repeats() {
+        let cat = load_embedded_launchers().expect("parse");
+        let mut seen = std::collections::HashSet::new();
+        for entry in cat.custom.iter().chain(cat.stock.iter()) {
+            assert!(
+                !entry.name.trim().is_empty(),
+                "{} has no display name",
+                entry.package
+            );
+            assert!(
+                seen.insert(entry.package.as_str()),
+                "duplicate launcher package {:?}",
+                entry.package
+            );
+        }
+        for entry in &cat.custom {
+            let url = entry
+                .source_url
+                .as_deref()
+                .unwrap_or_else(|| panic!("{} has no source_url", entry.package));
+            assert!(
+                url.starts_with("https://"),
+                "{} source_url must be https: {url}",
+                entry.package
+            );
+        }
+    }
+
     #[test]
     fn known_names_map_parses_and_has_expected_entries() {
         let names = load_known_names();
         assert!(!names.is_empty(), "known-names map should not be empty");
         assert_eq!(
-            names.get("ca.devmesh.overseerrtv").map(String::as_str),
+            names.get("ca.devmesh.overseerrtv").map(|k| k.name.as_str()),
             Some("Overseerr (TV)"),
             "a known non-catalog sideload must map to its friendly name"
         );
+    }
+
+    #[test]
+    fn known_names_accept_a_bare_name_or_a_described_entry() {
+        let parsed: HashMap<String, KnownName> = serde_json::from_str(
+            r#"{
+                "a.bare": "Bare",
+                "a.full": { "name": "Full", "description": "Does a thing" },
+                "a.blank": { "name": "Blank", "description": "  " }
+            }"#,
+        )
+        .expect("both shapes parse");
+        assert_eq!(parsed["a.bare"].description, None);
+        assert_eq!(parsed["a.full"].name, "Full");
+        assert_eq!(
+            parsed["a.full"].description.as_deref(),
+            Some("Does a thing")
+        );
+        assert_eq!(parsed["a.blank"].description, None);
+    }
+
+    #[test]
+    fn shipped_known_names_are_display_only() {
+        // Descriptions say what an app is, never whether it is safe to remove.
+        for (pkg, known) in load_known_names() {
+            assert!(!known.name.trim().is_empty(), "{pkg} has an empty name");
+            if let Some(desc) = &known.description {
+                let lower = desc.to_lowercase();
+                for claim in ["safe to", "harmless", "bloat", "can be removed", "remove"] {
+                    assert!(
+                        !lower.contains(claim),
+                        "{pkg}'s description makes a removal claim ({claim:?}): {desc}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

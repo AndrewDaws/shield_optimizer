@@ -4,8 +4,8 @@
     "name": "Walmart App",
     "method": "uninstall",
     "risk": "safe",
-    "optimize_description": "Pre-installed Walmart app on Onn devices.",
-    "restore_description": "Restores Walmart app.",
+    "optimize_description": "The Walmart shopping app preinstalled on Onn devices. Nothing on the TV depends on it, so turning it off simply takes it out of the app list.",
+    "restore_description": "Restores the preinstalled Walmart app.",
     "default_optimize": true,
     "default_restore": false,
     "play_store": false
@@ -26,8 +26,8 @@
     "name": "Overscan Calibrator",
     "method": "disable",
     "risk": "medium",
-    "optimize_description": "Overscan calibration tool \u2014 rarely needed after initial setup.",
-    "restore_description": "Restores overscan calibrator.",
+    "optimize_description": "The setup tool that shrinks the picture when a TV crops the edges of the screen. Disabling only hides the tool — any calibration already applied stays — so keep it if your edges are still cut off.",
+    "restore_description": "Brings back the overscan calibration tool.",
     "default_optimize": false,
     "default_restore": false,
     "play_store": false
@@ -37,8 +37,8 @@
     "name": "Droidlogic Launcher Provider",
     "method": "disable",
     "risk": "medium",
-    "optimize_description": "Onn launcher data provider. Disable with launcher.",
-    "restore_description": "Restores Onn launcher provider.",
+    "optimize_description": "Feeds app rows and artwork to the stock launcher on Amlogic-based devices (Onn and many budget boxes). Disabling it while that launcher is still in use empties its home screen, so only turn it off once a custom launcher is running.",
+    "restore_description": "Restores the data feed the stock Amlogic launcher's home screen reads.",
     "default_optimize": false,
     "default_restore": true,
     "play_store": false
@@ -48,8 +48,8 @@
     "name": "Google TV Home",
     "method": "disable",
     "risk": "high",
-    "optimize_description": "Use Launcher Wizard to safely disable!",
-    "restore_description": "Restores Google TV home.",
+    "optimize_description": "The Google TV home screen. Disabling it with no other launcher active leaves the TV with nowhere to land on Home — install and set a replacement on the Launcher tab first.",
+    "restore_description": "Restores the Google TV home screen.",
     "default_optimize": false,
     "default_restore": true,
     "play_store": true
