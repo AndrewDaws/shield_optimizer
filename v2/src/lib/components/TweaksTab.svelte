@@ -44,6 +44,17 @@
   let dnsBusy = $state(false);
   let dnsMessage = $state("");
 
+  // Screensaver (Daydream). AOSP ships Basic Daydream on every Android TV
+  // build; a vendor's own ambient mode (Ambient Mode, Glance, …) is whatever
+  // was already there when the tab first loaded, so "Restore previous" can
+  // always put it back without the UI having to guess its component name.
+  const BASIC_DAYDREAM = "com.android.dreams.basic/com.android.dreams.basic.BasicDream";
+  let screensaverOriginal = $state<string | null>(null);
+  // Which serial `screensaverOriginal` was captured for — not reactive state,
+  // just bookkeeping so a device switch (same component instance, new
+  // `serial` prop) re-captures instead of reusing the previous TV's value.
+  let screensaverLoadedFor: string | null = null;
+
   async function loadTweaks() {
     const target = serial;
     tweaksLoading = true;
@@ -63,6 +74,14 @@
       assistantState = perm ?? null;
       privateDns = dns;
       dnsHostInput = dns?.hostname ?? "";
+      // Capture the screensaver's value only once per device — every later
+      // call for the same serial is a post-write refresh, and capturing
+      // again would overwrite the thing "Restore previous" exists to bring
+      // back.
+      if (screensaverLoadedFor !== target) {
+        screensaverOriginal = t.screensaver_components;
+        screensaverLoadedFor = target;
+      }
     } catch (e) {
       if (!alive || serial !== target) return;
       tweaksErr = String(e);
@@ -201,6 +220,11 @@
   }
   function longPressLabel(v: string | null): string {
     return v ? `${v} ms` : "Unset (default 400 ms)";
+  }
+  function screensaverLabel(v: string | null): string {
+    if (!v) return "None";
+    if (v === BASIC_DAYDREAM) return "Basic Daydream";
+    return v;
   }
   function animationsLabel(t: TweaksState): string {
     const w = t.window_animation_scale;
@@ -604,6 +628,39 @@
           disabled={tweaksActionBusy === "long_press_timeout"}
           onclick={() => writeTweak("secure", "long_press_timeout", "", "long_press_timeout")}
         >Reset</button>
+      </div>
+    </div>
+
+    <h3>Screensaver</h3>
+    <p class="muted small">
+      Which Daydream takes over when the TV sits idle. Basic Daydream is
+      AOSP's own screensaver, present on every Android TV build. "Restore
+      previous" puts back whatever was configured when this tab first loaded —
+      useful for undoing this without having to know a vendor screensaver's
+      component name (Glance's isn't guessed here).
+    </p>
+    <div class="tweak-row">
+      <div>
+        <div class="current">Current: <strong>{screensaverLabel(tweaks.screensaver_components)}</strong></div>
+        <div class="muted small mono">secure.screensaver_components = {tweaks.screensaver_components ?? "(unset)"}</div>
+      </div>
+      <div class="row-actions">
+        <button
+          class="small-action"
+          class:active={tweaks.screensaver_components === BASIC_DAYDREAM}
+          disabled={tweaksActionBusy === "screensaver_components"}
+          onclick={() => writeTweak("secure", "screensaver_components", BASIC_DAYDREAM, "screensaver_components")}
+        >Basic Daydream</button>
+        <button
+          class="small-action"
+          disabled={tweaksActionBusy === "screensaver_components"}
+          onclick={() => writeTweak("secure", "screensaver_components", screensaverOriginal ?? "", "screensaver_components")}
+        >Restore previous ({screensaverLabel(screensaverOriginal)})</button>
+        <button
+          class="small-action"
+          disabled={tweaksActionBusy === "screensaver_components"}
+          onclick={() => writeTweak("secure", "screensaver_components", "", "screensaver_components")}
+        >None</button>
       </div>
     </div>
 

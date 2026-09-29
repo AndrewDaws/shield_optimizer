@@ -53,5 +53,16 @@
     "default_optimize": false,
     "default_restore": true,
     "play_store": true
+  },
+  {
+    "package": "com.google.android.backdrop",
+    "name": "Ambient Mode",
+    "method": "disable",
+    "risk": "medium",
+    "optimize_description": "The Ambient Mode screensaver — the photo and artwork slideshow that takes over when the TV sits idle. Disabling stops that slideshow; the TV falls back to another installed screensaver, or none.",
+    "restore_description": "Brings back the Ambient Mode photo and artwork slideshow.",
+    "default_optimize": false,
+    "default_restore": false,
+    "play_store": true
   }
 ]
