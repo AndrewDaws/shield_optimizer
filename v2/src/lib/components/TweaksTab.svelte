@@ -263,6 +263,7 @@
   async function applyDisplayScaling(preset: DisplayScalePreset) {
     const label = preset === "uhd_4k" ? "4K (3839x2160, density 640)"
       : preset === "fhd_1080p" ? "1080p (1920x1080, density 320)"
+      : preset === "hd_720p" ? "720p (1280x720, density 213)"
       : "device defaults";
     if (!confirm(`Apply display scaling: ${label}? The screen will reflow.`)) return;
     displayScaleBusy = preset;
