@@ -663,9 +663,10 @@
     <div class="callout callout-warn optimize-note">
       <Icon name="warning" size={16} />
       <span>
-        No snapshot is written automatically. Save one on the Snapshot tab first
-        if you want a one-click way back — Restore mode only re-enables what the
-        catalog knows about.
+        No snapshot is written automatically, and a snapshot is not a full undo:
+        restoring one re-disables its apps and puts back its Home app and
+        settings, but never re-enables or reinstalls an app. Restore mode
+        re-enables only what the catalog knows about.
       </span>
     </div>
 

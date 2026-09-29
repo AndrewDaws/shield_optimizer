@@ -242,7 +242,8 @@ export interface ApkInspection {
   abis: string[];
   device_abis: string[];
   abi_compatible: boolean | null;
-  already_installed: boolean;
+  /** null when the TV could not be asked — never read that as "no". */
+  already_installed: boolean | null;
 }
 
 export interface BackupApkResult {

@@ -74,8 +74,9 @@ When you add a new section, put it at the top; older releases go below.
   Live Channels Provider reads Caution, as it does on the App List.
 - **Shell's Run button ignored the acknowledgement tick.** The tick was re-read from
   storage after every inventory load and, for a TV with no readable hardware id, never
-  stored at all. It is resolved once per device, falls back to the address as the key
-  when that is all we have, and a disabled Run now says why on hover.
+  stored at all. It is resolved once per device and holds for the visit; it is
+  remembered across visits only by hardware id, never by address, and a disabled Run
+  now says why on hover.
 - **Icons sat below their labels** in every button and heading. One global rule fixes
   all of them, and a new test measures every icon-bearing control on every screen.
 - **The Launcher tab listed ordinary TV apps as Home apps.** PBS Kids, YouTube, Plex and

@@ -405,15 +405,12 @@ fn is_mdns_instance(host: &str) -> bool {
 /// version. Sections cannot drift, and a read that produces nothing degrades
 /// to an empty value instead of corrupting its neighbours.
 async fn harvest_properties(adb: &dyn AdbDriver, serial: &str) -> Result<DeviceProperties, String> {
-    let cmd = batch_command(&PROPERTY_READS);
+    let cmd = property_batch_command();
 
     let out = adb
         .shell(serial, &cmd)
         .await
         .map_err(|e| format!("device profile: {e}"))?;
-    // A batch reports only its LAST command's exit code, and the last read is
-    // `pm has-feature`, which exits 1 to say "no" — that is an answer, not a
-    // failure. A phone answered every question here and was refused for it.
     // Sections that did not print degrade to empty values on their own, so
     // the only real failure is a shell that produced nothing at all.
     if out.stdout.trim().is_empty() {
@@ -427,6 +424,15 @@ async fn harvest_properties(adb: &dyn AdbDriver, serial: &str) -> Result<DeviceP
         &out.stdout,
         PROPERTY_READS.len(),
     )))
+}
+
+/// A batch reports only its LAST command's exit code, and the last read is
+/// `pm has-feature`, which exits 1 to say "no" — an answer, not a failure. The
+/// desktop driver turns any nonzero exit into an error before stdout is
+/// looked at, so a phone that answered every question was refused. The
+/// trailing `true` makes the batch's status say only that the shell ran.
+fn property_batch_command() -> String {
+    format!("{}; true", batch_command(&PROPERTY_READS))
 }
 
 /// The property reads, in the order `properties_from_sections` consumes them.
@@ -641,6 +647,26 @@ mod tests {
         assert_eq!(props.leanback, None);
         let yes = vec!["true".to_string(); PROPERTY_READS.len()];
         assert_eq!(properties_from_sections(&yes).leanback, Some(true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_property_batch_exits_zero_when_the_last_read_says_no() {
+        // Stand-ins that behave like the real reads: `pm has-feature` prints
+        // `false` and exits 1. The real driver rejects any nonzero status, so
+        // the batch as a whole must not carry that 1.
+        let script = format!(
+            "settings() {{ echo x; }}; getprop() {{ echo x; }}; pm() {{ echo false; return 1; }}; {}",
+            property_batch_command()
+        );
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{:?}", out.status);
+        let sections = split_batch(&String::from_utf8_lossy(&out.stdout), PROPERTY_READS.len());
+        assert_eq!(properties_from_sections(&sections).leanback, Some(false));
     }
 
     #[tokio::test]

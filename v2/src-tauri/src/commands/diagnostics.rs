@@ -199,22 +199,14 @@ fn log_tail(dir: &Path, lines: usize) -> Vec<String> {
         .collect()
 }
 
-/// Parse `cmd package query-activities` output down to the component names it
-/// reported. The same shape the launcher tab reads; here we only need the
-/// names, so anything that does not look like `pkg/activity` is dropped.
+/// Parse `HOME_HANDLER_QUERY`'s `cmd package query-activities` output down to
+/// the packages it reported. Reuses the launcher tab's own parser rather than
+/// a second one: Android's ResolveInfo dump exposes the class under `name=`
+/// and the package separately under `packageName=` — `name=` has no slash, so
+/// treating it as a flattened `pkg/activity` component silently dropped every
+/// real handler.
 fn home_handler_components(stdout: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for line in stdout.lines() {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix("name=") else {
-            continue;
-        };
-        let name = rest.trim().to_string();
-        if name.contains('/') && !out.contains(&name) {
-            out.push(name);
-        }
-    }
-    out
+    launcher::parse_home_handler_packages(stdout)
 }
 
 /// `collect_diagnostics` — the text a user pastes into a bug report.
@@ -240,6 +232,7 @@ pub async fn collect_diagnostics(
     // Resolve the device first so a failure there is reported as "no device
     // section" rather than failing the whole bundle — the host half is still
     // worth having when the device is the thing that is broken.
+    let mut unreadable: Option<String> = None;
     let device = match serial.as_deref() {
         None => None,
         Some(serial) => match devices::device_profile_impl(state.inner(), serial).await {
@@ -254,6 +247,7 @@ pub async fn collect_diagnostics(
             }
             Err(e) => {
                 tracing::warn!(serial, error = %e, "diagnostics: device unavailable");
+                unreadable = Some(e);
                 None
             }
         },
@@ -275,6 +269,10 @@ pub async fn collect_diagnostics(
             device_type: device.device_type,
             home_handlers: handlers,
         }),
+        unreadable_device: match (serial.as_deref(), unreadable.as_deref()) {
+            (Some(serial), Some(error)) => Some((serial, error)),
+            _ => None,
+        },
         log_tail: &tail,
     }))
 }
@@ -284,22 +282,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn home_handlers_are_read_as_component_names_only() {
-        let stdout = "\
-Activity #0:
-  priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=false
-  name=com.google.android.tvlauncher/.MainActivity
-Activity #1:
-  name=com.spocky.projengmenu/.MainActivity
-  name=com.spocky.projengmenu/.MainActivity
-  name=notacomponent
-";
+    fn home_handlers_are_read_from_the_real_resolveinfo_shape() {
+        // `name=` is the bare class (no slash) and `packageName=` is the
+        // separate field that actually names the package — the shape Android
+        // emits, not a flattened `pkg/activity` component.
+        let stdout = "Activity #0:\n  \
+                      Priority=0 PreferredOrder=0 Match=0x108000 Specific=null\n  \
+                      ActivityInfo:\n    \
+                      name=com.spocky.projengmenu.ui.home.MainActivity\n    \
+                      packageName=com.spocky.projengmenu\n    \
+                      labelRes=0x7f0e0000\n\n\
+                      Activity #1:\n  \
+                      ActivityInfo:\n    \
+                      name=com.google.android.tvlauncher.MainActivity\n    \
+                      packageName=com.google.android.tvlauncher\n";
 
         assert_eq!(
             home_handler_components(stdout),
             vec![
-                "com.google.android.tvlauncher/.MainActivity".to_string(),
-                "com.spocky.projengmenu/.MainActivity".to_string(),
+                "com.spocky.projengmenu".to_string(),
+                "com.google.android.tvlauncher".to_string(),
             ]
         );
     }

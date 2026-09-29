@@ -87,10 +87,18 @@ fn read_apk_package_id(apk_path: &std::path::Path) -> Option<String> {
     let doc = axmldecoder::parse(&bytes).ok()?;
     if let Some(axmldecoder::Node::Element(root)) = doc.get_root() {
         if root.get_tag() == "manifest" {
-            return root.get_attributes().get("package").cloned();
+            // The manifest is attacker-controlled, and this id is later
+            // interpolated into a device-side shell command (`pm list
+            // packages <id>`) before the user has confirmed anything. An id
+            // that is not a well-formed package name is treated as unreadable.
+            return trusted_package_id(root.get_attributes().get("package").cloned());
         }
     }
     None
+}
+
+fn trusted_package_id(raw: Option<String>) -> Option<String> {
+    raw.filter(|pkg| shield_optimizer_core::engine::is_valid_package_name(pkg))
 }
 
 /// What an APK claims about itself, read locally before anything is installed.
@@ -115,7 +123,8 @@ pub struct ApkInspection {
     /// the UI must not claim a mismatch it did not establish.
     pub abi_compatible: Option<bool>,
     /// True when the device already reports this package installed.
-    pub already_installed: bool,
+    /// `None` when the TV could not answer; unreadable is not "absent".
+    pub already_installed: Option<bool>,
 }
 
 /// Read the `lib/<abi>/` prefixes an APK ships native code for.
@@ -196,13 +205,17 @@ pub async fn inspect_apk(
 
     let already_installed = match &package {
         Some(pkg) => match adb.shell(&serial, &format!("pm list packages {pkg}")).await {
-            Ok(out) => out
-                .stdout
-                .lines()
-                .any(|line| line.trim() == format!("package:{pkg}")),
-            Err(_) => false,
+            // A pm "Failure"/"Exception" can still exit zero; that is an
+            // unread answer, not proof the package is absent.
+            Ok(out) if out.shell_reported_failure() => None,
+            Ok(out) => Some(
+                out.stdout
+                    .lines()
+                    .any(|line| line.trim() == format!("package:{pkg}")),
+            ),
+            Err(_) => None,
         },
-        None => false,
+        None => None,
     };
 
     Ok(ApkInspection {
@@ -308,7 +321,22 @@ pub(crate) fn decode_install_error(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_install_error;
+    use super::{decode_install_error, trusted_package_id};
+
+    #[test]
+    fn a_manifest_package_id_with_shell_syntax_is_treated_as_unreadable() {
+        let hostile = "com.example.app; pm disable-user --user 0 com.android.systemui";
+        assert_eq!(trusted_package_id(Some(hostile.to_string())), None);
+        assert_eq!(
+            trusted_package_id(Some("com.example.app$(reboot)".into())),
+            None
+        );
+        assert_eq!(
+            trusted_package_id(Some("org.smarttube.stable".into())),
+            Some("org.smarttube.stable".to_string())
+        );
+        assert_eq!(trusted_package_id(None), None);
+    }
 
     #[test]
     fn decodes_common_install_failures() {

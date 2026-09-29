@@ -71,7 +71,9 @@
           dragging = false;
           return;
         }
-        if (event.payload.type === "over") {
+        // `enter` carries paths too; only a real drop may stage anything, or
+        // hovering a file over the window would query the TV.
+        if (event.payload.type === "enter" || event.payload.type === "over") {
           dragging = true;
           return;
         }
@@ -271,7 +273,7 @@
         <dt>This TV</dt>
         <dd class="mono">{staged.device_abis.length ? staged.device_abis.join(", ") : "not reported"}</dd>
         <dt>Already installed</dt>
-        <dd class="mono">{staged.already_installed ? "yes — this would replace it" : "no"}</dd>
+        <dd class="mono">{staged.already_installed === true ? "yes — this would replace it" : staged.already_installed === false ? "no" : "unknown — couldn't ask the TV"}</dd>
       </dl>
       <!-- `abi_compatible` is null when we could not read one side. That is not
            a mismatch and must not be drawn as one. -->
@@ -303,7 +305,7 @@
           onclick={() => { const path = staged?.path; staged = null; if (path) void installApkPath(path); }}
           disabled={sideloadBusy !== null}
         >
-          {staged.already_installed ? "Reinstall" : "Install"}{staged.package ? ` ${staged.package}` : ""}
+          {staged.already_installed === true ? "Reinstall" : "Install"}{staged.package ? ` ${staged.package}` : ""}
         </button>
         <button onclick={() => (staged = null)} disabled={sideloadBusy !== null}>Cancel</button>
       </div>
@@ -367,7 +369,9 @@
             >
               {sideloadBusy === apk.path
                 ? "Installing…"
-                : apk.package && apkInstallState[apk.package]
+                : apk.package &&
+                    (apkInstallState[apk.package] === "enabled" ||
+                      apkInstallState[apk.package] === "disabled")
                   ? "Reinstall"
                   : "Install"}
             </button>

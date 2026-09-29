@@ -87,7 +87,15 @@
   /// so the list works as a shrinking worklist.
   let hideDecided = $state(false);
 
-  const hardwareId = $derived(device?.properties?.serial_number ?? null);
+  /// A placeholder serial (`unknown`, blank) identifies nothing: two such TVs
+  /// would share Keep choices and expert-shell consent. The backend treats
+  /// the same values as absent.
+  function realHardwareId(raw: string | null | undefined): string | null {
+    const id = raw?.trim() ?? "";
+    if (!id || id.toLowerCase() === "unknown") return null;
+    return id;
+  }
+  const hardwareId = $derived(realHardwareId(device?.properties?.serial_number));
 
   function toggleKept(pkg: string) {
     keptPackages = new Set(setPackageKept(hardwareId, pkg, !keptPackages.has(pkg)));
@@ -279,19 +287,21 @@
   // tells the tab to drop that stale plan and reload fresh next run.
   let optimizeResetToken = $state(0);
   let mediaResetToken = $state(0);
-  /// Remembered per TV, by hardware id where we have one. Resolved once per
-  /// identity and written back on every change — never re-read over live
-  /// state. It used to be re-read inside `loadApps`, after an await, so the
-  /// tick vanished the moment the App List or Health refreshed underneath it:
-  /// with no hardware id yet resolved `getShellAcknowledged` answered false and
-  /// overwrote a consent the user had just given.
+  /// Remembered per TV by hardware id, and only in this page's state for a TV
+  /// without one. Resolved once per identity and written back on every change —
+  /// never re-read over live state. It used to be re-read inside `loadApps`,
+  /// after an await, so the tick vanished the moment the App List or Health
+  /// refreshed underneath it.
   let shellAcknowledged = $state(false);
   let shellAckResolvedFor: string | null = null;
   $effect(() => {
     const identity = hardwareId ?? serial;
     if (identity === shellAckResolvedFor) return;
     shellAckResolvedFor = identity;
-    shellAcknowledged = getShellAcknowledged(hardwareId, serial);
+    shellAcknowledged = getShellAcknowledged(hardwareId);
+    // Optimize reads Keep choices too, and can be opened before the App List
+    // or Health ever load; resolve them here so a kept app is never armed.
+    keptPackages = getKeptPackages(hardwareId);
   });
 
   async function loadDevice() {
@@ -1606,7 +1616,7 @@
     }
     if (activeTab === "launcher" && !launchersLoaded && !launcherLoading) loadLauncher();
     if (activeTab === "apps" && !appsLoaded && !appsLoading) loadApps();
-    // Health reads it too, for the "every change is reversible" callout.
+    // Health reads it too, for the snapshot callout.
     if ((activeTab === "snapshot" || activeTab === "health") && !snapshotsLoaded) loadSnapshots();
   });
 
@@ -2257,7 +2267,7 @@
                     title={safetyReason(lookup)}
                   >
                     {#if suggestion.kind === "recommendation"}
-                      {@const kept = keptPackages.has(m.package) && !["act", "review", "restore"].includes(suggestion.rec.kind)}
+                      {@const kept = keptPackages.has(m.package) && suggestion.rec.kind !== "restore"}
                       <span class={`suggestion suggestion--${kept ? "keep" : suggestion.rec.kind}`}>{kept ? "Kept" : suggestion.rec.label}</span>
                     {:else if suggestion.kind === "process"}
                       <span class="suggestion suggestion--keep">Not an app</span>
@@ -2286,7 +2296,7 @@
         <div class="callout callout-ok">
           <Icon name="check_circle" size={16} />
           <span>
-            Snapshot saved {snapTimestamp(newest.saved_at)} — every change is reversible.
+            Snapshot saved {snapTimestamp(newest.saved_at)}. Restoring it re-disables its apps and puts back its Home app and settings; it can't re-enable or reinstall anything.
           </span>
           <button class="callout-link" onclick={() => (activeTab = "snapshot")}>
             Open snapshots
@@ -2662,6 +2672,7 @@
               {@const state = appStates[a.package] ?? null}
               {@const safety = packageSafety[a.package]}
               {@const rec = recommendation(a, state, safety)}
+              {@const kept = keptPackages.has(a.package) && rec.kind !== "restore"}
               {@const canRemove = (state === "enabled" || state === "disabled") && safety?.status === "ready" && !isBlocked(safety.verdict)}
               <AppRow
                 name={a.name}
@@ -2675,7 +2686,7 @@
                 safety={safety?.status === "ready" ? safety.verdict : null}
                 safetyStatus={safety?.status ?? "unavailable"}
                 safetyUnavailableReason={safety?.status === "unavailable" ? safety.reason : undefined}
-                rowClass={rec.kind === "review" ? "review-flag" : undefined}
+                rowClass={rec.kind === "review" && !kept ? "review-flag" : undefined}
                 detailOpen={expandedSafety === a.package}
                 onToggleDetail={() =>
                   (expandedSafety = expandedSafety === a.package ? null : a.package)}
@@ -2684,7 +2695,17 @@
                 <td class="rec-cell controls-start">
                   <div class="actions-cell">
                     <div class="row-verbs">
-                  {#if rec.kind === "act"}
+                  {#if kept}
+                    <!-- The user's own decision, shown exactly like "already
+                         disabled": grey, because a decided row should recede.
+                         Never teal or lime — those mean verdict and action. -->
+                    <span class="muted small done" data-rec="Kept"><Icon name="check" size={14} /> Kept</span>
+                    <button
+                      class="small-action subtle change-keep"
+                      onclick={() => toggleKept(a.package)}
+                      data-tip="Undo keeping this app"
+                    >Change</button>
+                  {:else if rec.kind === "act"}
                     <button
                       class="small-action recommended"
                       class:danger={rec.action === "uninstall"}
@@ -2716,16 +2737,6 @@
                     >
                       {appActionBusy === a.package ? "…" : rec.label}
                     </button>
-                  {:else if keptPackages.has(a.package)}
-                    <!-- The user's own decision, shown exactly like "already
-                         disabled": grey, because a decided row should recede.
-                         Never teal or lime — those mean verdict and action. -->
-                    <span class="muted small done" data-rec="Kept"><Icon name="check" size={14} /> Kept</span>
-                    <button
-                      class="small-action subtle change-keep"
-                      onclick={() => toggleKept(a.package)}
-                      data-tip="Undo keeping this app"
-                    >Change</button>
                   {:else if rec.kind === "done"}
                     <span class="muted small done" data-rec={rec.label}><Icon name="check" size={14} /> {rec.label}</span>
                   {:else if rec.kind === "unavailable"}
@@ -3200,7 +3211,7 @@
         acknowledged={shellAcknowledged}
         onacknowledge={(next) => {
           shellAcknowledged = next;
-          setShellAcknowledged(hardwareId, serial, next);
+          setShellAcknowledged(hardwareId, next);
         }}
         onexecuted={shellExecuted}
       />

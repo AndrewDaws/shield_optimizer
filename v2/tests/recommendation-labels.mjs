@@ -103,6 +103,24 @@ async function exercise({ browser, base }) {
     `Health suggests ${JSON.stringify(healthSuggestion)} but the App List recommends ${JSON.stringify(appRec)} for ${HEALTH_APP}`,
   );
 
+  // Keep is the user's decision and outranks the recommendation: the row stops
+  // offering its Disable, and Health says Kept too. It used to hide only the
+  // Keep button and leave the recommendation armed on both screens.
+  await appRow.getByRole("button", { name: "Keep", exact: true }).click();
+  await appRow.locator('[data-rec="Kept"]').waitFor();
+  const keptRecs = await appRow.locator("[data-rec]").evaluateAll((els) => els.map((e) => e.dataset.rec));
+  assert.deepEqual(keptRecs, ["Kept"], `a kept row shows only Kept: ${JSON.stringify(keptRecs)}`);
+  assert.equal(
+    await appRow.getByRole("button", { name: appRec, exact: true }).count(),
+    0,
+    `a kept row no longer offers ${appRec}`,
+  );
+  await page.getByRole("tab", { name: "Health" }).click();
+  assert.equal((await healthCell.innerText()).trim(), "Kept", "Health reads Kept for a kept app");
+  await healthRow.click();
+  await appRow.getByRole("button", { name: "Change", exact: true }).click();
+  await appRow.locator(`[data-rec="${appRec}"]`).waitFor();
+
   // Now the whole App List, unfiltered.
   await page.locator(".app-search").fill("");
   await waitResolved(page, "#tabpanel-apps td.verdict-cell");

@@ -23,12 +23,16 @@ export type NoteBlock =
   | { kind: "item"; spans: NoteSpan[] };
 
 /// The release workflow appends install/first-run boilerplate (Gatekeeper,
-/// SmartScreen, chmod) after a `---` rule. It is useful on the releases page
-/// and pointless inside an app the reader has already launched.
+/// SmartScreen, chmod) under a `### First-run warnings` heading, sometimes
+/// preceded by a `---` rule from the changelog. It is useful on the releases
+/// page and pointless inside an app the reader has already launched.
 export function stripTrailingBoilerplate(markdown: string): string {
   const lines = markdown.split("\n");
-  const rule = lines.findIndex((line) => /^\s*---\s*$/.test(line));
-  return rule === -1 ? markdown : lines.slice(0, rule).join("\n");
+  const cut = lines.findIndex(
+    (line) =>
+      /^\s*---\s*$/.test(line) || /^\s*#{1,6}\s+First-run warnings\s*$/.test(line),
+  );
+  return cut === -1 ? markdown : lines.slice(0, cut).join("\n");
 }
 
 function pushSpan(spans: NoteSpan[], span: NoteSpan): void {

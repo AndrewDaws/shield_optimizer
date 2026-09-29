@@ -392,6 +392,17 @@ pub async fn disable_stock_launcher_impl(
             diagnostics,
         ));
     }
+    // Settings declares HOME only as a recovery hatch. Handing Home to it and
+    // disabling stock would "verify" and leave the TV with no home screen.
+    if crate::engine::launcher::safe_home_handlers().contains(&target) {
+        return Ok(refuse(
+            None,
+            format!(
+                "{target} is the Settings recovery fallback, not a launcher; pick a real launcher to take over Home."
+            ),
+            diagnostics,
+        ));
+    }
 
     let adb = state.adb_snapshot().await;
     let handlers = match adb.shell(serial, HOME_HANDLER_QUERY).await {
@@ -1342,7 +1353,13 @@ async fn discover_home_activity(
 /// Each Activity block exposes one packageName line. Strict regex (real
 /// package names start with a letter and only contain `[a-zA-Z0-9_.]`)
 /// avoids matching anything that happens to contain the string.
-pub(crate) fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
+///
+/// Public so desktop's diagnostics bundle (`commands::diagnostics` in the
+/// `shield-optimizer-v2` crate) reuses this parser instead of assuming
+/// `HOME_HANDLER_QUERY`'s `name=` field is a flattened `pkg/activity`
+/// component — it isn't; `name=` is the bare class and `packageName=` is the
+/// separate field this parses.
+pub fn parse_home_handler_packages(stdout: &str) -> Vec<String> {
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"^\s*packageName=([a-zA-Z][a-zA-Z0-9_.]+)\s*$").unwrap()
     });
@@ -2518,6 +2535,17 @@ mod tests {
             !calls.iter().any(|c| c.contains("disable-user")),
             "{calls:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn disable_stock_refuses_a_settings_recovery_handler() {
+        for target in crate::engine::launcher::safe_home_handlers() {
+            let state = state_with(MockAdb::default());
+            let res = disable_stock_launcher_impl(&state, "serial", target, &Progress::Silent)
+                .await
+                .unwrap();
+            assert!(!res.ok, "{target} must never take over Home");
+        }
     }
 
     #[tokio::test]
