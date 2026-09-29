@@ -40,6 +40,11 @@ pub struct TweaksState {
     /// Daydream (Android's screensaver), e.g. AOSP's Basic Daydream or a
     /// vendor ambient mode. `None` when no screensaver is configured.
     pub screensaver_components: Option<String>,
+    /// `secure.screensaver_enabled` — whether Daydream runs at all. Clearing
+    /// `screensaver_components` alone can still leave a framework/vendor
+    /// default screensaver running while this stays on, so "None" has to
+    /// turn this off too, not just blank the component.
+    pub screensaver_enabled: Option<String>,
 }
 
 /// AOSP's built-in "Basic Daydream" — a component every Android TV build
@@ -73,6 +78,7 @@ async fn get_tweaks_for(
         "settings get global encoded_surround_output",
         "settings get global encoded_surround_output_enabled_formats",
         "settings get secure screensaver_components",
+        "settings get secure screensaver_enabled",
     ];
     let cmd = crate::adb::checked_batch_command(&commands);
     let out = adb
@@ -98,6 +104,7 @@ async fn get_tweaks_for(
         encoded_surround_output: values.next().flatten(),
         encoded_surround_output_enabled_formats: values.next().flatten(),
         screensaver_components: values.next().flatten(),
+        screensaver_enabled: values.next().flatten(),
     })
 }
 
@@ -460,6 +467,7 @@ mod tests {
             "3",
             "5,6,99",
             "com.android.dreams.basic/com.android.dreams.basic.BasicDream",
+            "1",
         ]);
         let adb = MockAdb::default().on_shell("settings get", &output);
         let tweaks = get_tweaks_for(&adb, "serial").await.unwrap();
@@ -478,13 +486,14 @@ mod tests {
             tweaks.screensaver_components.as_deref(),
             Some("com.android.dreams.basic/com.android.dreams.basic.BasicDream")
         );
+        assert_eq!(tweaks.screensaver_enabled.as_deref(), Some("1"));
     }
 
     #[tokio::test]
     async fn tweaks_reject_failed_or_truncated_readback() {
-        let output = settings_output(&["null"; 13]);
+        let output = settings_output(&["null"; 14]);
         let failed = output.replacen(&format!("{BATCH_STATUS}0"), &format!("{BATCH_STATUS}1"), 1);
-        let truncated = settings_output(&["null"; 12]);
+        let truncated = settings_output(&["null"; 13]);
         for output in [failed, truncated, "null\n".into()] {
             let adb = MockAdb::default().on_shell("settings get", &output);
             assert!(get_tweaks_for(&adb, "serial").await.is_err());

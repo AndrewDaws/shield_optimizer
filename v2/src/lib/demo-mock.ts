@@ -317,6 +317,7 @@ const tweaks: TweaksState = {
   encoded_surround_output: "3",
   encoded_surround_output_enabled_formats: "5,6,18,14,7,8",
   screensaver_components: "com.google.android.backdrop/.Backdrop",
+  screensaver_enabled: "1",
 };
 
 const snapshots: SnapshotFile[] = [

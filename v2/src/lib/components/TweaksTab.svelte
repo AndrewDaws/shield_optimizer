@@ -50,6 +50,7 @@
   // always put it back without the UI having to guess its component name.
   const BASIC_DAYDREAM = "com.android.dreams.basic/com.android.dreams.basic.BasicDream";
   let screensaverOriginal = $state<string | null>(null);
+  let screensaverEnabledOriginal = $state<string | null>(null);
   // Which serial `screensaverOriginal` was captured for — not reactive state,
   // just bookkeeping so a device switch (same component instance, new
   // `serial` prop) re-captures instead of reusing the previous TV's value.
@@ -80,6 +81,7 @@
       // back.
       if (screensaverLoadedFor !== target) {
         screensaverOriginal = t.screensaver_components;
+        screensaverEnabledOriginal = t.screensaver_enabled;
         screensaverLoadedFor = target;
       }
     } catch (e) {
@@ -221,7 +223,8 @@
   function longPressLabel(v: string | null): string {
     return v ? `${v} ms` : "Unset (default 400 ms)";
   }
-  function screensaverLabel(v: string | null): string {
+  function screensaverLabel(v: string | null, enabled: string | null = "1"): string {
+    if (enabled === "0") return "Off";
     if (!v) return "None";
     if (v === BASIC_DAYDREAM) return "Basic Daydream";
     return v;
@@ -252,6 +255,36 @@
     } catch (e) {
       if (!alive || serial !== target) return;
       tweaksActionMessage = `${key}: ${e}`;
+    } finally {
+      if (alive && serial === target) {
+        onSettingsChanged?.();
+        await loadTweaks();
+        tweaksActionBusy = null;
+      }
+    }
+  }
+
+  // Screensaver is two settings acting as one control: screensaver_enabled
+  // gates whether Daydream runs at all, and screensaver_components picks
+  // which one. Clearing the component alone can leave a framework/vendor
+  // default Daydream running while `enabled` stays on, so "None" has to turn
+  // that off too — not just blank the component.
+  async function writeScreensaver(component: string, enabled: string) {
+    if (tweaksActionBusy !== null) return;
+    const target = serial;
+    tweaksActionBusy = "screensaver_components";
+    tweaksActionMessage = "";
+    try {
+      const enabledResult = await api.writeSetting(target, "secure", "screensaver_enabled", enabled);
+      if (!alive || serial !== target) return;
+      const componentResult = await api.writeSetting(target, "secure", "screensaver_components", component);
+      if (!alive || serial !== target) return;
+      tweaksActionMessage =
+        `screensaver_enabled → ${enabled || "(default)"}: ${enabledResult.message.trim()}; ` +
+        `screensaver_components → ${component || "(default)"}: ${componentResult.message.trim()}`;
+    } catch (e) {
+      if (!alive || serial !== target) return;
+      tweaksActionMessage = `screensaver: ${e}`;
     } finally {
       if (alive && serial === target) {
         onSettingsChanged?.();
@@ -642,25 +675,26 @@
     </p>
     <div class="tweak-row">
       <div>
-        <div class="current">Current: <strong>{screensaverLabel(tweaks.screensaver_components)}</strong></div>
-        <div class="muted small mono">secure.screensaver_components = {tweaks.screensaver_components ?? "(unset)"}</div>
+        <div class="current">Current: <strong>{screensaverLabel(tweaks.screensaver_components, tweaks.screensaver_enabled)}</strong></div>
+        <div class="muted small mono">secure.screensaver_components = {tweaks.screensaver_components ?? "(unset)"}, secure.screensaver_enabled = {tweaks.screensaver_enabled ?? "(unset)"}</div>
       </div>
       <div class="row-actions">
         <button
           class="small-action"
-          class:active={tweaks.screensaver_components === BASIC_DAYDREAM}
+          class:active={tweaks.screensaver_enabled !== "0" && tweaks.screensaver_components === BASIC_DAYDREAM}
           disabled={tweaksActionBusy === "screensaver_components"}
-          onclick={() => writeTweak("secure", "screensaver_components", BASIC_DAYDREAM, "screensaver_components")}
+          onclick={() => writeScreensaver(BASIC_DAYDREAM, "1")}
         >Basic Daydream</button>
         <button
           class="small-action"
           disabled={tweaksActionBusy === "screensaver_components"}
-          onclick={() => writeTweak("secure", "screensaver_components", screensaverOriginal ?? "", "screensaver_components")}
-        >Restore previous ({screensaverLabel(screensaverOriginal)})</button>
+          onclick={() => writeScreensaver(screensaverOriginal ?? "", screensaverEnabledOriginal ?? "1")}
+        >Restore previous ({screensaverLabel(screensaverOriginal, screensaverEnabledOriginal)})</button>
         <button
           class="small-action"
+          class:active={tweaks.screensaver_enabled === "0"}
           disabled={tweaksActionBusy === "screensaver_components"}
-          onclick={() => writeTweak("secure", "screensaver_components", "", "screensaver_components")}
+          onclick={() => writeScreensaver("", "0")}
         >None</button>
       </div>
     </div>

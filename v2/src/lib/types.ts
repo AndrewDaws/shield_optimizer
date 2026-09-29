@@ -406,6 +406,10 @@ export interface TweaksState {
   /// secure.screensaver_components — the active Daydream's ComponentName, or
   /// null when no screensaver is configured.
   screensaver_components: string | null;
+  /// secure.screensaver_enabled — whether Daydream runs at all. A cleared
+  /// component with this still on can fall back to a framework/vendor
+  /// default, so "None" has to turn this off too.
+  screensaver_enabled: string | null;
 }
 
 export type SettingNamespace = "global" | "secure" | "system";
