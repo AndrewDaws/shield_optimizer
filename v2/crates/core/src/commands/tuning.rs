@@ -45,7 +45,8 @@ pub struct TweaksState {
 /// AOSP's built-in "Basic Daydream" — a component every Android TV build
 /// ships, unlike vendor screensavers (Ambient Mode, Glance) which vary by
 /// device and aren't guessed here.
-pub const BASIC_DAYDREAM_COMPONENT: &str = "com.android.dreams.basic/com.android.dreams.basic.BasicDream";
+pub const BASIC_DAYDREAM_COMPONENT: &str =
+    "com.android.dreams.basic/com.android.dreams.basic.BasicDream";
 
 /// `get_tweaks` — batch-fetch all Tweaks-relevant settings in one shell call.
 #[tauri::command]
@@ -446,7 +447,18 @@ mod tests {
     #[tokio::test]
     async fn tweaks_preserve_empty_values_without_shifting_audio_settings() {
         let output = settings_output(&[
-            "", "1", "0", "1", "null", "400", "0.5", "1", "1", "null", "3", "5,6,99",
+            "",
+            "1",
+            "0",
+            "1",
+            "null",
+            "400",
+            "0.5",
+            "1",
+            "1",
+            "null",
+            "3",
+            "5,6,99",
             "com.android.dreams.basic/com.android.dreams.basic.BasicDream",
         ]);
         let adb = MockAdb::default().on_shell("settings get", &output);

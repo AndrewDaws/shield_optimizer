@@ -1190,7 +1190,11 @@ async fn role_names_target(
                 .any(|h| h == package);
             diagnostics.push(format!(
                 "cmd role get-role-holders HOME -> {}",
-                if holders.is_empty() { "(none)" } else { holders }
+                if holders.is_empty() {
+                    "(none)"
+                } else {
+                    holders
+                }
             ));
             matched
         }
@@ -2235,7 +2239,7 @@ mod tests {
                         "com.google.android.tvlauncher/.Home", // fast-path quick check
                         "com.google.android.tvlauncher/.Home", // verify poll 1: still stock
                         "com.google.android.tungsten.setupwraith/.Wraith", // verify poll 2: transient
-                        "com.example.launcher/.MainActivity", // verify poll 3: landed
+                        "com.example.launcher/.MainActivity",              // verify poll 3: landed
                     ],
                 );
             let log = mock.shell_log();
