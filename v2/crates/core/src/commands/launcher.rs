@@ -389,6 +389,17 @@ pub async fn disable_stock_launcher_impl(
             diagnostics,
         ));
     }
+    // Settings declares HOME only as a recovery hatch. Handing Home to it and
+    // disabling stock would "verify" and leave the TV with no home screen.
+    if crate::engine::launcher::safe_home_handlers().contains(&target) {
+        return Ok(refuse(
+            None,
+            format!(
+                "{target} is the Settings recovery fallback, not a launcher; pick a real launcher to take over Home."
+            ),
+            diagnostics,
+        ));
+    }
 
     let adb = state.adb_snapshot().await;
     let handlers = match adb.shell(serial, HOME_HANDLER_QUERY).await {
@@ -2239,6 +2250,17 @@ mod tests {
             !calls.iter().any(|c| c.contains("disable-user")),
             "{calls:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn disable_stock_refuses_a_settings_recovery_handler() {
+        for target in crate::engine::launcher::safe_home_handlers() {
+            let state = state_with(MockAdb::default());
+            let res = disable_stock_launcher_impl(&state, "serial", target, &Progress::Silent)
+                .await
+                .unwrap();
+            assert!(!res.ok, "{target} must never take over Home");
+        }
     }
 
     #[tokio::test]
