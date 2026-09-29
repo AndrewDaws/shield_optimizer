@@ -12,6 +12,6 @@
 <plist version="1.0">
   <dict>
     <key>NSRemovableVolumesUsageDescription</key>
-    <string>Shield Optimizer reads a removable volume only when you pick a folder of APKs to sideload, or save a file you pulled off your TV. Declining does not affect anything else in the app.</string>
+    <string>ATV Optimizer reads a removable volume only when you pick a folder of APKs to sideload, or save a file you pulled off your TV. Declining does not affect anything else in the app.</string>
   </dict>
 </plist>

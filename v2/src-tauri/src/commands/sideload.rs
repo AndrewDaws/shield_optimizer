@@ -123,7 +123,8 @@ pub struct ApkInspection {
     /// the UI must not claim a mismatch it did not establish.
     pub abi_compatible: Option<bool>,
     /// True when the device already reports this package installed.
-    pub already_installed: bool,
+    /// `None` when the TV could not answer; unreadable is not "absent".
+    pub already_installed: Option<bool>,
 }
 
 /// Read the `lib/<abi>/` prefixes an APK ships native code for.
@@ -204,13 +205,14 @@ pub async fn inspect_apk(
 
     let already_installed = match &package {
         Some(pkg) => match adb.shell(&serial, &format!("pm list packages {pkg}")).await {
-            Ok(out) => out
-                .stdout
-                .lines()
-                .any(|line| line.trim() == format!("package:{pkg}")),
-            Err(_) => false,
+            Ok(out) => Some(
+                out.stdout
+                    .lines()
+                    .any(|line| line.trim() == format!("package:{pkg}")),
+            ),
+            Err(_) => None,
         },
-        None => false,
+        None => None,
     };
 
     Ok(ApkInspection {

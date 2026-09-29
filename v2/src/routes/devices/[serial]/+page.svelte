@@ -87,7 +87,15 @@
   /// so the list works as a shrinking worklist.
   let hideDecided = $state(false);
 
-  const hardwareId = $derived(device?.properties?.serial_number ?? null);
+  /// A placeholder serial (`unknown`, blank) identifies nothing: two such TVs
+  /// would share Keep choices and expert-shell consent. The backend treats
+  /// the same values as absent.
+  function realHardwareId(raw: string | null | undefined): string | null {
+    const id = raw?.trim() ?? "";
+    if (!id || id.toLowerCase() === "unknown") return null;
+    return id;
+  }
+  const hardwareId = $derived(realHardwareId(device?.properties?.serial_number));
 
   function toggleKept(pkg: string) {
     keptPackages = new Set(setPackageKept(hardwareId, pkg, !keptPackages.has(pkg)));

@@ -108,16 +108,24 @@ function readKeepMap(): KeepMap {
   }
 }
 
-export function getKeptPackages(hardwareId: string | null | undefined): Set<string> {
+/// Placeholder serials identify nothing, so they are never a storage key.
+function idKey(hardwareId: string | null | undefined): string | null {
+  const id = hardwareId?.trim() ?? "";
+  return id && id.toLowerCase() !== "unknown" ? id : null;
+}
+
+export function getKeptPackages(raw: string | null | undefined): Set<string> {
+  const hardwareId = idKey(raw);
   if (!hardwareId) return new Set();
   return new Set(readKeepMap()[hardwareId] ?? []);
 }
 
 export function setPackageKept(
-  hardwareId: string | null | undefined,
+  raw: string | null | undefined,
   pkg: string,
   kept: boolean,
 ): Set<string> {
+  const hardwareId = idKey(raw);
   const current = getKeptPackages(hardwareId);
   if (!hardwareId) return current;
   if (kept) current.add(pkg);
@@ -155,7 +163,7 @@ function readAckSet(): Set<string> {
 /// all. Its tick lives only in the device page's state and is asked again
 /// next time.
 function shellAckKey(hardwareId: string | null | undefined): string | null {
-  return hardwareId || null;
+  return idKey(hardwareId);
 }
 
 /// Whether expert shell has been acknowledged for this TV before.
