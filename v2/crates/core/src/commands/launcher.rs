@@ -986,21 +986,25 @@ async fn stock_takeover(
             });
         }
         // Stock only gets re-enabled below when it *positively* still holds
-        // HOME at the end of the window. Anything else — the target itself
-        // (a race with the last poll), a transient holder still settling, or
-        // some third app — means disabling stock is not what's keeping the
-        // switch from landing, so restoring it would only undo real progress
+        // HOME at the end of the window, or when the resolver never answered
+        // at all — an unavailable resolver proves nothing, so it is treated
+        // like "still stock", not like a real replacement. Only a holder we
+        // actually observed and that isn't stock itself — the target (a race
+        // with the last poll), a transient holder still settling, or some
+        // third app — means disabling stock is not what's keeping the switch
+        // from landing, so restoring it would only undo real progress
         // (GitHub #122: the onn 4K Pro reported this as a failure and rolled
         // stock back even though the switch had actually worked).
-        if verification.last_active.as_deref() != Some(active) {
-            let holder = verification.last_active.as_deref();
-            let settling = holder.is_some_and(|h| launchers().is_transient_home_holder(h));
-            let holder_note = match holder {
-                Some(h) if settling => {
-                    format!(" (it currently shows {h}, a transient hand-off screen)")
-                }
-                Some(h) => format!(" (it currently shows {h})"),
-                None => String::new(),
+        if let Some(holder) = verification
+            .last_active
+            .as_deref()
+            .filter(|holder| *holder != active)
+        {
+            let settling = launchers().is_transient_home_holder(holder);
+            let holder_note = if settling {
+                format!(" (it currently shows {holder}, a transient hand-off screen)")
+            } else {
+                format!(" (it currently shows {holder})")
             };
             return Some(SetLauncherResult {
                 ok: false,
@@ -2355,6 +2359,46 @@ mod tests {
                     .iter()
                     .any(|c| c == "pm enable com.google.android.tvlauncher"),
                 "stock genuinely still holding Home must be restored: {calls:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn restores_stock_when_the_resolver_never_answers_during_verification() {
+            // An unavailable resolver is not evidence that a replacement took
+            // over Home — it is no evidence at all. Treating it like "some
+            // other app landed" would leave a TV with stock disabled and
+            // nothing confirmed to hand it Home back.
+            let mock = MockAdb::default()
+                .on_shell("add-role-holder", "Unknown command")
+                .on_shell_failure("set-home-activity", "Error: no such activity")
+                .on_shell_seq(
+                    "resolve-activity",
+                    &[
+                        "com.google.android.tvlauncher/.Home", // active_before
+                        "com.google.android.tvlauncher/.Home", // quick check after setters
+                        "",                                    // every verify poll: unavailable
+                    ],
+                );
+            let log = mock.shell_log();
+            let state = state_with(mock);
+
+            let res = set_default_launcher_impl(
+                &state,
+                "serial",
+                "com.example.launcher",
+                true,
+                &Progress::Silent,
+            )
+            .await
+            .unwrap();
+
+            assert!(!res.ok);
+            let calls = log.lock().unwrap();
+            assert!(
+                calls
+                    .iter()
+                    .any(|c| c == "pm enable com.google.android.tvlauncher"),
+                "an unreadable resolver must restore stock, not leave it disabled: {calls:?}"
             );
         }
     }
