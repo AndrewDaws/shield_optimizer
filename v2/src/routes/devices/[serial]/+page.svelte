@@ -299,6 +299,9 @@
     if (identity === shellAckResolvedFor) return;
     shellAckResolvedFor = identity;
     shellAcknowledged = getShellAcknowledged(hardwareId);
+    // Optimize reads Keep choices too, and can be opened before the App List
+    // or Health ever load; resolve them here so a kept app is never armed.
+    keptPackages = getKeptPackages(hardwareId);
   });
 
   async function loadDevice() {
