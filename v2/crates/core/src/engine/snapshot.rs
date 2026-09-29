@@ -30,6 +30,7 @@ pub fn tracked_setting_keys() -> &'static [(&'static str, &'static str)] {
         ("global", "encoded_surround_output"),
         ("global", "encoded_surround_output_enabled_formats"),
         ("secure", "screensaver_components"),
+        ("secure", "screensaver_enabled"),
     ]
 }
 

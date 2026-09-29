@@ -2967,7 +2967,7 @@
         </button>
       </div>
       <p class="muted small snap-explainer">
-        A snapshot records which apps are disabled, your Home app and 11 system settings.
+        A snapshot records which apps are disabled, your Home app and a set of display, audio, HDMI-CEC and screensaver settings.
         Restoring it disables those apps again and puts the settings back. It never
         re-enables anything or reinstalls apps.
       </p>

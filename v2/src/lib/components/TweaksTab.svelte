@@ -277,6 +277,15 @@
     try {
       const enabledResult = await api.writeSetting(target, "secure", "screensaver_enabled", enabled);
       if (!alive || serial !== target) return;
+      // A rejected flag write resolves, it does not throw. Changing the
+      // component anyway could leave Daydream enabled with no component —
+      // the state that lets a vendor fallback screensaver run under "None".
+      if (!enabledResult.ok) {
+        tweaksActionMessage =
+          `screensaver_enabled → ${enabled || "(default)"} was refused: ` +
+          `${enabledResult.message.trim()}. The screensaver was left unchanged.`;
+        return;
+      }
       const componentResult = await api.writeSetting(target, "secure", "screensaver_components", component);
       if (!alive || serial !== target) return;
       tweaksActionMessage =
