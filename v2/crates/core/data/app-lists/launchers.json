@@ -54,6 +54,9 @@
       "package": "com.amazon.tv.launcher"
     }
   ],
+  "transient_home_holders": [
+    "com.google.android.tungsten.setupwraith"
+  ],
   "home_handler_names": {
     "com.google.android.tungsten.setupwraith": "Setup Wraith (HOME)",
     "com.droidlogic.launcher.provider": "Droidlogic Launcher Provider"
