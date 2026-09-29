@@ -109,7 +109,7 @@ function readKeepMap(): KeepMap {
 }
 
 /// Placeholder serials identify nothing, so they are never a storage key.
-function idKey(hardwareId: string | null | undefined): string | null {
+export function idKey(hardwareId: string | null | undefined): string | null {
   const id = hardwareId?.trim() ?? "";
   return id && id.toLowerCase() !== "unknown" ? id : null;
 }
@@ -212,9 +212,10 @@ export function getOpenNonTvIds(): Set<string> {
 
 export function setOpenNonTv(hardwareId: string | null | undefined, open: boolean): Set<string> {
   const set = getOpenNonTvIds();
-  if (!hardwareId) return set;
-  if (open) set.add(hardwareId);
-  else set.delete(hardwareId);
+  const key = idKey(hardwareId);
+  if (!key) return set;
+  if (open) set.add(key);
+  else set.delete(key);
   try {
     localStorage.setItem(OPEN_NON_TV_KEY, JSON.stringify([...set].sort()));
   } catch {

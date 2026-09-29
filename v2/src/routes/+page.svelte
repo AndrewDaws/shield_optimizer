@@ -5,7 +5,7 @@
   import type { Device, DeviceReport } from "$lib/types";
   import { deviceTypeLabel } from "$lib/types";
   import Icon from "$lib/components/Icon.svelte";
-  import { getOpenNonTvIds, setOpenNonTv } from "$lib/prefs";
+  import { getOpenNonTvIds, setOpenNonTv, idKey } from "$lib/prefs";
 
   let devices = $state<Device[]>([]);
 
@@ -176,7 +176,7 @@
   let openNonTv = $state<Set<string>>(getOpenNonTvIds());
 
   function openedAnyway(d: Device): boolean {
-    const id = d.properties?.serial_number;
+    const id = idKey(d.properties?.serial_number);
     return isNotATv(d) && !!id && openNonTv.has(id);
   }
 
@@ -193,7 +193,7 @@
   let confirmOpenSerial = $state<string | null>(null);
 
   function confirmOpenAnyway(d: Device) {
-    const id = d.properties?.serial_number;
+    const id = idKey(d.properties?.serial_number);
     // No hardware id means nothing to file the choice under, so it opens this
     // once and asks again next time rather than remembering it by address.
     if (id) openNonTv = setOpenNonTv(id, true);
