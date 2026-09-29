@@ -23,6 +23,10 @@ pub struct DiagnosticsInput<'a> {
     /// Raw `adb version` output, or `None` when it could not be run.
     pub adb_version: Option<&'a str>,
     pub device: Option<DeviceDiagnostics<'a>>,
+    /// A device was selected but could not be read at all: its serial and
+    /// the error. Kept so the report names the device it was asked about
+    /// instead of claiming nothing was selected.
+    pub unreadable_device: Option<(&'a str, &'a str)>,
     /// Tail of today's log file, oldest line first.
     pub log_tail: &'a [String],
 }
@@ -94,9 +98,12 @@ pub fn format_diagnostics(input: &DiagnosticsInput) -> String {
     ));
 
     match &input.device {
-        None => {
-            out.push_str("\n### Device\n\nNo device selected.\n");
-        }
+        None => match input.unreadable_device {
+            Some((serial, error)) => out.push_str(&format!(
+                "\n### Device\n\n- Serial: {serial}\n- Could not be read: {error}\n- Properties, TV evidence and Home apps: unknown\n"
+            )),
+            None => out.push_str("\n### Device\n\nNo device selected.\n"),
+        },
         Some(device) => {
             out.push_str(&format!("\n### Device `{}`\n\n", device.serial));
             out.push_str(&format!("- Transport: {}\n", transport(device.connection)));
@@ -201,6 +208,7 @@ mod tests {
             adb_path: None,
             adb_version: None,
             device: None,
+            unreadable_device: None,
             log_tail: &[],
         });
 
@@ -208,6 +216,20 @@ mod tests {
         assert!(report.contains("- OS: macos (aarch64)"), "{report}");
         assert!(report.contains("- adb path: (not found)"), "{report}");
         assert!(report.contains("No device selected."), "{report}");
+
+        let unreadable = format_diagnostics(&DiagnosticsInput {
+            app_version: "2.3.0",
+            os: "macos",
+            arch: "aarch64",
+            adb_path: None,
+            adb_version: None,
+            device: None,
+            unreadable_device: Some(("192.168.1.9:5555", "device offline")),
+            log_tail: &[],
+        });
+        assert!(unreadable.contains("192.168.1.9:5555"), "{unreadable}");
+        assert!(unreadable.contains("device offline"), "{unreadable}");
+        assert!(!unreadable.contains("No device selected."), "{unreadable}");
         assert!(report.contains("(no log lines)"), "{report}");
     }
 
@@ -231,6 +253,7 @@ mod tests {
                 device_type: DeviceType::GoogleTv,
                 home_handlers: &handlers,
             }),
+            unreadable_device: None,
             log_tail: &["first".to_string(), "second".to_string()],
         });
 
@@ -272,6 +295,7 @@ mod tests {
                 device_type: DeviceType::Unknown,
                 home_handlers: &[],
             }),
+            unreadable_device: None,
             log_tail: &[],
         });
 
@@ -297,6 +321,7 @@ mod tests {
             adb_path: None,
             adb_version: None,
             device: None,
+            unreadable_device: None,
             log_tail: &[],
         });
         assert!(!report.contains("package:"), "{report}");

@@ -232,6 +232,7 @@ pub async fn collect_diagnostics(
     // Resolve the device first so a failure there is reported as "no device
     // section" rather than failing the whole bundle — the host half is still
     // worth having when the device is the thing that is broken.
+    let mut unreadable: Option<String> = None;
     let device = match serial.as_deref() {
         None => None,
         Some(serial) => match devices::device_profile_impl(state.inner(), serial).await {
@@ -246,6 +247,7 @@ pub async fn collect_diagnostics(
             }
             Err(e) => {
                 tracing::warn!(serial, error = %e, "diagnostics: device unavailable");
+                unreadable = Some(e);
                 None
             }
         },
@@ -267,6 +269,10 @@ pub async fn collect_diagnostics(
             device_type: device.device_type,
             home_handlers: handlers,
         }),
+        unreadable_device: match (serial.as_deref(), unreadable.as_deref()) {
+            (Some(serial), Some(error)) => Some((serial, error)),
+            _ => None,
+        },
         log_tail: &tail,
     }))
 }

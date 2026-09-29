@@ -205,6 +205,9 @@ pub async fn inspect_apk(
 
     let already_installed = match &package {
         Some(pkg) => match adb.shell(&serial, &format!("pm list packages {pkg}")).await {
+            // A pm "Failure"/"Exception" can still exit zero; that is an
+            // unread answer, not proof the package is absent.
+            Ok(out) if out.shell_reported_failure() => None,
             Ok(out) => Some(
                 out.stdout
                     .lines()
