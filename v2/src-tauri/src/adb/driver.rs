@@ -171,9 +171,19 @@ fn redact_stdout_for_log(command_text: &str, stdout: &str) -> String {
 /// secret the user read off their own screen. Debug logging is meant to be
 /// pasted into a public issue, so the PIN must never reach the file in the
 /// first place — redacting at the read end would be too late.
+/// Typed text rides as `input text '<payload>'`, and that payload is whatever
+/// the user typed or pasted into Remote — passwords and URLs included. The
+/// debug log feeds the bug-report bundle, so the payload never reaches it.
+fn redact_typed_text(arg: &str) -> String {
+    match arg.find("input text") {
+        Some(at) => format!("{}input text <redacted text>", &arg[..at]),
+        None => arg.to_string(),
+    }
+}
+
 fn redact_args(args: &[&str]) -> Vec<String> {
     let Some(pair_at) = args.iter().position(|a| *a == "pair") else {
-        return args.iter().map(|a| (*a).to_string()).collect();
+        return args.iter().map(|a| redact_typed_text(a)).collect();
     };
     args.iter()
         .enumerate()
@@ -285,19 +295,22 @@ impl AdbDriver for SubprocessAdb {
         let started = Instant::now();
         let result = collect_bounded_shell(cmd, SHELL_TIMEOUT).await;
         match &result {
+            // Only the expert shell uses this path. Its command and output
+            // are whatever the user chose to run, so neither is logged: the
+            // debug log feeds the bug-report bundle.
             Ok(out) => debug!(
                 serial,
-                command,
+                command = "<expert shell command redacted>",
                 ms = started.elapsed().as_millis(),
                 exit_code = ?out.exit_code,
                 termination = ?out.termination,
-                stderr = %out.stderr.trim(),
-                stdout = %redact_stdout_for_log(command, &out.stdout),
+                stdout_bytes = out.stdout.len(),
+                stderr_bytes = out.stderr.len(),
                 "adb shell (bounded) done"
             ),
             Err(e) => debug!(
                 serial,
-                command,
+                command = "<expert shell command redacted>",
                 ms = started.elapsed().as_millis(),
                 error = %e,
                 "adb shell (bounded) failed"
@@ -597,6 +610,14 @@ mod tests {
 
     /// Debug logging is written to be pasted into a public issue. The pairing
     /// PIN the user read off their TV must not be in it.
+    #[test]
+    fn typed_remote_text_never_reaches_the_log() {
+        assert_eq!(
+            redact_args(&["-s", "tv:5555", "shell", "input text 'hunter2'"]),
+            vec!["-s", "tv:5555", "shell", "input text <redacted text>"]
+        );
+    }
+
     #[test]
     fn a_pairing_pin_never_reaches_the_log() {
         assert_eq!(

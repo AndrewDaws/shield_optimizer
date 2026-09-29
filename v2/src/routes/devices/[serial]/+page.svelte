@@ -1605,7 +1605,7 @@
     }
     if (activeTab === "launcher" && !launchersLoaded && !launcherLoading) loadLauncher();
     if (activeTab === "apps" && !appsLoaded && !appsLoading) loadApps();
-    // Health reads it too, for the "every change is reversible" callout.
+    // Health reads it too, for the snapshot callout.
     if ((activeTab === "snapshot" || activeTab === "health") && !snapshotsLoaded) loadSnapshots();
   });
 
@@ -2285,7 +2285,7 @@
         <div class="callout callout-ok">
           <Icon name="check_circle" size={16} />
           <span>
-            Snapshot saved {snapTimestamp(newest.saved_at)} — every change is reversible.
+            Snapshot saved {snapTimestamp(newest.saved_at)}. Restoring it re-disables its apps and puts back its Home app and settings; it can't re-enable or reinstall anything.
           </span>
           <button class="callout-link" onclick={() => (activeTab = "snapshot")}>
             Open snapshots

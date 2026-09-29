@@ -71,7 +71,9 @@
           dragging = false;
           return;
         }
-        if (event.payload.type === "over") {
+        // `enter` carries paths too; only a real drop may stage anything, or
+        // hovering a file over the window would query the TV.
+        if (event.payload.type === "enter" || event.payload.type === "over") {
           dragging = true;
           return;
         }
