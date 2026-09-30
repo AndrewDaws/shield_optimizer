@@ -36,7 +36,22 @@ pub struct TweaksState {
     /// Comma-separated `AudioFormat.ENCODING_*` values — the allow-list that
     /// applies only when the mode is Manual.
     pub encoded_surround_output_enabled_formats: Option<String>,
+    /// `secure.screensaver_components` — the ComponentName of the active
+    /// Daydream (Android's screensaver), e.g. AOSP's Basic Daydream or a
+    /// vendor ambient mode. `None` when no screensaver is configured.
+    pub screensaver_components: Option<String>,
+    /// `secure.screensaver_enabled` — whether Daydream runs at all. Clearing
+    /// `screensaver_components` alone can still leave a framework/vendor
+    /// default screensaver running while this stays on, so "None" has to
+    /// turn this off too, not just blank the component.
+    pub screensaver_enabled: Option<String>,
 }
+
+/// AOSP's built-in "Basic Daydream" — a component every Android TV build
+/// ships, unlike vendor screensavers (Ambient Mode, Glance) which vary by
+/// device and aren't guessed here.
+pub const BASIC_DAYDREAM_COMPONENT: &str =
+    "com.android.dreams.basic/com.android.dreams.basic.BasicDream";
 
 /// `get_tweaks` — batch-fetch all Tweaks-relevant settings in one shell call.
 #[tauri::command]
@@ -62,6 +77,8 @@ async fn get_tweaks_for(
         "settings get global background_process_limit",
         "settings get global encoded_surround_output",
         "settings get global encoded_surround_output_enabled_formats",
+        "settings get secure screensaver_components",
+        "settings get secure screensaver_enabled",
     ];
     let cmd = crate::adb::checked_batch_command(&commands);
     let out = adb
@@ -86,6 +103,8 @@ async fn get_tweaks_for(
         background_process_limit: values.next().flatten(),
         encoded_surround_output: values.next().flatten(),
         encoded_surround_output_enabled_formats: values.next().flatten(),
+        screensaver_components: values.next().flatten(),
+        screensaver_enabled: values.next().flatten(),
     })
 }
 
@@ -418,7 +437,9 @@ pub async fn set_private_dns(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_setting_command, get_tweaks_for, is_valid_dns_hostname};
+    use super::{
+        build_setting_command, get_tweaks_for, is_valid_dns_hostname, BASIC_DAYDREAM_COMPONENT,
+    };
     use crate::adb::{batch::BATCH_STATUS, BATCH_SEPARATOR};
     use crate::commands::test_support::MockAdb;
 
@@ -433,7 +454,20 @@ mod tests {
     #[tokio::test]
     async fn tweaks_preserve_empty_values_without_shifting_audio_settings() {
         let output = settings_output(&[
-            "", "1", "0", "1", "null", "400", "0.5", "1", "1", "null", "3", "5,6,99",
+            "",
+            "1",
+            "0",
+            "1",
+            "null",
+            "400",
+            "0.5",
+            "1",
+            "1",
+            "null",
+            "3",
+            "5,6,99",
+            "com.android.dreams.basic/com.android.dreams.basic.BasicDream",
+            "1",
         ]);
         let adb = MockAdb::default().on_shell("settings get", &output);
         let tweaks = get_tweaks_for(&adb, "serial").await.unwrap();
@@ -448,19 +482,32 @@ mod tests {
             tweaks.encoded_surround_output_enabled_formats.as_deref(),
             Some("5,6,99")
         );
+        assert_eq!(
+            tweaks.screensaver_components.as_deref(),
+            Some("com.android.dreams.basic/com.android.dreams.basic.BasicDream")
+        );
+        assert_eq!(tweaks.screensaver_enabled.as_deref(), Some("1"));
     }
 
     #[tokio::test]
     async fn tweaks_reject_failed_or_truncated_readback() {
-        let output = settings_output(&["null"; 12]);
+        let output = settings_output(&["null"; 14]);
         let failed = output.replacen(&format!("{BATCH_STATUS}0"), &format!("{BATCH_STATUS}1"), 1);
-        let truncated = settings_output(&["null"; 11]);
+        let truncated = settings_output(&["null"; 13]);
         for output in [failed, truncated, "null\n".into()] {
             let adb = MockAdb::default().on_shell("settings get", &output);
             assert!(get_tweaks_for(&adb, "serial").await.is_err());
         }
         let adb = MockAdb::default().on_shell_err("settings get", "device offline");
         assert!(get_tweaks_for(&adb, "serial").await.is_err());
+    }
+
+    #[test]
+    fn basic_daydream_is_the_aosp_component_name() {
+        assert_eq!(
+            BASIC_DAYDREAM_COMPONENT,
+            "com.android.dreams.basic/com.android.dreams.basic.BasicDream"
+        );
     }
 
     #[test]

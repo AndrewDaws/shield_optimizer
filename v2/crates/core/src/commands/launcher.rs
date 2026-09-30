@@ -292,7 +292,10 @@ pub async fn set_home_any_impl(
     let setters = try_home_setters(&*adb, serial, &candidates).await;
     diagnostics.extend(setters.attempts.iter().cloned());
 
-    if verify_active(&*adb, serial, package).await {
+    if verify_active(&*adb, serial, package, &mut diagnostics)
+        .await
+        .confirmed
+    {
         focus_home(&*adb, serial, &Progress::Silent).await;
         return Ok(SetHomeAnyResult {
             ok: true,
@@ -502,7 +505,11 @@ pub async fn disable_stock_launcher_impl(
                     }
                 }
             }
-            if failure.is_none() && verify_active(&*adb, serial, target).await {
+            if failure.is_none()
+                && verify_active(&*adb, serial, target, &mut diagnostics)
+                    .await
+                    .confirmed
+            {
                 return Ok(SetLauncherResult {
                     ok: true,
                     strategy: Some("disable_stock_takeover".into()),
@@ -770,7 +777,10 @@ pub async fn set_default_launcher_impl(
         .await;
     match role_out {
         Ok(out) if !out.stdout.contains("Unknown command") => {
-            if verify_active(&*adb, serial, package).await {
+            if verify_active(&*adb, serial, package, &mut diagnostics)
+                .await
+                .confirmed
+            {
                 focus_home(&*adb, serial, progress).await;
                 return Ok(SetLauncherResult {
                     ok: true,
@@ -807,7 +817,10 @@ pub async fn set_default_launcher_impl(
     }
     if setters.accepted {
         device_accepted = true;
-        if verify_active(&*adb, serial, package).await {
+        if verify_active(&*adb, serial, package, &mut diagnostics)
+            .await
+            .confirmed
+        {
             focus_home(&*adb, serial, progress).await;
             return Ok(SetLauncherResult {
                 ok: true,
@@ -824,7 +837,10 @@ pub async fn set_default_launcher_impl(
     }
 
     // 4. HOME-intent kick — system will resolve to the only remaining HOME app
-    // if everything else got disabled.
+    // if everything else got disabled. Verified the same way as the earlier
+    // steps (poll + role check) rather than a single quick read, so a device
+    // that's still settling through a transient holder (Setup Wraith, #122)
+    // gets the same chance to land before this is called a failure.
     progress.step("Switching Home over to it");
     let _ = adb
         .shell(
@@ -832,18 +848,18 @@ pub async fn set_default_launcher_impl(
             "am start -W -a android.intent.action.MAIN -c android.intent.category.HOME",
         )
         .await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let now_active = active_launcher(&*adb, serial).await;
-    if now_active.as_deref() == Some(package) {
+    let kick_verification = verify_active(&*adb, serial, package, &mut diagnostics).await;
+    if kick_verification.confirmed {
         return Ok(SetLauncherResult {
             ok: true,
             strategy: Some("home_intent_kick".into()),
-            current_launcher: now_active,
+            current_launcher: Some(package.to_string()),
             last_error: None,
             stock_takeover_available: false,
             diagnostics,
         });
     }
+    let now_active = kick_verification.last_active;
 
     // 5. Last resort: if the launcher still holding HOME is *stock*, disable it
     // (the same takeover the stock fast path uses). This catches the case where
@@ -868,12 +884,22 @@ pub async fn set_default_launcher_impl(
     // The device acknowledged the change but the resolver never confirmed it.
     // That's "accepted, not yet visible" — common on builds that only apply
     // the preference on the next physical Home press. Say so instead of
-    // surfacing the raw "Success" ack as a failure reason.
+    // surfacing the raw "Success" ack as a failure reason. When the resolver
+    // is stuck on a transient holder (Setup Wraith, #122) that's worth
+    // calling out explicitly — it isn't a stuck state, just Android mid
+    // hand-off.
     if device_accepted {
+        let holder = now_active.as_deref();
+        let settling_note = if holder.is_some_and(|h| launchers().is_transient_home_holder(h)) {
+            " That's a transient hand-off screen, not a stuck state — it's normal to see it \
+             briefly while Android settles on the new default."
+        } else {
+            ""
+        };
         last_error = Some(format!(
-            "The device accepted the launcher change but still reports {} as the active HOME app. \
+            "The device accepted the launcher change but still reports {} as the active HOME app.{settling_note} \
              Press Home on the TV, then hit Refresh — some devices only switch on the next Home press.",
-            now_active.as_deref().unwrap_or("the previous launcher")
+            holder.unwrap_or("the previous launcher")
         ));
     }
 
@@ -948,12 +974,47 @@ async fn stock_takeover(
             )
             .await;
         progress.step("Checking whether Home switched over");
-        if verify_active(adb, serial, package).await {
+        let verification = verify_active(adb, serial, package, diagnostics).await;
+        if verification.confirmed {
             return Some(SetLauncherResult {
                 ok: true,
                 strategy: Some("disable_stock_takeover".into()),
                 current_launcher: Some(package.to_string()),
                 last_error: None,
+                stock_takeover_available: false,
+                diagnostics: std::mem::take(diagnostics),
+            });
+        }
+        // Stock only gets re-enabled below when it *positively* still holds
+        // HOME at the end of the window, or when the resolver never answered
+        // at all — an unavailable resolver proves nothing, so it is treated
+        // like "still stock", not like a real replacement. Only a holder we
+        // actually observed and that isn't stock itself — the target (a race
+        // with the last poll), a transient holder still settling, or some
+        // third app — means disabling stock is not what's keeping the switch
+        // from landing, so restoring it would only undo real progress
+        // (GitHub #122: the onn 4K Pro reported this as a failure and rolled
+        // stock back even though the switch had actually worked).
+        if let Some(holder) = verification
+            .last_active
+            .as_deref()
+            .filter(|holder| *holder != active)
+        {
+            let settling = launchers().is_transient_home_holder(holder);
+            let holder_note = if settling {
+                format!(" (it currently shows {holder}, a transient hand-off screen)")
+            } else {
+                format!(" (it currently shows {holder})")
+            };
+            return Some(SetLauncherResult {
+                ok: false,
+                strategy: None,
+                current_launcher: verification.last_active.clone(),
+                last_error: Some(format!(
+                    "{active} was disabled but Android hasn't confirmed {package} as the Home \
+                     app yet{holder_note}. Stock was left disabled rather than restored, since it \
+                     no longer holds Home. Press Home on the TV, then hit Refresh."
+                )),
                 stock_takeover_available: false,
                 diagnostics: std::mem::take(diagnostics),
             });
@@ -1047,18 +1108,120 @@ async fn focus_home(adb: &dyn crate::adb::AdbDriver, serial: &str, progress: &Pr
         .await;
 }
 
-/// Poll the active-HOME resolver until it reports `package`, with backoff.
-/// Propagation after set-home-activity / role changes isn't instant on every
-/// build — a single immediate check produced false "failed" results even when
-/// the device had accepted the change.
-async fn verify_active(adb: &dyn crate::adb::AdbDriver, serial: &str, package: &str) -> bool {
-    for delay_ms in [200u64, 500, 900] {
-        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-        if active_launcher(adb, serial).await.as_deref() == Some(package) {
-            return true;
+/// Backoff schedule for [`verify_active`], summing to ~5s — long enough for
+/// Android to settle after a role/set-home-activity change on real hardware
+/// (GitHub #122: the onn 4K Pro hadn't finished switching within the old
+/// ~1.6s window). Tiny under `cfg(test)` so the polling loop doesn't make the
+/// test suite slow.
+#[cfg(not(test))]
+fn verify_poll_delays() -> &'static [u64] {
+    &[200, 300, 500, 800, 1200, 2000]
+}
+#[cfg(test)]
+fn verify_poll_delays() -> &'static [u64] {
+    &[1, 1, 1, 1, 1, 1]
+}
+
+/// What a `verify_active` poll established.
+struct VerifyOutcome {
+    /// `true` once the resolver or the HOME role named `package`.
+    confirmed: bool,
+    /// Whatever the last poll observed HOME resolving to, when not
+    /// confirmed — so a caller deciding whether to roll back a takeover
+    /// doesn't have to re-query (and risk a different, racier answer than
+    /// what was actually logged).
+    last_active: Option<String>,
+}
+
+/// Poll the active-HOME resolver — and the HOME role's holder list — until
+/// one names `package`, with backoff. Propagation after set-home-activity /
+/// role changes isn't instant on every build — a single immediate check
+/// produced false "failed" results even when the device had accepted the
+/// change.
+///
+/// A device may hand HOME through a transient holder while it settles on the
+/// real default (Google TV's Setup Wraith, GitHub #122) — seeing one here is
+/// "not decided yet", so the loop just keeps polling through it rather than
+/// treating it as a mismatch. Every check made is appended to `diagnostics`.
+async fn verify_active(
+    adb: &dyn crate::adb::AdbDriver,
+    serial: &str,
+    package: &str,
+    diagnostics: &mut Vec<String>,
+) -> VerifyOutcome {
+    let mut last_active = None;
+    for delay_ms in verify_poll_delays() {
+        tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+        if role_names_target(adb, serial, package, diagnostics).await {
+            return VerifyOutcome {
+                confirmed: true,
+                last_active: Some(package.to_string()),
+            };
         }
+        let active = active_launcher(adb, serial).await;
+        diagnostics.push(match active.as_deref() {
+            Some(a) if a == package => format!("resolve-activity HOME -> {a}"),
+            Some(a) if launchers().is_transient_home_holder(a) => {
+                format!("resolve-activity HOME -> {a} (transient, still settling)")
+            }
+            Some(a) => format!("resolve-activity HOME -> {a}"),
+            None => "resolve-activity HOME -> unavailable".to_string(),
+        });
+        if active.as_deref() == Some(package) {
+            return VerifyOutcome {
+                confirmed: true,
+                last_active: active,
+            };
+        }
+        last_active = active;
     }
-    false
+    VerifyOutcome {
+        confirmed: false,
+        last_active,
+    }
+}
+
+/// True when `cmd role get-role-holders android.app.role.HOME` names
+/// `package` as a current holder. Some builds update the role's holder list
+/// before the HOME resolver catches up, so this is an earlier, independent
+/// success signal alongside `resolve-activity` — never a replacement for it,
+/// since older builds don't support the role command at all.
+async fn role_names_target(
+    adb: &dyn crate::adb::AdbDriver,
+    serial: &str,
+    package: &str,
+    diagnostics: &mut Vec<String>,
+) -> bool {
+    let out = adb
+        .shell(serial, "cmd role get-role-holders android.app.role.HOME")
+        .await;
+    match out {
+        Ok(o) if o.success() && !o.shell_reported_failure() => {
+            let holders = o.stdout.trim();
+            let matched = holders
+                .lines()
+                .flat_map(|l| l.split(','))
+                .map(str::trim)
+                .any(|h| h == package);
+            diagnostics.push(format!(
+                "cmd role get-role-holders HOME -> {}",
+                if holders.is_empty() {
+                    "(none)"
+                } else {
+                    holders
+                }
+            ));
+            matched
+        }
+        Ok(o) => {
+            diagnostics.push(format!(
+                "cmd role get-role-holders HOME -> {}",
+                command_output_detail(&o).trim_start_matches(": ")
+            ));
+            false
+        }
+        Err(_) => false,
+    }
 }
 
 /// The package HOME resolves to now, or `None` when the device couldn't say.
@@ -2072,6 +2235,172 @@ mod tests {
                 .any(|c| c == "pm enable com.google.android.tvlauncher"),
             "no revert expected after a verified takeover"
         );
+    }
+
+    /// GitHub #122 — onn 4K Pro: setting Projectivy as default reported a
+    /// failure and rolled stock back even though the switch had actually
+    /// worked. Three cases from the issue's polling/rollback fix.
+    mod launcher_verification_122 {
+        use super::*;
+
+        #[tokio::test]
+        async fn resolver_lag_then_target_confirms_without_rollback() {
+            // The resolver can take a few polls to catch up after a
+            // stock-disable takeover, showing a transient holder (Setup
+            // Wraith) along the way — that's "still settling", not a
+            // mismatch, and the loop must keep polling through it rather
+            // than giving up.
+            let mock = MockAdb::default()
+                .on_shell("add-role-holder", "Unknown command")
+                .on_shell_failure("set-home-activity", "Error: no such activity")
+                .on_shell_seq(
+                    "resolve-activity",
+                    &[
+                        "com.google.android.tvlauncher/.Home", // active_before
+                        "com.google.android.tvlauncher/.Home", // fast-path quick check
+                        "com.google.android.tvlauncher/.Home", // verify poll 1: still stock
+                        "com.google.android.tungsten.setupwraith/.Wraith", // verify poll 2: transient
+                        "com.example.launcher/.MainActivity",              // verify poll 3: landed
+                    ],
+                );
+            let log = mock.shell_log();
+            let state = state_with(mock);
+
+            let res = set_default_launcher_impl(
+                &state,
+                "serial",
+                "com.example.launcher",
+                true,
+                &Progress::Silent,
+            )
+            .await
+            .unwrap();
+
+            assert!(res.ok, "{:?}", res.last_error);
+            assert_eq!(res.strategy.as_deref(), Some("disable_stock_takeover"));
+            let calls = log.lock().unwrap();
+            assert!(
+                !calls
+                    .iter()
+                    .any(|c| c == "pm enable com.google.android.tvlauncher"),
+                "must not roll back a switch that lands within the poll window: {calls:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn role_holder_confirms_through_a_stuck_resolver_value() {
+            // Some builds update the HOME role's holder list before the
+            // resolver catches up. The role naming the target is success on
+            // its own, even while the resolver is still stuck on Setup
+            // Wraith.
+            let mock = MockAdb::default()
+                .on_shell("add-role-holder", "Unknown command")
+                .on_shell_failure("set-home-activity", "Error: no such activity")
+                .on_shell_seq(
+                    "resolve-activity",
+                    &[
+                        "com.google.android.tvlauncher/.Home", // active_before
+                        "com.google.android.tvlauncher/.Home", // fast-path quick check
+                        "com.google.android.tungsten.setupwraith/.Wraith", // stuck from here on
+                    ],
+                )
+                .on_shell("get-role-holders", "com.example.launcher");
+            let log = mock.shell_log();
+            let state = state_with(mock);
+
+            let res = set_default_launcher_impl(
+                &state,
+                "serial",
+                "com.example.launcher",
+                true,
+                &Progress::Silent,
+            )
+            .await
+            .unwrap();
+
+            assert!(res.ok, "{:?}", res.last_error);
+            assert_eq!(res.strategy.as_deref(), Some("disable_stock_takeover"));
+            let calls = log.lock().unwrap();
+            assert!(calls.iter().any(|c| c.contains("get-role-holders")));
+            assert!(
+                !calls
+                    .iter()
+                    .any(|c| c == "pm enable com.google.android.tvlauncher"),
+                "role confirmation must not be second-guessed by a stale resolver read: {calls:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn rolls_back_only_when_stock_positively_still_holds_home() {
+            // The negative case this whole fix has to preserve: if stock
+            // genuinely never let go of HOME, that's a real failure and
+            // stock must be restored.
+            let mock = MockAdb::default()
+                .on_shell("add-role-holder", "Unknown command")
+                .on_shell_failure("set-home-activity", "Error: no such activity")
+                .on_shell("resolve-activity", "com.google.android.tvlauncher/.Home");
+            let log = mock.shell_log();
+            let state = state_with(mock);
+
+            let res = set_default_launcher_impl(
+                &state,
+                "serial",
+                "com.example.launcher",
+                true,
+                &Progress::Silent,
+            )
+            .await
+            .unwrap();
+
+            assert!(!res.ok);
+            let calls = log.lock().unwrap();
+            assert!(
+                calls
+                    .iter()
+                    .any(|c| c == "pm enable com.google.android.tvlauncher"),
+                "stock genuinely still holding Home must be restored: {calls:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn restores_stock_when_the_resolver_never_answers_during_verification() {
+            // An unavailable resolver is not evidence that a replacement took
+            // over Home — it is no evidence at all. Treating it like "some
+            // other app landed" would leave a TV with stock disabled and
+            // nothing confirmed to hand it Home back.
+            let mock = MockAdb::default()
+                .on_shell("add-role-holder", "Unknown command")
+                .on_shell_failure("set-home-activity", "Error: no such activity")
+                .on_shell_seq(
+                    "resolve-activity",
+                    &[
+                        "com.google.android.tvlauncher/.Home", // active_before
+                        "com.google.android.tvlauncher/.Home", // quick check after setters
+                        "",                                    // every verify poll: unavailable
+                    ],
+                );
+            let log = mock.shell_log();
+            let state = state_with(mock);
+
+            let res = set_default_launcher_impl(
+                &state,
+                "serial",
+                "com.example.launcher",
+                true,
+                &Progress::Silent,
+            )
+            .await
+            .unwrap();
+
+            assert!(!res.ok);
+            let calls = log.lock().unwrap();
+            assert!(
+                calls
+                    .iter()
+                    .any(|c| c == "pm enable com.google.android.tvlauncher"),
+                "an unreadable resolver must restore stock, not leave it disabled: {calls:?}"
+            );
+        }
     }
 
     #[test]

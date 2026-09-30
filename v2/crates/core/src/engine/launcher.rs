@@ -31,6 +31,11 @@ pub struct LauncherCatalog {
     /// Friendly names for known HOME-capable apps that aren't launchers.
     #[serde(default)]
     pub home_handler_names: BTreeMap<String, String>,
+    /// HOME handlers that hold Home only in passing, while Android settles on
+    /// a new default (Google TV's Setup Wraith, #122). Seeing one while
+    /// verifying a switch means "not decided yet", never "the switch failed".
+    #[serde(default)]
+    pub transient_home_holders: Vec<String>,
 }
 
 impl LauncherCatalog {
@@ -42,6 +47,11 @@ impl LauncherCatalog {
     /// True when `pkg` is a preinstalled launcher we know by name.
     pub fn is_stock(&self, pkg: &str) -> bool {
         self.stock.iter().any(|e| e.package == pkg)
+    }
+
+    /// True when `pkg` only ever holds Home in passing.
+    pub fn is_transient_home_holder(&self, pkg: &str) -> bool {
+        self.transient_home_holders.iter().any(|p| p == pkg)
     }
 
     /// True when `pkg` appears in either catalog list.
@@ -206,6 +216,7 @@ mod tests {
             )]
             .into_iter()
             .collect(),
+            transient_home_holders: vec!["com.google.android.tungsten.setupwraith".to_string()],
         }
     }
 

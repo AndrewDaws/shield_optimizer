@@ -65,7 +65,12 @@ async function captureScreens(page, shot) {
     await page.getByText("Paired successfully.", { exact: false }).waitFor();
     if (await pairPin.inputValue()) throw new Error("pairing PIN was not cleared after submission");
     if (await pairAddress.inputValue()) throw new Error("pairing address was not cleared after success");
-    if (await connectAddress.inputValue()) throw new Error("pairing guessed a connection endpoint");
+    // The paired host carries over with a bare trailing colon (#88); the
+    // connect port is different from the pairing port, so it is never guessed.
+    const carried = await connectAddress.inputValue();
+    if (carried !== "192.168.1.42:") {
+      throw new Error(`pairing should carry only the host into connect, got ${JSON.stringify(carried)}`);
+    }
     await shot("pair-device");
 
     // 3. Device → Overview (default tab).

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { api } from "$lib/api";
   import type { Device, DeviceReport } from "$lib/types";
   import { deviceTypeLabel } from "$lib/types";
   import Icon from "$lib/components/Icon.svelte";
+  import { getOpenNonTvIds, setOpenNonTv, idKey } from "$lib/prefs";
 
   let devices = $state<Device[]>([]);
 
@@ -97,6 +98,7 @@
       connectMessage = r.message.trim();
       if (r.ok) {
         connectAddress = "";
+        pairNextStep = false;
         await refresh();
       }
     } catch (e) {
@@ -104,6 +106,23 @@
     } finally {
       connectBusy = false;
     }
+  }
+
+  let connectInput = $state<HTMLInputElement | null>(null);
+  /// Set after a successful pair: the connect box holds the paired host and
+  /// is waiting for the separate connect port (#88).
+  let pairNextStep = $state(false);
+
+  /// The host part of a pairing address, without its port. The connect port
+  /// is a different one, so only the host carries over.
+  function pairedHost(address: string): string {
+    const a = address.trim();
+    if (a.startsWith("[")) {
+      const end = a.indexOf("]");
+      return end > 0 ? a.slice(0, end + 1) : a;
+    }
+    const m = /^([^:]+):\d+$/.exec(a);
+    return m ? m[1] : a;
   }
 
   async function scan() {
@@ -149,11 +168,37 @@
     return d.tv_evidence === "unknown" && d.properties !== null;
   }
 
+  function toolsHref(d: Device): string {
+    return `/devices/${encodeURIComponent(d.serial)}`;
+  }
+
+  /// Hardware ids of not-a-TV devices the user chose to open anyway.
+  let openNonTv = $state<Set<string>>(getOpenNonTvIds());
+
+  function openedAnyway(d: Device): boolean {
+    const id = idKey(d.properties?.serial_number);
+    return isNotATv(d) && !!id && openNonTv.has(id);
+  }
+
   function deviceHref(d: Device): string | null {
-    // The device tools are all Android TV operations; pointing them at a phone
-    // is at best useless. Still listed, just not opened.
-    if (isNotATv(d)) return null;
-    return d.status === "device" ? `/devices/${encodeURIComponent(d.serial)}` : null;
+    if (d.status !== "device") return null;
+    // The device tools are all Android TV operations, so a device that said it
+    // is not one does not open by default — unless its owner has already said
+    // "open anyway" for this hardware (#120).
+    if (isNotATv(d) && !openedAnyway(d)) return null;
+    return toolsHref(d);
+  }
+
+  /// The row whose "Open anyway" confirm is showing.
+  let confirmOpenSerial = $state<string | null>(null);
+
+  function confirmOpenAnyway(d: Device) {
+    const id = idKey(d.properties?.serial_number);
+    // No hardware id means nothing to file the choice under, so it opens this
+    // once and asks again next time rather than remembering it by address.
+    if (id) openNonTv = setOpenNonTv(id, true);
+    confirmOpenSerial = null;
+    goto(toolsHref(d));
   }
 
   /// A control inside the row link. The row is the link, so its own actions
@@ -204,7 +249,16 @@
       const r = await api.pairDevice(pairAddress.trim(), pairPin.trim());
       pairMessage = r.message;
       if (r.ok) {
+        const host = pairedHost(pairAddress);
         pairAddress = "";
+        if (host) {
+          connectAddress = `${host}:`;
+          pairNextStep = true;
+          await tick();
+          connectInput?.focus();
+          const end = connectAddress.length;
+          connectInput?.setSelectionRange(end, end);
+        }
         await refresh();
       }
     } catch (e) {
@@ -305,6 +359,7 @@
   <input
     placeholder="IP[:port] — e.g. 192.168.42.71"
     bind:value={connectAddress}
+    bind:this={connectInput}
     onkeydown={(e) => e.key === "Enter" && connect()}
   />
   <button class="primary" onclick={connect} disabled={connectBusy || !connectAddress.trim()}>
@@ -319,6 +374,11 @@
   <button onclick={reportAll} disabled={reportBusy || adbMissing} title="Run a health report against every connected device">
     {reportBusy ? "Reporting…" : "Report All"}
   </button>
+  {#if pairNextStep}
+    <p class="connect-message pair-next">
+      Now enter the port shown on the TV's main Wireless debugging screen, then Add by IP.
+    </p>
+  {/if}
   {#if connectMessage}
     <p class="connect-message muted">{connectMessage}</p>
   {/if}
@@ -340,7 +400,7 @@
     <p class="pair-note small">
       <strong>Pairing and connecting use different ports.</strong>
       After pairing, return to the main Wireless debugging screen and enter the IP address and port
-      shown there in <strong>Connect IP</strong> above. Do not reuse the pairing port.
+      shown there in the box above, then click <strong>Add by IP</strong>. Do not reuse the pairing port.
     </p>
     <div class="pair-row">
       <input
@@ -452,7 +512,12 @@
                 <span class="device-status online">
                   <span class="status-dot" aria-hidden="true"></span> Online
                 </span>
-                {#if isUnconfirmedTv(d)}
+                {#if openedAnyway(d)}
+                  <span
+                    class="status-tag not-a-tv"
+                    data-tip="Reported it is not an Android TV; you chose to open it anyway"
+                  >NOT A TV</span>
+                {:else if isUnconfirmedTv(d)}
                   <span
                     class="status-tag unconfirmed"
                     data-tip="Didn't report itself as an Android TV; tools may not apply"
@@ -548,6 +613,18 @@
                   </p>
                 </div>
               {/if}
+              {#if confirmOpenSerial === d.serial}
+                <div class="open-anyway-confirm" role="group" aria-label="Open anyway">
+                  <p class="small">
+                    This device reported that it is not an Android TV. The tools are built for
+                    Android TV, so some of them may not apply here.
+                  </p>
+                  <div class="open-anyway-actions">
+                    <button class="primary" onclick={() => confirmOpenAnyway(d)}>Open tools</button>
+                    <button onclick={() => (confirmOpenSerial = null)}>Cancel</button>
+                  </div>
+                </div>
+              {/if}
             </div>
             <!-- A row the app will not open is exactly the row someone needs
                  to report, so the bundle is one click away from it. "Forget"
@@ -556,6 +633,16 @@
                  not the device — adding the address back brings it straight
                  home. -->
             <span class="row-actions">
+              {#if isNotATv(d) && d.status === "device"}
+                <button
+                  class="row-action"
+                  onclick={() => (confirmOpenSerial = d.serial)}
+                  disabled={confirmOpenSerial === d.serial}
+                  data-tip="Open the tools on this device even though it is not an Android TV"
+                >
+                  Open anyway
+                </button>
+              {/if}
               <button
                 class="row-action"
                 onclick={() => copyDiagnostics(d)}
@@ -846,6 +933,20 @@
     margin: 0;
     padding-left: 1.2rem;
     font-size: 0.85rem;
+  }
+  .open-anyway-confirm {
+    margin-top: 0.6rem;
+    padding: 0.6rem 0.8rem;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .open-anyway-confirm p {
+    margin: 0 0 0.5rem;
+  }
+  .open-anyway-actions {
+    display: flex;
+    gap: 0.5rem;
   }
   .unauthorized-help {
     margin-top: 0.6rem;

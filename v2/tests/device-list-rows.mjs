@@ -3,7 +3,8 @@
 //     regression: adb auto-connects a paired mDNS device under its service
 //     name, and dialling it again by address makes a second transport);
 //   - a device that is positively not an Android TV says so and does not open
-//     the TV tools; one that never said either way still opens, labelled
+//     the TV tools until its owner confirms "Open anyway" (remembered per
+//     hardware id); one that never said either way still opens, labelled
 //     UNCONFIRMED TV (#120); and one we cannot read at all claims nothing;
 //   - a network device is not told to look for a *USB* dialog;
 //   - every network row can be forgotten, and no USB row can, and forgetting
@@ -179,9 +180,56 @@ async function exercise({ browser, base }) {
   await page.waitForTimeout(300);
   assert.equal(page.url(), before, "Forget must not navigate into the device");
 
+  // The not-a-TV row offers "Open anyway", and backing out of the confirm
+  // leaves it exactly as inert as before.
+  await phone.getByRole("button", { name: "Open anyway" }).click();
+  await phone.getByText("The tools are built for", { exact: false }).waitFor();
+  await phone.getByRole("button", { name: "Cancel" }).click();
+  assert.equal(await phone.getByText("The tools are built for", { exact: false }).count(), 0);
+  assert.equal(await phone.locator("a.device-row").count(), 0, "Cancel must not open it");
+  await page.close();
+
+  await exerciseOpenAnyway({ browser, base });
+
   console.log(
-    "Device list rows passed: TVs open, a known non-TV is labelled and inert, a device that said neither way opens with an UNCONFIRMED TV tag, only USB devices are told about a USB dialog, and Forget is on every network row without navigating.",
+    "Device list rows passed: TVs open, a known non-TV is labelled and inert until Open anyway is confirmed (then remembered by hardware id across a reload), a device that said neither way opens with an UNCONFIRMED TV tag, only USB devices are told about a USB dialog, and Forget is on every network row without navigating.",
   );
+}
+
+// #120 follow-up: a device that really is not a TV can still be opened, on
+// purpose, and the choice sticks to that hardware — not to its address.
+async function exerciseOpenAnyway({ browser, base }) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 1400 } });
+  await page.addInitScript(() => localStorage.setItem("shieldopt.demo.notTv", "1"));
+  await page.goto(base, { waitUntil: "networkidle" });
+  await page.getByText("Pixel Tablet", { exact: true }).first().waitFor();
+
+  let tablet = rowFor(page, "Pixel Tablet");
+  assert.equal(await tablet.locator("a.device-row").count(), 0,
+    "a device that said it is not a TV must not be a link at first");
+  assert.equal(await tablet.getByText("NOT AN ANDROID TV").count(), 1);
+
+  await tablet.getByRole("button", { name: "Open anyway" }).click();
+  await tablet.getByText("some of them may not apply", { exact: false }).waitFor();
+  await tablet.getByRole("button", { name: "Open tools" }).click();
+  await page.waitForURL(/\/devices\/192\.168\.1\.88%3A37015/);
+
+  const stored = await page.evaluate(() => localStorage.getItem("shieldopt.openNonTv"));
+  assert.deepEqual(JSON.parse(stored ?? "[]"), ["3A171FDJH00ZX4"],
+    "the choice is filed under the hardware id, never the address");
+
+  await page.goto(base, { waitUntil: "networkidle" });
+  await page.getByText("Pixel Tablet", { exact: true }).first().waitFor();
+  tablet = rowFor(page, "Pixel Tablet");
+  assert.equal(await tablet.locator("a.device-row").count(), 1,
+    "after a reload the remembered device opens directly");
+  assert.equal(await tablet.getByText("NOT A TV", { exact: true }).count(), 1,
+    "and still says what it is");
+  assert.equal(await tablet.getByRole("button", { name: "Open anyway" }).count(), 0);
+
+  await tablet.locator("a.device-row").click();
+  await page.waitForURL(/\/devices\/192\.168\.1\.88%3A37015/);
+  await page.close();
 }
 
 async function main() {

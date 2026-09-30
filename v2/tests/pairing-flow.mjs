@@ -135,8 +135,27 @@ async function exercisePairingFlow({ browser, base }) {
   assert.equal(await pairAddress.inputValue(), "");
   assert.equal(await pairPin.inputValue(), "");
 
+  // #88: the connect box now carries the paired host, waits for the separate
+  // connect port, and has focus; a one-line next step says what to type.
   const connectAddress = page.getByPlaceholder("IP[:port] — e.g. 192.168.42.71");
-  await connectAddress.fill(CONNECT_ADDRESS);
+  const pairedHost = PAIR_ADDRESS.split(":")[0];
+  assert.equal(await connectAddress.inputValue(), `${pairedHost}:`);
+  assert.equal(
+    await connectAddress.evaluate((el) => el === document.activeElement),
+    true,
+    "the connect box must have focus after pairing",
+  );
+  await page.getByText(
+    "Now enter the port shown on the TV's main Wireless debugging screen, then Add by IP.",
+    { exact: true },
+  ).waitFor();
+  assert.equal(await page.getByText("Connect IP", { exact: false }).count(), 0,
+    "no copy may point at a Connect IP button that no longer exists");
+  assert.equal(calls.filter(({ command }) => command === "connect_device").length, 0,
+    "pre-filling must not connect by itself");
+
+  await connectAddress.pressSequentially(CONNECT_ADDRESS.split(":")[1]);
+  assert.equal(await connectAddress.inputValue(), CONNECT_ADDRESS);
   await page.getByRole("button", { name: "Add by IP" }).click();
   await page.getByText("failed to connect to explicit endpoint", { exact: true }).waitFor();
 
@@ -150,7 +169,7 @@ async function exercisePairingFlow({ browser, base }) {
   await assert.doesNotReject(() => pairedMessage.waitFor({ state: "visible" }));
   await assert.doesNotReject(() => page.getByText(MDNS_NAME, { exact: true }).waitFor());
 
-  console.log("Pairing flow passed: explicit endpoints, retained trust status, and mDNS refresh verified.");
+  console.log("Pairing flow passed: explicit endpoints, connect box pre-filled with the paired host and focused, next-step line shown, retained trust status, and mDNS refresh verified.");
 }
 
 async function main() {

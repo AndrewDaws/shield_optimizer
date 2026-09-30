@@ -5,7 +5,7 @@ description = "mDNS discovery (NsdManager) for ATV Optimizer's wireless-ADB tran
 authors = ["Bryan Roscoe"]
 edition = "2021"
 rust-version = "1.81"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 links = "tauri-plugin-atv-adb"
 build = "build.rs"
 

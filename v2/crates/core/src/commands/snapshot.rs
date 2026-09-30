@@ -611,11 +611,12 @@ mod tests {
     #[tokio::test]
     async fn current_settings_map_pairs_keys_to_values_in_order() {
         // tracked_setting_keys order: window/transition/animator scale,
-        // 4x hdmi, match_content_frame_rate, long_press_timeout.
+        // 4x hdmi, match_content_frame_rate, long_press_timeout, encoded
+        // surround (2), screensaver_components, screensaver_enabled.
         let mock = MockAdb::default().on_shell(
             "settings get",
             &batched(&[
-                "0.5", "0.5", "0.5", "1", "null", "0", "1", "2", "400", "null", "",
+                "0.5", "0.5", "0.5", "1", "null", "0", "1", "2", "400", "null", "", "null", "null",
             ]),
         );
         let map = current_settings_map(&mock, "serial").await.unwrap();

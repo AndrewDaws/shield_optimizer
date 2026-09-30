@@ -403,6 +403,13 @@ export interface TweaksState {
   encoded_surround_output: string | null;
   /// Comma-separated AudioFormat encodings; applies only in Manual mode.
   encoded_surround_output_enabled_formats: string | null;
+  /// secure.screensaver_components — the active Daydream's ComponentName, or
+  /// null when no screensaver is configured.
+  screensaver_components: string | null;
+  /// secure.screensaver_enabled — whether Daydream runs at all. A cleared
+  /// component with this still on can fall back to a framework/vendor
+  /// default, so "None" has to turn this off too.
+  screensaver_enabled: string | null;
 }
 
 export type SettingNamespace = "global" | "secure" | "system";

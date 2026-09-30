@@ -1,0 +1,9 @@
+Copyright (c) 2026 Bryan Roscoe. All rights reserved.
+
+The source code in this repository is published for transparency and review.
+No license to use, copy, modify, or distribute this software, in whole or in
+part, is granted without the prior written permission of the copyright holder.
+
+Third-party components included in this repository (for example, the vendored
+code under v2/vendor/ and the bundled scrcpy server) remain under their own
+licenses.

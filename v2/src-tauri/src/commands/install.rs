@@ -163,7 +163,7 @@ async fn restart_adb_impl(state: &AppState) -> Result<RestartResult, String> {
     }
     if !failed.is_empty() {
         message.push_str(&format!(
-            "\nCould not reconnect after {} tries: {} — check the TV is awake and Network Debugging is still on, then try Scan Network or Connect IP.",
+            "\nCould not reconnect after {} tries: {} — check the TV is awake and Network Debugging is still on, then try Scan LAN or Add by IP.",
             RECONNECT_ATTEMPTS,
             failed.join(", ")
         ));

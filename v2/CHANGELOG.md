@@ -46,6 +46,25 @@ When you add a new section, put it at the top; older releases go below.
   app now also asks for the `android.software.leanback` feature, and only calls a device
   "not a TV" when it positively says it is a phone, tablet, watch, car or emulator.
   Anything in between opens normally with an "Unconfirmed TV" tag.
+- **A device that positively said it is not a TV had no way in at all**
+  ([#120](https://github.com/bryanroscoe/shield_optimizer/issues/120)). It now offers
+  **Open anyway** behind a short confirm; the choice is remembered by hardware id
+  (never by address), so a re-recognized device opens directly next time and keeps a
+  muted NOT A TV tag.
+- **A successful pairing dead-ended at a Connect IP field that wanted different
+  information** ([#88](https://github.com/bryanroscoe/shield_optimizer/issues/88)).
+  After Pair PIN succeeds, the connect box is now pre-filled with the paired host and
+  a trailing colon and takes focus, with a one-line prompt for the separate port from
+  the TV's Wireless debugging screen.
+- **Setting a launcher as default could report failure and roll the stock launcher
+  back even though the switch had actually worked**
+  ([#122](https://github.com/bryanroscoe/shield_optimizer/issues/122); onn 4K Pro).
+  Verification now polls for about 5 seconds with backoff instead of ~1.6s, treats
+  `cmd role get-role-holders` naming the target as confirmation on its own, and keeps
+  polling through a transient HOME holder (Google TV's Setup Wraith) instead of
+  treating it as a mismatch. The stock launcher is only re-enabled when it positively
+  still holds HOME once the window ends — never just because the resolver hasn't
+  caught up yet.
 - **Dead-end "Update available" badge after every release**
   ([#119](https://github.com/bryanroscoe/shield_optimizer/issues/119)). The GitHub-API
   check no longer drives a clickable badge; only the in-app updater does. While a
@@ -109,9 +128,19 @@ When you add a new section, put it at the top; older releases go below.
   link; otherwise the dialog asks you to paste it.
 - Names and one-line descriptions for many more packages under Everything else. These
   are descriptions only; the verdict stays Unknown.
+- **A Screensaver tweak** ([#123](https://github.com/bryanroscoe/shield_optimizer/issues/123))
+  on the Tweaks tab: reads `secure.screensaver_components`, offers AOSP's Basic
+  Daydream (present on every Android TV build), and can restore whatever was
+  configured when the tab loaded — without needing to know a vendor screensaver's
+  component name. Google TV's Ambient Mode is now in the app catalog too.
 
 ### Changed
 
+- **The license is now all rights reserved**
+  ([#124](https://github.com/bryanroscoe/shield_optimizer/issues/124)). The package
+  manifests declared MIT, which contradicted the intent; they now say UNLICENSED
+  (npm) / LicenseRef-Proprietary (Cargo), backed by a root `LICENSE` file. Vendored
+  third-party code keeps its own license.
 - Health: Swap is a headline figure like CPU and Temperature, CPU has a meter, and
   Temperature is coloured by tier with a plain-words tooltip on each.
 - App List and Optimize rows: the disclosure chevron sits at the left and the whole row
@@ -136,8 +165,6 @@ When you add a new section, put it at the top; older releases go below.
 - Snapshots are marked **Beta**. "Preview apply" is now **Preview restore**, the preview
   explains in one line what a restore does and doesn't do, and "Package states" is
   "Disabled apps".
-
-<!-- more entries below -->
 
 ## v2-2.2.0
 
