@@ -219,7 +219,7 @@ not instead:
 | A3 | Launcher tab → Advanced → Set another app as Home… with an installed custom launcher (e.g. Projectivy) | Picker lists installed apps; choosing one asks Android to make it Home and reports honestly. On a Shield/Google TV the stock launcher usually keeps Home: expect `ok = false` with a message that stock is in the way. Stock is never disabled by this step |
 | A3b | Same, picking an app that declares no Home screen (e.g. YouTube) | Refused honestly ("doesn't declare a Home screen"); nothing is disabled; Disable stock launcher stays unavailable |
 | A4 | **Precondition: A3 reported stock is in the way.** Launcher tab → Advanced → Disable stock launcher, taking the offered snapshot first | Confirmation names the risk. Backend disables stock, verifies the target now holds Home, and reports success; pressing Home on the remote opens the target. The TV has a Home screen throughout |
-| A4b | Repeat A4 with a target that cannot actually take Home (if one is available), or with the TV disconnected mid-verification | Takeover reports failure and **re-enables the stock launcher**; pressing Home opens stock. Picking TV Settings as the target is refused outright |
+| A4b | Repeat A4 with a target that cannot actually take Home, keeping ADB connected throughout (the rollback is itself an ADB command, so a disconnected TV cannot be restored until it reconnects) | Takeover reports failure and **re-enables the stock launcher**; pressing Home opens stock. Picking TV Settings as the target is refused outright. If a real disconnect ever leaves stock disabled, reconnect and use Emergency Recovery on the Overview tab |
 | A5 | A readable device whose TV evidence is **unknown** (reports neither `tv` nor a phone/tablet class — the #120 Xiaomi case) | Row carries an amber **UNCONFIRMED TV** tag and opens directly, with no Open anyway prompt. Unknown is never treated as "not a TV" |
 | A6 | A device that **positively reports** it is not a TV (a phone or tablet on the same adb) | Row shows **NOT AN ANDROID TV** and is not a link; Open anyway is offered behind a short confirm. Confirming opens the tools; after reconnecting later, the row opens directly with a muted NOT A TV tag (remembered by hardware id, never by address) |
 | A6b | An **unauthorized** device (accept the prompt later) | Neither tag appears; the row explains the authorization prompt. Nothing is claimed about device type |
@@ -235,9 +235,11 @@ manifest and bumps the Homebrew cask, so the upgrade test must use a local build
 tagged or committed:
 
 1. On the target OS, check out the commit you intend to tag.
-2. Set the version in the working tree only: `version` to `2.3.0` in `v2/src-tauri/tauri.conf.json`
-   and `v2/package.json`, and `bundle.windows.wix.version` to `2.3.999` (the value `release.sh
-   --minor` will write).
+2. Set the version in the working tree only, in every file `release.sh` edits: `version` to
+   `2.3.0` in `v2/src-tauri/tauri.conf.json` and `v2/package.json`; the `[package]` version in
+   `v2/src-tauri/Cargo.toml` and `v2/crates/core/Cargo.toml` (the running app reports
+   `CARGO_PKG_VERSION`, so skipping these builds an installer that calls itself 2.2.0); and
+   `bundle.windows.wix.version` to `2.3.999`. The build refreshes `Cargo.lock` itself.
 3. `cd v2 && npm ci && npm run tauri build`. The MSI lands under
    `v2/target/release/bundle/msi/`, the DMG under `.../bundle/dmg/`.
 4. Run A1 / A2 against those artifacts, then `git checkout -- .` to discard the version edits.
