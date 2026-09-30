@@ -203,3 +203,28 @@ For #89 causal completion, the missing evidence is the affected app/macOS versio
 
 For #87 causal completion, compare actual target enabled state, resolved HOME/component, setter result and restoration result across the failing and successful sequences. The current generic error cannot identify which branch failed. AOSP Android 8 already supports the relevant package commands; no blanket version incompatibility or speculative fallback is justified. Existing never-disable, stock-only and explicit opt-in guards remain mandatory.
 
+---
+
+## 7. Addendum — v2-2.3.0 device test script (2026-09-29)
+
+`v2-2.2.0` shipped 2026-09-16; nothing since has run on a physical device. `v2-2.3.0`
+(the ATV Optimizer rename plus #88, #119–#124) adds its own risk areas on top of the D3
+script above, which still applies to whatever it didn't touch. Run these in addition,
+not instead:
+
+| Step | Action | Expected |
+|------|--------|----------|
+| A1 | Windows: install the previous `v2-2.2.0` MSI, then run the `v2-2.3.0` MSI over it | Installer treats it as an upgrade (no "uninstall the existing version first"); the app relaunches as ATV Optimizer with the same data dir, saved devices and snapshots intact |
+| A2 | macOS: with an existing `Shield Optimizer.app` installed from a prior DMG, mount and install the `v2-2.3.0` DMG | New app installs as `ATV Optimizer.app` alongside the old one under the new name; launching it shows the same saved devices/snapshots (shared data dir); the old `Shield Optimizer.app` is safe to trash afterward |
+| A3 | Launcher tab → Advanced → Set another app as Home… | Picker lists installed apps; choosing one asks Android to make it Home and reports honestly whether Android accepted it; stock launcher is untouched |
+| A4 | Launcher tab → Advanced → Disable stock launcher (only after A3 succeeded) | Confirmation names the risk and offers a snapshot first; stock is disabled only once something else already holds Home; the TV keeps a Home screen throughout |
+| A5 | Find a device the app cannot positively confirm as an Android TV (or force it: a phone/tablet on the same adb) | Row shows an "Unconfirmed TV" or "NOT A TV" tag instead of being hidden; "Open anyway" is offered behind a short confirm |
+| A6 | Confirm "Open anyway" on that row, then reconnect the same device later | Opens the TV tools directly; the choice is remembered by hardware id and the row keeps a muted NOT A TV tag on the next visit, not re-prompted |
+| A7 | Wireless debugging → Pair device with pairing code; in the app use Pair PIN | On success, Connect IP is pre-filled with the paired host plus a trailing colon and takes focus, with a one-line prompt for the separate port from the Wireless debugging screen; entering that port connects |
+| A8 | Tweaks → Screensaver | Reads the device's current `secure.screensaver_components`; offers AOSP Basic Daydream; Restore puts back whatever was configured when the tab loaded, without needing to know a vendor screensaver's component name |
+| A9 | Snapshots: take a snapshot without changing the launcher, then open Preview restore | Preview shows no launcher change proposed (the "Now" column reads the TV's actual current Home, not "—"); restoring does not touch the launcher |
+| A10 | Header → Report a bug | Opens the GitHub bug-report issue form; the diagnostics field is pre-filled when the bundle fits in the link, otherwise the dialog says to paste it; nothing is sent automatically |
+
+Abort rule is the same as D3: if a step leaves the TV without a launcher or with an
+unexpected disabled app, use Restore and stop; record the step.
+
