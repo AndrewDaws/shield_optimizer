@@ -6,9 +6,10 @@ Full release pipeline live: installers built for macOS/Linux/Windows on every `v
 
 ## Unreleased on `main`
 
-`v2-2.2.0` shipped 2026-09-16. Everything after it is the `worktree-ui-refresh` line:
-the design-system port plus four rounds of screen feedback, drafted as `v2-2.3.0` in
-`v2/CHANGELOG.md`. Things the next reader needs that the code does not say:
+`v2-2.2.0` shipped 2026-09-16. Everything after it — the design-system port, the
+ATV Optimizer rename, and fixes for #88, #119, #120, #121, #122, #123 and #124 — is
+prepared as `v2-2.3.0` in `v2/CHANGELOG.md` (release-prep branch, not yet tagged).
+Things the next reader needs that the code does not say:
 
 - **The app is now ATV Optimizer.** `identifier`, the `ShieldOptimizer` data dir and
   the updater channel are unchanged on purpose; the WiX UpgradeCode is pinned in

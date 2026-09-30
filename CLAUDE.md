@@ -23,23 +23,24 @@ Before touching v2, skim `v2/HANDOFF.md` — it carries the current roadmap, the
 - **[`docs/ARCHIVE-INDEX.md`](docs/ARCHIVE-INDEX.md)** points at bulk working material kept outside
   this repo on Bryan's machine.
 
-### What is in flight right now (2026-09-16)
+### What is in flight right now (2026-09-29)
 
-Everything on `main` past the `v2-2.1.0` tag is **unreleased**, and most of it has never run on a
-physical device. CI is green across ubuntu / macOS / Windows plus both frontends, so "green on one
-macOS host" is no longer the gap — the device run is.
+`v2-2.2.0` shipped 2026-09-16, carrying all five user reports: #86 SmartTube backups, #87 Sony
+launcher, #88 TCL discovery (partial), #89 macOS volume prompts, #91 Remote paste. Only #91 has
+been seen working by anyone; #87 and #89 are still unconfirmed on the reporters' hardware.
 
-All five user reports are addressed on `main` and none has shipped: #86 SmartTube backups, #87
-Sony launcher, #88 TCL discovery, #89 macOS volume prompts, #91 Remote paste. Only #91 has been
-seen working by anyone. **#87, #88 and #89 were fixed without the reporter's hardware** — the
-reasoning is recorded on each issue, and all four reporters have been asked to confirm. Treat them
-as unconfirmed until they do.
+`v2-2.3.0` is prepared but not tagged: the ATV Optimizer rename plus fixes for #88 (pairing
+dead-end), #119 (dead-end update badge), #120 (real TVs refused as "not an Android TV"), #121
+(Monet Launcher), #122 (launcher-switch false failure), #123 (Screensaver tweak) and #124 (license).
+It is on the `release-prep-2.3.0` branch/PR, gated on CI, a Codex review pass and the device script
+below before the owner cuts the `v2-2.3.0` tag. The Homebrew tap PR
+(`bryanroscoe/homebrew-shield-optimizer#2`) must merge right before that tag, not earlier.
 
-The remaining gate before a beta is the device script in
-[`docs/RELEASE-DECISION-2026-09-09.md`](docs/RELEASE-DECISION-2026-09-09.md); steps D1 and D8 are
-the only real proof for #89, since that fix concerns the working directory the app inherits when
-launched from a mounted DMG. `v2/CHANGELOG.md` already has the `v2-2.2.0` section the release workflow will read.
-(The 2026-09-09 decision packet proposed a beta first; the call since was to ship `2.2.0` straight.)
+The remaining gate before tagging is the device script in
+[`docs/RELEASE-DECISION-2026-09-09.md`](docs/RELEASE-DECISION-2026-09-09.md), including its
+`v2-2.3.0` addendum (section 7) covering the Windows in-place upgrade, the macOS DMG install over
+the old app name, the launcher Advanced picker, and the other new risk areas. `v2/CHANGELOG.md`
+already has the `v2-2.3.0` section the release workflow will read.
 
 The mobile companion app (`v2/mobile/`) has its own authoritative handoff at
 [`v2/mobile/HANDOFF.md`](v2/mobile/HANDOFF.md). Its safety story depends on never claiming more

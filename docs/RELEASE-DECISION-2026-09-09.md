@@ -203,3 +203,51 @@ For #89 causal completion, the missing evidence is the affected app/macOS versio
 
 For #87 causal completion, compare actual target enabled state, resolved HOME/component, setter result and restoration result across the failing and successful sequences. The current generic error cannot identify which branch failed. AOSP Android 8 already supports the relevant package commands; no blanket version incompatibility or speculative fallback is justified. Existing never-disable, stock-only and explicit opt-in guards remain mandatory.
 
+---
+
+## 7. Addendum — v2-2.3.0 device test script (2026-09-29)
+
+`v2-2.2.0` shipped 2026-09-16; nothing since has run on a physical device. `v2-2.3.0`
+(the ATV Optimizer rename plus #88, #119–#124) adds its own risk areas on top of the D3
+script above, which still applies to whatever it didn't touch. Run these in addition,
+not instead:
+
+| Step | Action | Expected |
+|------|--------|----------|
+| A1 | Windows: install the previous `v2-2.2.0` MSI, then run a **staging** 2.3.0 MSI over it (see "Staging build" below) | Installer treats it as an upgrade (no "uninstall the existing version first"); the app relaunches as ATV Optimizer with the same data dir, saved devices and snapshots intact |
+| A2 | macOS: with an existing `Shield Optimizer.app` installed from a prior DMG, install a staging 2.3.0 build (see below) | New app installs as `ATV Optimizer.app` alongside the old one under the new name; launching it shows the same saved devices/snapshots (shared data dir); the old `Shield Optimizer.app` is safe to trash afterward |
+| A3 | Launcher tab → Advanced → Set another app as Home… with an installed custom launcher (e.g. Projectivy) | Picker lists installed apps; choosing one asks Android to make it Home and reports honestly. On a Shield/Google TV the stock launcher usually keeps Home: expect `ok = false` with a message that stock is in the way. Stock is never disabled by this step |
+| A3b | Same, picking an app that declares no Home screen (e.g. YouTube) | Refused honestly ("doesn't declare a Home screen"); nothing is disabled; Disable stock launcher stays unavailable |
+| A4 | **Precondition: A3 reported stock is in the way.** Launcher tab → Advanced → Disable stock launcher, taking the offered snapshot first | Confirmation names the risk. Backend disables stock, verifies the target now holds Home, and reports success; pressing Home on the remote opens the target. The TV has a Home screen throughout |
+| A4b | Repeat A4 with a target that cannot actually take Home, keeping ADB connected throughout (the rollback is itself an ADB command, so a disconnected TV cannot be restored until it reconnects) | Takeover reports failure and **re-enables the stock launcher**; pressing Home opens stock. Picking TV Settings as the target is refused outright. If a real disconnect ever leaves stock disabled, reconnect and use Emergency Recovery on the Overview tab |
+| A5 | A readable device whose TV evidence is **unknown** (reports neither `tv` nor a phone/tablet class — the #120 Xiaomi case) | Row carries an amber **UNCONFIRMED TV** tag and opens directly, with no Open anyway prompt. Unknown is never treated as "not a TV" |
+| A6 | A device that **positively reports** it is not a TV (a phone or tablet on the same adb) | Row shows **NOT AN ANDROID TV** and is not a link; Open anyway is offered behind a short confirm. Confirming opens the tools; after reconnecting later, the row opens directly with a muted NOT A TV tag (remembered by hardware id, never by address) |
+| A6b | An **unauthorized** device (accept the prompt later) | Neither tag appears; the row explains the authorization prompt. Nothing is claimed about device type |
+| A7 | Wireless debugging → Pair device with pairing code; in the app use Pair PIN | On success, Connect IP is pre-filled with the paired host plus a trailing colon and takes focus, with a one-line prompt for the separate port from the Wireless debugging screen; entering that port connects |
+| A8 | Tweaks → Screensaver | Reads the device's current `secure.screensaver_components`; offers AOSP Basic Daydream; Restore puts back whatever was configured when the tab loaded, without needing to know a vendor screensaver's component name |
+| A9 | Snapshots: take a snapshot without changing the launcher, then open Preview restore | Preview shows no launcher change proposed (the "Now" column reads the TV's actual current Home, not "—"); restoring does not touch the launcher |
+| A10 | Header → Report a bug | Opens the GitHub bug-report issue form; the diagnostics field is pre-filled when the bundle fits in the link, otherwise the dialog says to paste it; nothing is sent automatically |
+
+### Staging build (for A1 and A2)
+
+Cutting `v2-2.3.0` (or any `-rc` tag) publishes to every installed copy through the updater
+manifest and bumps the Homebrew cask, so the upgrade test must use a local build that is never
+tagged or committed:
+
+1. On the target OS, check out the commit you intend to tag.
+2. Set the version in the working tree only, in every file `release.sh` edits: `version` to
+   `2.3.0` in `v2/src-tauri/tauri.conf.json` and `v2/package.json`; the `[package]` version in
+   `v2/src-tauri/Cargo.toml` and `v2/crates/core/Cargo.toml` (the running app reports
+   `CARGO_PKG_VERSION`, so skipping these builds an installer that calls itself 2.2.0); and
+   `bundle.windows.wix.version` to `2.3.999`. The build refreshes `Cargo.lock` itself.
+3. `cd v2 && npm ci && npm run tauri build`. The MSI lands under
+   `v2/target/release/bundle/msi/`, the DMG under `.../bundle/dmg/`.
+4. Run A1 / A2 against those artifacts, then `git checkout -- .` to discard the version edits.
+
+If no Windows machine is available before tagging, run A1 immediately after the release
+workflow finishes, on the published MSI, and treat a failure as a stop-ship: pull the release and
+cut a patch.
+
+Abort rule is the same as D3: if a step leaves the TV without a launcher or with an
+unexpected disabled app, use Restore and stop; record the step.
+
